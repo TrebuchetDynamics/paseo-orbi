@@ -1,0 +1,41 @@
+{
+  "name": "paseo-orbi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "paseo-plugin.json",
+    "index.client.tsx",
+    "index.server.ts",
+    "client",
+    "server",
+    "shared",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.client.json && tsc -p tsconfig.server.json",
+    "test": "vitest run",
+    "test:boundaries": "vitest run tests/boundaries.test.ts"
+  },
+  "dependencies": {
+    "smol-toml": "1.9.1"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.15.4",
+    "@getpaseo/client": "0.15.4",
+    "@getpaseo/protocol": "0.15.4",
+    "react": "19.2.3",
+    "react-test-renderer": "19.2.3",
+    "react-native": "0.86.3",
+    "@tanstack/react-query": "5.90.21",
+    "zod": "4.4.3",
+    "typescript": "5.9.3",
+    "@types/react": "19.2.14",
+    "@types/node": "22.19.21",
+    "vitest": "4.1.7",
+    "@types/react-test-renderer": "19.1.0"
+  },
+  "overrides": {
+    "vite": "7.3.8"
+  }
+}

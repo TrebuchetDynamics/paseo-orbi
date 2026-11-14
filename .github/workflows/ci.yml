@@ -1,0 +1,20 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: timeout 180 npm ci --ignore-scripts
+      - run: timeout 60 npm test -- tests/foundation.test.ts
+      - run: timeout 60 npm run test:boundaries
+      - run: timeout 60 npm run typecheck
+      - run: timeout 60 npm test
+      - run: timeout 60 npm pack --dry-run --ignore-scripts

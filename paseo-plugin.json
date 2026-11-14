@@ -1,0 +1,1 @@
+{"id":"paseo-orbi","requirements":{"paseo":">=0.15.4 <0.16.0"},"build":[["npm","ci","--omit=dev","--ignore-scripts"]]}

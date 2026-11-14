@@ -1,0 +1,401 @@
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { writeFile, mkdir, symlink, chmod } from 'node:fs/promises';
+import * as filesystem from 'node:fs/promises';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { ConfigRepository } from '../server/config';
+import { ReadPorts, readBytes, boundedFile, FILE_LIMIT } from '../server/read-ports';
+import { fingerprint, profiles } from '../server/compatibility';
+import { deploymentsList, DeploymentCatalog, observationSchema } from '../shared/common';
+import { z } from 'zod';
+import contribute from '../index.server';
+import type { PluginServerContext } from '@getpaseo/plugin/server';
+import { fixture } from './helpers/fixtures';
+
+// Pass-through host filesystem spies record real opens/stats without replacing safety code.
+vi.mock('node:fs/promises', { spy: true });
+const cleanups: (() => unknown)[] = [];
+async function setup(profile: 'release' | 'installed' = 'release') { const f = await fixture(profile); cleanups.push(f.cleanup); return f; }
+afterEach(async () => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+async function rpc(path?: string) {
+  if (path === undefined) vi.stubEnv('PASEO_ORBI_CONFIG', undefined); else vi.stubEnv('PASEO_ORBI_CONFIG', path);
+  let handler: (() => unknown) | undefined;
+  const cleanup = contribute({ handle: (contract: unknown, callback: () => unknown) => { expect(contract).toBe(deploymentsList); handler = callback; } } as unknown as PluginServerContext);
+  cleanups.push(cleanup);
+  const input = deploymentsList.input.parse({});
+  expect(input).toEqual({});
+  return DeploymentCatalog.parse(await handler!());
+}
+
+describe('config_and_compatibility', () => {
+  it('rejects_unauthorized_deployment', async () => {
+    const f = await setup();
+    const repository = await ConfigRepository.load(f.authorization);
+    const ports = new ReadPorts(repository); cleanups.push(() => ports.dispose());
+    expect(() => repository.resolve('unauthorized')).toThrow('deployment_unavailable');
+    await expect(ports.read('unauthorized', 'health')).rejects.toThrow('deployment_unavailable');
+    await expect(ports.process('unauthorized', { kind: 'systemctl-show', slot: 1, unit: 'service' })).rejects.toThrow('deployment_unavailable');
+  });
+  it('unsupported_fingerprint_does_not_probe', async () => {
+    const f = await setup();
+    await writeFile(join(f.source, 'src/orbi/config.py'), 'changed SECRET_CANARY');
+    await mkdir(join(f.repoDir, '.orbi')); // A telemetry symlink must never be followed, even at startup.
+    await symlink('/does-not-exist/SECRET_CANARY', join(f.repoDir, '.orbi/health.json'));
+    const opened = vi.spyOn(filesystem, 'open');
+    const stats = vi.spyOn(filesystem, 'stat');
+    opened.mockClear(); stats.mockClear();
+    const repository = await ConfigRepository.load(f.authorization);
+    expect(repository.catalog().entries[0].status).toBe('unsupported_source_profile');
+    const allowed = new Set([f.authorization, f.configPath, ...profiles['orbi-0.7.41-release'].paths.map(path => join(f.source, path))]);
+    for (const [path] of opened.mock.calls) expect(allowed.has(String(path))).toBe(true);
+    expect(stats.mock.calls.map(([path]) => path)).toEqual([f.repoDir, f.deployHome, f.source]);
+    const ports = new ReadPorts(repository); cleanups.push(() => ports.dispose());
+    await expect(ports.read('demo', 'health')).rejects.toThrow('deployment_unavailable');
+    expect(JSON.stringify(await rpc(f.authorization))).not.toMatch(/SECRET_CANARY|publisher-canary|configPath|engineSourcePath|repoDir|deployHome/);
+  });
+  it.each(['release', 'installed'] as const)('independently fetched %s pinned bytes reproduce approved fingerprint', async profile => {
+    const f = await setup(profile);
+    expect(await fingerprint(f.source, f.entry.adapter as keyof typeof profiles)).toBe(profiles[f.entry.adapter as keyof typeof profiles].fingerprint);
+    expect((await rpc(f.authorization)).entries[0].status).toBe('available');
+    const deployment = (await ConfigRepository.load(f.authorization)).resolve('demo');
+    expect(deployment).toMatchObject({ capacity: 2, unitName: 'demo', sourceProfile: f.entry.adapter, repoDir: f.repoDir });
+  });
+  it('deployments.list reports missing and global-invalid configuration without private fields', async () => {
+    expect(await rpc()).toEqual({ state: 'unconfigured', entries: [], problems: [] });
+    const f = await setup();
+    for (const value of ['{SECRET_CANARY', 'null', '{"schema":2,"deployments":[]}']) {
+      await writeFile(f.authorization, value);
+      const catalog = await rpc(f.authorization);
+      expect(catalog.state).toBe('invalid'); expect(catalog.entries).toEqual([]);
+      expect(JSON.stringify(catalog)).not.toContain('SECRET_CANARY');
+    }
+    expect((await ConfigRepository.load('relative/path')).catalog().problems[0].code).toBe('unsafe_path');
+  });
+  it('duplicates, invalid identities and entry caps are global failures', async () => {
+    const f = await setup();
+    for (const entries of [
+      [f.entry, { ...f.entry, repo: 'Other/repo' }],
+      [f.entry, { ...f.entry, id: 'other', repo: 'example/PROJECT' }],
+      [{ ...f.entry, id: '../secret' }], [{ ...f.entry, label: 'x'.repeat(81) }],
+      [{ ...f.entry, label: 'line\nbreak' }], [{ ...f.entry, repo: 'https://github.com/owner/repo' }],
+      Array.from({ length: 17 }, (_, i) => ({ ...f.entry, id: `d${i}`, repo: `Example/repo${i}` })),
+    ]) {
+      await f.save(entries); const catalog = await rpc(f.authorization);
+      expect(catalog.state).toBe('invalid'); expect(catalog.entries).toEqual([]);
+    }
+  });
+  it('mixed catalog retains safe identities; rejected entries cannot resolve', async () => {
+    const f = await setup();
+    await f.save([f.entry, { ...f.entry, id: 'other', repo: 'Other/repo', engineSourcePath: join(f.root, 'missing') }]);
+    const catalog = await rpc(f.authorization);
+    expect(catalog.entries.map(e => e.status)).toEqual(['available', 'invalid_config']);
+    expect(Object.keys(catalog.entries[0]).sort()).toEqual(['adapter', 'id', 'label', 'problems', 'repo', 'status']);
+    expect(JSON.stringify(catalog)).not.toContain(f.root);
+    const repository = await ConfigRepository.load(f.authorization);
+    repository.catalog().entries[0].id = 'tampered';
+    expect(repository.catalog().entries[0].id).toBe('demo');
+    expect(repository.resolve('demo').id).toBe('demo');
+    expect(() => repository.resolve('other')).toThrow('deployment_unavailable');
+  });
+  it.each([
+    ['repo_dir', 'repo_dir = "/unauthorized"'], ['deploy_home', 'deploy_home = "/unauthorized"'],
+    ['source_repos', 'source_repos = ["Other/repo"]'], ['max_concurrency', 'max_concurrency = 6'],
+    ['unit_name', 'unit_name = "bad;command"'], ['repo_dir', 'repo_dir = "$HOME/secret"'],
+  ])('rejects mismatched TOML %s', async (field, replacement) => {
+    const f = await setup(); await writeFile(f.configPath, f.toml.replace(new RegExp(`^${field} = .*`, 'm'), replacement));
+    expect((await rpc(f.authorization)).entries[0]).toMatchObject({ status: 'invalid_config', problems: [{ code: 'config_mismatch' }] });
+  });
+  it('rejects escaping roots, source symlinks, unknown profiles and missing source files', async () => {
+    const f = await setup();
+    const link = join(f.root, 'alias'); await symlink(f.source, link);
+    await f.save([{ ...f.entry, engineSourcePath: link }]);
+    expect((await rpc(f.authorization)).entries[0].problems[0].code).toBe('unsafe_path');
+    await f.save([{ ...f.entry, adapter: 'unknown' }]);
+    expect((await rpc(f.authorization)).entries[0].status).toBe('unsupported_source_profile');
+    const sourceFile = join(f.source, 'src/orbi/config.py');
+    const { unlink } = await import('node:fs/promises'); await unlink(sourceFile); await symlink(f.configPath, sourceFile);
+    await f.save(); expect((await rpc(f.authorization)).entries[0].status).toBe('unsupported_source_profile');
+    await unlink(sourceFile); expect((await rpc(f.authorization)).entries[0].status).toBe('unsupported_source_profile');
+  });
+  it('available startup reads only approved files; secrets and fixture bytes remain untouched', async () => {
+    const f = await setup();
+    await mkdir(join(f.repoDir, '.orbi')); await mkdir(join(f.repoDir, '.git'));
+    const secretPaths = ['.orbi/env', '.orbi/providers.json', '.git/HEAD', '.orbi/runner.lock'].map(path => join(f.repoDir, path));
+    for (const path of secretPaths) await writeFile(path, 'SECRET_CANARY');
+    const observed = [f.authorization, f.configPath, ...secretPaths, ...profiles['orbi-0.7.41-release'].paths.map(path => join(f.source, path))];
+    const before = await Promise.all(observed.map(path => filesystem.readFile(path)));
+    const opened = vi.spyOn(filesystem, 'open'); opened.mockClear();
+    vi.stubEnv('CANARY_TOKEN', 'ENV_SECRET_CANARY');
+    const catalog = await rpc(f.authorization);
+    expect(catalog.entries[0].status).toBe('available');
+    const approved = new Set([f.authorization, f.configPath, ...profiles['orbi-0.7.41-release'].paths.map(path => join(f.source, path))]);
+    expect(opened.mock.calls).toHaveLength(approved.size);
+    for (const [path] of opened.mock.calls) expect(approved.has(String(path))).toBe(true);
+    expect(JSON.stringify(catalog)).not.toMatch(/SECRET_CANARY|publisher-canary/);
+    expect(await Promise.all(observed.map(path => filesystem.readFile(path)))).toEqual(before);
+  });
+  it('server snapshots startup environment; contracts are synchronous JSON-only and transform-free', async () => {
+    const f = await setup(); vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+    let handler!: () => Promise<unknown>;
+    cleanups.push(contribute({ handle: (_c: unknown, h: () => Promise<unknown>) => { handler = h; } } as unknown as PluginServerContext));
+    vi.stubEnv('PASEO_ORBI_CONFIG', '/SECRET_CANARY');
+    expect(DeploymentCatalog.parse(await handler()).state).toBe('configured');
+    expect(() => deploymentsList.input.parse({ path: '/secret' })).toThrow();
+    for (const schema of [deploymentsList.input, deploymentsList.output, observationSchema(z.object({ count: z.number() }))]) expect(z.toJSONSchema(schema)).toBeDefined();
+  });
+});
+
+describe('bounded_reads_and_lifecycle', () => {
+  it('rejects oversized, nonregular, escaping, and secret resource selectors', async () => {
+    const f = await setup();
+    const path = join(f.root, 'large.json'); await writeFile(path, Buffer.alloc(FILE_LIMIT + 1));
+    await expect(readBytes(f.root, path)).rejects.toThrow('read_limit');
+    await expect(readBytes(f.root, f.source)).rejects.toThrow('unsafe_path');
+    const fifo = join(f.root, 'fifo');
+    expect(spawnSync('mkfifo', [fifo], { timeout: 1000 }).status).toBe(0);
+    await expect(readBytes(f.root, fifo)).rejects.toThrow('unsafe_path');
+    await expect(readBytes(f.source, f.configPath)).rejects.toThrow('unsafe_path');
+    await expect(readBytes(f.root, join(f.root, '.orbi/env'))).rejects.toThrow('unsafe_path');
+    const alias = join(f.root, 'alias'); await symlink(f.configPath, alias);
+    await expect(readBytes(f.root, alias)).rejects.toThrow('unsafe_path');
+    expect(await boundedFile(f.root, path, true)).toMatchObject({ size: FILE_LIMIT + 1 });
+    const ports = new ReadPorts(await ConfigRepository.load(f.authorization)); cleanups.push(() => ports.dispose());
+    await expect(ports.read('demo', '../env' as 'health')).rejects.toThrow('unsafe_path');
+    await expect(ports.process('demo', { kind: 'shell' } as any)).rejects.toThrow('unsafe_path');
+    await mkdir(join(f.repoDir, '.orbi'));
+    await writeFile(join(f.repoDir, '.orbi/health.json'), '{"status":"fixture"}');
+    expect((await ports.read('demo', 'health')).toString()).toBe('{"status":"fixture"}');
+    expect(await ports.stat('demo', 'health')).toMatchObject({ size: 20 });
+    await ports.dispose(); await expect(ports.read('demo', 'health')).rejects.toThrow('disposed');
+  });
+  it('bounds a hanging host file read without returning late data', async () => {
+    const f = await setup();
+    const handle = await filesystem.open(f.configPath, 'r');
+    let unblock!: () => void, entered!: () => void;
+    const blocked = new Promise<void>(resolve => { entered = resolve; });
+    const pending = new Promise<any>(resolve => { unblock = () => resolve({ bytesRead: 0, buffer: Buffer.alloc(0) }); });
+    vi.spyOn(handle, 'read').mockImplementationOnce(() => { entered(); return pending; });
+    vi.spyOn(filesystem, 'open').mockResolvedValueOnce(handle);
+    vi.useFakeTimers();
+    let outcome = 'pending';
+    const reading = readBytes(f.root, f.configPath).then(() => { outcome = 'success'; }, error => { outcome = error.message; });
+    await blocked;
+    await vi.advanceTimersByTimeAsync(10000);
+    const atDeadline = outcome;
+    unblock(); await reading; await handle.close();
+    expect(atDeadline).toBe('read_limit');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('rejects inode replacement between check and open', async () => {
+    const f = await setup();
+    const actual = await vi.importActual<typeof filesystem>('node:fs/promises');
+    vi.spyOn(filesystem, 'open').mockImplementationOnce(async (...args) => {
+      const replacement = join(f.root, 'replacement');
+      await writeFile(replacement, 'SECRET_CANARY');
+      await filesystem.rename(replacement, f.configPath);
+      return actual.open(...args);
+    });
+    await expect(readBytes(f.root, f.configPath)).rejects.toThrow(/^unsafe_path$/);
+  });
+  it('disposal aborts pending file reads, closes handles, and clears deadlines', async () => {
+    const f = await setup();
+    const ports = new ReadPorts(await ConfigRepository.load(f.authorization)); cleanups.push(() => ports.dispose());
+    await mkdir(join(f.repoDir, '.orbi'));
+    const path = join(f.repoDir, '.orbi/health.json'); await writeFile(path, '{}');
+    const handle = await filesystem.open(path, 'r');
+    let unblock!: () => void, entered!: () => void;
+    const blocked = new Promise<void>(resolve => { entered = resolve; });
+    const pending = new Promise<any>(resolve => { unblock = () => resolve({ bytesRead: 0, buffer: Buffer.alloc(0) }); });
+    vi.spyOn(handle, 'read').mockImplementationOnce(() => { entered(); return pending; });
+    vi.spyOn(filesystem, 'open').mockResolvedValueOnce(handle);
+    vi.useFakeTimers();
+    const reading = expect(ports.read('demo', 'health')).rejects.toThrow(/^disposed$/);
+    await blocked; await ports.dispose(); unblock(); await reading;
+    await handle.close(); expect(handle.fd).toBe(-1); expect(vi.getTimerCount()).toBe(0);
+  });
+  async function processFixture(script: string) {
+    const f = await setup(); const bin = join(f.root, 'bin'); await mkdir(bin);
+    for (const name of ['systemctl', 'journalctl', 'gh']) { const path = join(bin, name); await writeFile(path, `#!${process.execPath}\n${script}`); await chmod(path, 0o755); }
+    vi.stubEnv('PATH', bin);
+    const ports = new ReadPorts(await ConfigRepository.load(f.authorization)); cleanups.push(() => ports.dispose());
+    return ports;
+  }
+  it('uses only documented fixed argv; no shell or client endpoint', async () => {
+    const ports = await processFixture('console.log(JSON.stringify({args:process.argv.slice(2),stdin:require("node:fs").fstatSync(0).isCharacterDevice()}))');
+    const result = JSON.parse(await ports.process('demo', { kind: 'systemctl-show', slot: 1, unit: 'service' }));
+    expect(result.args).toEqual(['--user', 'show', 'orbi-demo@1.service', '--property=ActiveState,SubState,Result,ExecMainStatus,NextElapseUSecRealtime', '--no-pager']);
+    expect(JSON.parse(await ports.process('demo', { kind: 'journalctl', slot: 2 })).args).toEqual(['--user-unit=orbi-demo@2.service', '--output=json', '--lines=100', '--no-pager']);
+    expect(JSON.parse(await ports.process('demo', { kind: 'gh-api-get', resource: 'comments', issue: 2, page: 1 })).args).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', 'repos/Example/project/issues/2/comments?per_page=100&page=1']);
+    await expect(ports.process('demo', { kind: 'systemctl-show', slot: 3, unit: 'service' })).rejects.toThrow('unsafe_path');
+    await expect(ports.process('demo', { kind: 'gh-api-get', resource: 'issues', page: 11 })).rejects.toThrow('unsafe_path');
+  });
+  it('caps combined output and redacts process errors', async () => {
+    const ports = await processFixture('process.stderr.write("SECRET_CANARY".repeat(100000));process.stdout.write("x".repeat(1048577))');
+    await expect(ports.process('demo', { kind: 'journalctl', slot: 1 })).rejects.toThrow(/^read_limit$/);
+    const errorPorts = await processFixture('console.error("SECRET_CANARY");process.exit(1)');
+    await expect(errorPorts.process('demo', { kind: 'journalctl', slot: 1 })).rejects.toThrow(/^process_failed$/);
+    vi.stubEnv('PATH', '/does-not-exist');
+    await expect(errorPorts.process('demo', { kind: 'journalctl', slot: 1 })).rejects.toThrow(/^process_failed$/);
+  });
+  it('limits concurrency, kills timed-out children and reaps on disposal', async () => {
+    const ports = await processFixture('setInterval(()=>{},1000)');
+    vi.useFakeTimers();
+    const op = { kind: 'systemctl-show', slot: 1, unit: 'service' } as const;
+    const a = ports.process('demo', op); const b = ports.process('demo', op);
+    const checks = Promise.all([expect(a).rejects.toThrow('process_timeout'), expect(b).rejects.toThrow('process_timeout')]);
+    await expect(ports.process('demo', op)).rejects.toThrow('process_limit');
+    await vi.advanceTimersByTimeAsync(10000); await checks;
+    const pending = ports.process('demo', op); const disposed = expect(pending).rejects.toThrow('disposed');
+    await ports.dispose(); await disposed;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// Host/RN modules are mocked; all safety code and QueryClient behavior remain real.
+import './helpers/host';
+import { host } from './helpers/host';
+import React from 'react';
+import { create, act, type ReactTestRenderer } from 'react-test-renderer';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { PluginClientContext, PluginScreenContribution, PluginSidebarItemContribution, PluginScreenProps } from '@getpaseo/plugin/client';
+import contributeClient from '../index.client';
+import { ObservationView, useObservationQuery } from '../client/observation';
+import type { Observation } from '../shared/common';
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const props = {
+  theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } },
+  host: { id: 'host-a', label: 'Host A' }, layout: { compact: true, platform: 'ios' }, params: {},
+} as PluginScreenProps;
+const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(1); }); };
+function queryClient() { const client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => client.clear()); return client; }
+function tree(client: QueryClient, child: React.ReactNode) { return React.createElement(QueryClientProvider, { client }, child); }
+async function render(client: QueryClient, child: React.ReactNode) {
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(tree(client, child)); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  await settle(); return renderer;
+}
+
+describe('package_and_registration', () => {
+  it('registers four routes; SidebarRow and injected screen navigation open screens; rejected entries are not selectable', async () => {
+    vi.useFakeTimers();
+    const f = await setup();
+    await f.save([f.entry, { ...f.entry, id: 'rejected', repo: 'Other/repo' }]);
+    const catalog = await rpc(f.authorization);
+    host.readCatalog.mockResolvedValue(catalog);
+    const screens: PluginScreenContribution[] = [], sidebar: PluginSidebarItemContribution[] = [];
+    const remove = vi.fn(), openScreen = vi.fn();
+    const cleanup = contributeClient({ addScreen: (s: PluginScreenContribution) => { screens.push(s); return remove; }, addSidebarHeaderItem: (s: PluginSidebarItemContribution) => { sidebar.push(s); return remove; }, openScreen } as unknown as PluginClientContext);
+    expect(screens.map(s => s.id)).toEqual(['fleet', 'issues', 'runs', 'blockers']);
+    const client = queryClient();
+    for (const screen of screens) {
+      const renderer = await render(client, React.createElement(screen.Component, props));
+      expect(JSON.stringify(renderer.toJSON())).toContain('feature not implemented');
+      expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
+      expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo')).toHaveLength(1);
+      const selectors = renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '));
+      expect(selectors).toHaveLength(1);
+      await act(async () => selectors[0].props.onPress());
+      expect(openScreen).toHaveBeenCalledWith({ screenId: screen.id, params: { deploymentId: 'demo' } });
+      expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(16);
+      const light = { ...props, theme: { colors: { foreground: '#222', foregroundMuted: '#555', surface0: '#fff' } }, layout: { compact: false, platform: 'web' } } as PluginScreenProps;
+      await act(async () => renderer.update(tree(client, React.createElement(screen.Component, light))));
+      expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(24);
+      for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#222');
+    }
+    const renderer = await render(client, React.createElement(sidebar[0].Component, { ...props, currentScreen: null, openScreen, openPopover: vi.fn() }));
+    const rows = renderer.root.findAll(node => node.type === ('SidebarRow' as any));
+    expect(rows).toHaveLength(4); rows[2].props.onPress(); expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs' });
+    cleanup(); expect(remove).toHaveBeenCalledTimes(5);
+  });
+  it('renders actual unconfigured catalog repair and foreground/offline host state', async () => {
+    vi.useFakeTimers(); host.readCatalog.mockReset(); host.readCatalog.mockResolvedValue(await rpc());
+    const { Shell } = await import('../client/shell');
+    const renderer = await render(queryClient(), React.createElement(Shell, { ...props, route: 'fleet', openScreen: vi.fn() }));
+    expect(JSON.stringify(renderer.toJSON())).toContain('PASEO_ORBI_CONFIG');
+    await act(async () => { for (const listener of host.listeners) listener('background'); });
+    const calls = host.readCatalog.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(90000); });
+    expect(host.readCatalog).toHaveBeenCalledTimes(calls);
+    expect(JSON.stringify(renderer.toJSON())).toContain('stale');
+    await act(async () => renderer.unmount()); expect(host.listeners.size).toBe(0);
+    const f = await setup(); await writeFile(f.authorization, '{SECRET_CANARY');
+    host.readCatalog.mockResolvedValue(await rpc(f.authorization));
+    const invalid = await render(queryClient(), React.createElement(Shell, { ...props, route: 'issues', openScreen: vi.fn() }));
+    expect(JSON.stringify(invalid.toJSON())).toContain('Invalid configuration');
+    expect(JSON.stringify(invalid.toJSON())).not.toContain('SECRET_CANARY');
+  });
+});
+
+describe('bounded_reads_and_lifecycle client', () => {
+  type Value = { value: string };
+  type Options = Parameters<typeof useObservationQuery<Value>>[0];
+  let current!: ReturnType<typeof useObservationQuery<Value>>;
+  function Harness(options: Options) {
+    current = useObservationQuery(options);
+    return React.createElement(ObservationView<Value>, { ...current, theme: props.theme, children: data => data.value });
+  }
+  function success(value: string): Observation<Value> {
+    const now = new Date().toISOString();
+    return { state: 'available', observedAt: now, lastSuccessfulAt: now, data: { value }, problems: [] };
+  }
+  const options = (read: Options['read']): Options => ({ hostId: 'host-a', deploymentId: 'demo', selector: 'test', connected: true, foreground: true, read });
+  it('polls every 30 seconds, coalesces manual refresh and retains failed data as visibly stale', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn().mockResolvedValue(success('last good'));
+    const renderer = await render(queryClient(), React.createElement(Harness, options(read)));
+    expect(read).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); }); await settle();
+    expect(read).toHaveBeenCalledTimes(2);
+    read.mockRejectedValue(new Error('SECRET_CANARY raw error'));
+    await act(async () => { await current.refresh(); }); await settle();
+    expect(current.observation).toMatchObject({ state: 'stale', data: { value: 'last good' } });
+    expect(JSON.stringify(renderer.toJSON())).toContain('stale'); expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
+    let complete!: (value: Observation<Value>) => void;
+    read.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    let first!: Promise<unknown>, second!: Promise<unknown>;
+    await act(async () => { first = current.refresh(); second = current.refresh(); });
+    expect(read).toHaveBeenCalledTimes(4);
+    await act(async () => { complete(success('new')); await Promise.all([first, second]); }); await settle();
+    expect(current.observation?.data?.value).toBe('new');
+  });
+  it('foreground/connectivity gate manual and automatic reads, mark old data stale at 60 seconds and dispose timers', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn().mockResolvedValue(success('old'));
+    const client = queryClient(); const renderer = await render(client, React.createElement(Harness, options(read)));
+    await act(async () => renderer.update(tree(client, React.createElement(Harness, { ...options(read), foreground: false }))));
+    await act(async () => { await current.refresh(); await vi.advanceTimersByTimeAsync(60001); });
+    expect(read).toHaveBeenCalledTimes(1); expect(current.observation?.state).toBe('stale');
+    await act(async () => renderer.update(tree(client, React.createElement(Harness, { ...options(read), connected: false }))));
+    await act(async () => { await current.refresh(); await vi.advanceTimersByTimeAsync(30000); });
+    expect(read).toHaveBeenCalledTimes(1);
+    await act(async () => renderer.unmount()); client.clear(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('serializes same-key replacement generations without reusing cancelled results', async () => {
+    vi.useFakeTimers();
+    let complete!: (value: Observation<Value>) => void;
+    const read = vi.fn().mockImplementationOnce(() => new Promise<Observation<Value>>(resolve => { complete = resolve; })).mockImplementation(async () => success('new generation'));
+    const client = queryClient();
+    const first = await render(client, React.createElement(Harness, options(read)));
+    await act(async () => first.unmount());
+    const second = await render(client, React.createElement(Harness, options(read)));
+    expect(read).toHaveBeenCalledTimes(1);
+    await act(async () => { complete(success('cancelled SECRET_CANARY')); }); await settle();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(current.observation?.data?.value).toBe('new generation');
+    expect(JSON.stringify(second.toJSON())).not.toContain('SECRET_CANARY');
+  });
+  it('late callbacks cannot populate a replacement host/deployment or resurrect disposed generations', async () => {
+    vi.useFakeTimers();
+    let complete!: (value: Observation<Value>) => void;
+    const pending = vi.fn(() => new Promise<Observation<Value>>(resolve => { complete = resolve; }));
+    const client = queryClient(); const renderer = await render(client, React.createElement(Harness, options(pending)));
+    const replacement = { ...options(async () => success('host-b value')), hostId: 'host-b', deploymentId: 'other' };
+    await act(async () => renderer.update(tree(client, React.createElement(Harness, replacement)))); await settle();
+    await act(async () => { complete(success('host-a SECRET_CANARY')); }); await settle();
+    expect(current.observation?.data?.value).toBe('host-b value');
+    expect(client.getQueryData(['paseo-orbi', 'host-a', 'demo', 'test'])).toBeUndefined();
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
+    await act(async () => renderer.unmount()); client.clear(); expect(vi.getTimerCount()).toBe(0);
+  });
+});
