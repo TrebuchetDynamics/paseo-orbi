@@ -186,6 +186,74 @@ A failed reload remains failed. Fix the source and reload again. A failed instal
 
 Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/docs/plugins/reference.md#cli-reference), [logs](https://paseo.sh/docs/plugins/reference.md#debug-backend-output).
 
+## Install in Paseo
+
+**Prerequisite:** these steps require an implemented plugin with a manifest and runtime entries. The current `paseo-orbi` repository does not meet that requirement. Do not try to install this documentation-only revision.
+
+### Install through the app
+
+1. Connect to the daemon that will read the Orbi deployments.
+2. Open **Settings → Plugins** on that host.
+3. Review the trust warning in the development section. Enable **Enable plugins** only if you accept that access.
+4. Enter a source in **Plugin source**:
+   - A local development directory: `/absolute/path/to/paseo-orbi`. It must exist on the daemon machine.
+   - A future implemented Git source: `git:TrebuchetDynamics/paseo-orbi`.
+   - A published registry ID, once approved. Use the exact ID shown on its listing.
+5. Select **Install plugin**.
+6. Confirm that the installed row reports `running` with no error.
+7. Open the contributed screen or workspace panel on the same host. Test its read-only data request and error state.
+
+The installed row provides an enable switch and a menu for settings, logs, reload, and removal. If the app requests a host update, update that host before installation. A compatible daemon does not guarantee a compatible app.
+
+### Install through the CLI
+
+For a local development checkout, run the typecheck and installation commands in [Development and diagnostics](#development-and-diagnostics).
+
+Once an implemented commit is public, direct Git installation does not require registry approval:
+
+```bash
+paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref <tested-commit-sha>
+paseo plugin ls
+paseo plugin logs paseo-orbi
+```
+
+Replace `<tested-commit-sha>` with the exact tested revision. The log command assumes the future manifest ID is `paseo-orbi`. Use the actual installation ID if different. The initial Git reference does not pin later ordinary updates.
+
+For a remote daemon, place the global host option before the command:
+
+```bash
+paseo --host <url> plugin add git:TrebuchetDynamics/paseo-orbi --ref <tested-commit-sha>
+paseo --host <url> plugin ls
+```
+
+Installation fetches and prepares the source on that daemon. It does not install a separate copy on each phone or desktop client.
+
+### Enable plugins through configuration
+
+Prefer the app switch for manual setup. For file-based setup, inspect the target daemon's `config.json` and preserve its other fields. After explicit approval, set the root `pluginsEnabled` field to `true` and apply it:
+
+```bash
+paseo reload --json
+paseo plugin ls
+```
+
+For a remote daemon, edit that daemon's file and use `paseo --host <url> reload --json`. Do not change local configuration to enable a remote daemon. This switch affects all configured plugins whose own enabled state permits them to run. No daemon restart is required.
+
+Source: [install and try it](https://paseo.sh/docs/plugins.md#install-and-try-it).
+
+## Register workspace integration
+
+Installation, UI registration, and public registry publication are separate operations.
+
+- **Daemon installation:** makes the plugin available to clients connected to that daemon. There is no separate per-project installation step.
+- **UI registration:** the plugin's client entry calls `addScreen`, sidebar registration methods, or `addWorkspacePanel` to expose its interface.
+- **Workspace context:** a registered workspace panel receives `workspaceId`. Use `useWorkspace(workspaceId, selector)` to read that workspace's identity and directory.
+- **Public registry publication:** makes an approved artifact discoverable and installable by registry ID. It does not install the plugin on your daemon.
+
+For `paseo-orbi`, mapping a Paseo workspace to an Orbi deployment still needs an explicit configuration contract. Installing the plugin alone must not imply that all repositories have been discovered or authorized. There is no implemented project-registration command or deployment settings screen yet.
+
+Sources: [workspace panels](https://paseo.sh/docs/plugins/reference.md#workspace-panels), [hosts and lifecycle](https://paseo.sh/docs/plugins/reference.md#hosts-and-lifecycle).
+
 ## Distribution
 
 - Bare `owner/slug` resolves a registry listing. Use `git:owner/repository` or `github:owner/repository` for direct Git installation.
@@ -199,6 +267,37 @@ Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/
 - Keep installation commands in the README. An author-supplied `OVERVIEW.md` explains behavior, setup, permissions, data flow, and limitations without plugin installation commands.
 
 Source: [publishing guide](https://paseo.sh/docs/plugins/publishing.md). No package or registry listing was published as part of this work.
+
+### Submit to the public Paseo registry
+
+Use this procedure after the plugin works. A public GitHub repository alone is not a registry listing. The Git route below fits this repository and does not require npm publication.
+
+1. Prepare an implemented revision in `TrebuchetDynamics/paseo-orbi`. Include `paseo-plugin.json`, runtime entries, imported modules, declared assets, and any required dependency locks.
+2. Set the manifest's `description` and supported `requirements.paseo` range. Check both the target daemon and app versions.
+3. Write installation and development instructions in `README.md`. Optionally add `OVERVIEW.md` beside the manifest to maintain the listing text yourself. Otherwise, the reviewer can create it from the README and verified behavior.
+4. Provide at least one image of the working interface. Use sample data without private repository details. An icon alone is not sufficient for a visual plugin. Declare images in manifest `media`, or supply suitable public image URLs in the submission.
+5. Run `npm run typecheck`. Push the intended revision through the repository's delivery process. Install that exact Git commit on a test daemon, require `running`, and exercise its contributions. Record the tested revision and limitations.
+6. Open the [Paseo plugin submission form](https://github.com/getpaseo/plugins/issues/new?template=submit-plugin.yml). Use the form so the submission label starts intake.
+7. Use the plugin name as the title. Enter `https://github.com/TrebuchetDynamics/paseo-orbi` in **Source**, and specify the tested commit in the submission. Select the applicable categories and include interface-image URLs when needed.
+8. Follow the review PR opened by the bot. Reply there with corrected revisions or requested image URLs. Do not treat an intake issue or automated validation pass as publication approval.
+9. After approval and publication, copy the exact registry ID from the listing and test registry installation:
+
+   ```bash
+   paseo plugin add owner/slug
+   paseo plugin ls
+   ```
+
+   Replace `owner/slug` with the published ID. Do not assume a listing ID exists before approval.
+
+The reviewer inspects the artifact and dependencies without running plugin code, completes the listing, and records the approved commit or version. The [registry review policy](https://github.com/getpaseo/plugins/blob/main/REVIEW.md) applies even when automated checks pass. Author-side runtime tests remain necessary.
+
+For later Git releases, submit the desired revision manually for review. Existing registry installations use approved pins. npm releases receive automatic update PRs, but that does not make direct npm installation equivalent to registry installation.
+
+An npm submission is an alternative, not a prerequisite. Follow the [npm publication steps](https://paseo.sh/docs/plugins/publishing.md#publish-on-npm), inspect `npm pack --dry-run --ignore-scripts`, and test the exact published version before submitting its public package name or page. Registry IDs and local directories are not valid submission sources.
+
+No installation, registry submission, npm publication, or release was performed while writing this guide.
+
+Source: [plugin registry](https://paseo.sh/docs/plugins/publishing.md#plugin-registry).
 
 ## Upstream examples
 
