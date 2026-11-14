@@ -128,7 +128,7 @@ export class ReadPorts {
       if (operation.kind === 'systemctl-show') {
         if (operation.unit !== 'service' && operation.unit !== 'timer') throw new ReadError('unsafe_path');
         command = 'systemctl';
-        args = ['--user', 'show', `${prefix}@${operation.slot}.${operation.unit}`, '--property=ActiveState,SubState,Result,ExecMainStatus,NextElapseUSecRealtime', '--no-pager'];
+        args = ['--user', 'show', `${prefix}@${operation.slot}.${operation.unit}`, '--property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic', '--no-pager'];
       } else {
         command = 'journalctl'; args = [`--user-unit=${prefix}@${operation.slot}.service`, '--output=json', '--lines=100', '--no-pager'];
       }
