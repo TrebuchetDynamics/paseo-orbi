@@ -31,6 +31,10 @@ Observing Orbi's background Pi session logs does not imply those sessions are Pa
 
 Explicit controls for pausing timers, approving blocked work, or submitting trusted instructions may be considered through supported Orbi interfaces, without taking ownership of orchestration.
 
+## Documentation
+
+- [Paseo plugin development reference](docs/paseo-plugins.md): official sources, runtime boundaries, UI and RPC APIs, compatibility, development, publishing, and proposed Orbi integration limits.
+
 ## References
 
 - [Paseo plugin API](https://github.com/getpaseo/paseo/blob/main/public-docs/plugins/reference.md)
