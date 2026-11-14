@@ -2,7 +2,7 @@
 
 A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for observing explicitly authorized local [Orbi](https://github.com/orbi-build/orbi) deployments.
 
-**Status:** installable bootstrap, not a working telemetry dashboard. Fleet, Issues, Runs, and Blockers register as React Native screens and explicitly show **feature not implemented**. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. No live installation or desktop/mobile qualification has been performed.
+**Status:** Issues browsing and trusted report reading are implemented. Fleet, Runs, and Blockers remain **feature not implemented** screens. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. No live installation or desktop/mobile qualification has been performed.
 
 ## Responsibilities
 
@@ -12,10 +12,10 @@ A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for obs
 
 ## Planned v0.1
 
-| View | Planned purpose (not collected yet) |
+| View | Purpose / status |
 | --- | --- |
 | Fleet | Deployments, timers, health, active work, and capacity |
-| Issues | Ready, implementing, reviewing, blocked, and merged work by repository |
+| Issues | Implemented: repository-selected lifecycle pages, source evidence, on-demand reports and dependency uncertainty |
 | Runs | Structured Pi activity, run IDs, branches, tests, and PR status |
 | Blockers | Failures, preserved worktrees, evidence, and recovery guidance |
 
@@ -23,7 +23,7 @@ Version 0.1 is strictly read-only: no timer control, execution-state mutation, m
 
 ## Setup
 
-Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4** (`>=0.15.4 <0.16.0`). Existing user systemd and authenticated GitHub CLI will be needed by later collectors; this shell invokes neither. No provider/model/auth changes are required or performed.
+Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4** (`>=0.15.4 <0.16.0`). Issues uses the daemon user's existing authenticated GitHub CLI. Other future collectors will also need user systemd; Issues never invokes systemd. No provider/model/auth changes are required or performed.
 
 An operator supplies an existing JSON file via the daemon environment's absolute `PASEO_ORBI_CONFIG`. It is read once at plugin startup; changes require an explicitly authorized plugin reload. The plugin does not write configuration or discover repositories.
 
@@ -74,7 +74,30 @@ Only these source checkout subsets are supported:
 
 The RPC returns only IDs, labels, repository names, adapter names, status and allowlisted problem codes. It never returns private roots, publisher logins, environment values or raw error prose. Invalid entries cannot resolve into read capabilities. No `.orbi/env`, provider, Git metadata or lock reads are permitted. Config, TOML, source and approved JSON reads are bounded to 256 KiB and a 10-second caller deadline, and reject nonregular files and symlinks, with opened-file identity checks to narrow check/use races. Startup directory checks use the same 10-second deadline. Disposal aborts initialization as well as pending port reads, clears their deadlines, and closes handles; a stuck kernel filesystem operation itself cannot be forcibly cancelled, so late completions are discarded and late-opened handles closed.
 
-Internal process ports allow only fixed `systemctl show`, bounded `journalctl`, and GitHub.com `gh api --method GET` forms. Shell is off, stdin ignored, two children maximum, 10 seconds and 1 MiB combined output per child; timeout and disposal kill each operation's isolated Linux process group (including helpers holding output pipes), then reap the direct child. Internal raw output is not a public RPC. Future collectors must project/redact it before transport. Caches are memory-only. Client observations poll mounted foreground/connected surfaces every 30 seconds, coalesce refreshes, retain failed data as stale, mark it stale after 60 seconds without success, and guard cancelled host/deployment generations.
+Internal process ports allow only fixed `systemctl show`, bounded `journalctl`, and GitHub.com `gh api --method GET` forms. Shell is off, stdin ignored, two children maximum, 10 seconds and 1 MiB combined output per child; timeout and disposal kill each operation's isolated Linux process group (including helpers holding output pipes), then reap the direct child. Internal raw output is not a public RPC. The GitHub reader validates and projects it before transport; future collectors must do the same. Caches are memory-only. Client observations poll mounted foreground/connected surfaces every 30 seconds, coalesce refreshes, retain failed data as stale, mark it stale after 60 seconds without success, and guard cancelled host/deployment generations.
+
+## Issues and GitHub authentication
+
+Open **Issues**, select an available repository in the catalog, then browse pages or select an issue to inspect its reports and native blockers. Rejected deployments remain visible with their diagnostics, never selectable. Each repository is read separately on the selected host. The typed `issues.list({deploymentId,page})` and `issues.get({deploymentId,issue})` RPCs expose validated projections only: no bodies, comments, credentials, activity targets or check output.
+
+Authentication belongs to the operator and the daemon user's existing `gh` context, not plugin settings. The plugin does not extract tokens, source `.orbi/env`, authenticate, or change permissions. It runs only fixed `gh api --hostname github.com --method GET --include` requests with `Accept: application/vnd.github+json` and API version `2022-11-28`, without CLI caching or verbose output. Endpoints are constructed from authorized repository identities and validated positive issue/PR numbers; supplied URLs are never fetched. Only repository issues, selected-issue comments/details/dependencies, exact-repo PR metadata, and that PR head's check metadata are read.
+
+Lifecycle precedence is: verified associated PR merge or `ai-merged`; closed without merge evidence; `ai-blocked`; `ai-needs-detail`; `ai-epic`; reviewing (`ai-awaiting-merge`, `ai-pr-opened`, `ai-fix-needed`, with the specific label badge); `ai-in-progress`; `ai-planning` / `ai-paused`; `ai-ready`; Other. `ai-human-review` alone is not a wait state. Conflicting lifecycle labels remain visible as evidence warnings. A selected issue's newly read facts update its displayed group. Labels and receipts are **reported**, not verified merge evidence: verification requires the authorized PR's `merged_at`. GitHub terminal/manual facts outrank reported progress. Ready candidate never promises pickup; dependencies remain unknown until requested, and unavailable/incomplete dependency reads never mean unblocked. Foreign-repository dependencies are unavailable rather than incorrectly attributed locally.
+
+Browsing uses numbered pages of 100, sorted by updated time descending, excludes PR objects, and explicitly does not establish active membership. The server-only `GitHubReader.listIssueScope` completely paginates **open** issues for Runs/Blockers; consumers must check `complete`. Collections stop at ten pages or 60 seconds, with child deadlines reduced to the remaining cycle budget. A cap/failure never installs partial active membership or a new current run. Previous complete evidence is retained stale, or an initial incomplete result has no established members/run. Detail reads are on demand, not a sweep of historical issue comments. Identical requests coalesce and use a bounded memory-only, 30-second cache. An incomplete detail refresh can still show a newly confirmed closed/terminal fact while retaining explicitly incomplete report evidence.
+
+Formal metadata follows the [pinned public contracts](https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/docs/public-contracts.mdx). Only configured `trustedPublisherLogins` authenticate publication; `authorAssociation` and copied markers grant no trust. A formal run prefix selects the newest updated run (numeric comment-ID tie break), then that run's newest progress. A newer missing/invalid report never borrows an older run. The reader validates the closed progress/failure/base-CI vocabularies and scene schema, strips every activity target, and does not parse arbitrary prose. The pinned base-CI writer's final block is accepted only on its formal validated base-CI failure, excluding quotes/fences. Legacy prose is missing; unknown versions are unsupported. Attribution includes repository, issue, REST comment ID and update time.
+
+A selected run's formal merged comment must carry one unquoted details block with all six unique fixed machine rows. Duplicate/missing/malformed rows, invalid commit/numeric values, mismatched run IDs and foreign PR URLs are invalid. A valid receipt can identify a PR without a scene; conflicting valid scene/receipt identities expose **conflict**, with no selected PR. A malformed present source cannot disappear behind a valid fallback. Runs and Blockers should reuse `readIssueReports` and the server-only `getPullRequestEvidence` helper/method rather than reparse receipts.
+
+### GitHub failure and repair
+
+- `auth_denied`: no empty/ready success. Ask the operator to repair the daemon user's `gh` authentication/repository permissions outside the plugin, then Refresh.
+- `rate_limited`: wait for `Retry-After`, rate-limit reset, or the 60-second fallback. All GitHub reads on this plugin installation share the gate; manual Refresh cannot bypass it. A 403 without quota exhaustion is `auth_denied` and also applies backoff.
+- `not_found` on dependencies: unknown/unavailable, not an empty blocker set. Check repository access/API availability outside the plugin.
+- `network_failed`, bounded process/read failures, `invalid_response`, `deadline`, or `incomplete`: retain previous complete evidence stale and retry after repair/the polling interval. Do not broaden authorization or infer an empty queue.
+
+Offline fixture tests exercise the registered RPC, real reader and React Native screen path, including auth failure/repair, pagination, stale retention and forbidden canaries. A separate Playwright fixture preview exercised the actual screen components with React Native Web, registered RPCs and a bounded fake-gh executable at desktop/tablet/mobile widths (light/dark), including auth failure and repair/Refresh, with no browser errors or horizontal overflow. Neither is live GitHub or installed Paseo qualification; those remain the final integration issue's responsibility. No installation, credential change or GitHub mutation is part of this feature.
 
 ### Authorized installation (not performed here)
 
@@ -95,6 +118,7 @@ On Node 22.19.0:
 ```sh
 npm ci --ignore-scripts
 npm test -- tests/foundation.test.ts
+npm test -- tests/issues.test.tsx
 npm run test:boundaries
 npm run typecheck
 npm test

@@ -92,8 +92,10 @@ export async function readBytes(root: string, path: string, signal?: AbortSignal
 export type ProcessOperation =
   | { kind: 'systemctl-show'; slot: number; unit: 'service' | 'timer' }
   | { kind: 'journalctl'; slot: number }
-  | { kind: 'gh-api-get'; resource: 'issues'; page: number }
-  | { kind: 'gh-api-get'; resource: 'comments'; issue: number; page: number };
+  | { kind: 'gh-api-get'; resource: 'issues'; state?: 'all' | 'open'; page: number }
+  | { kind: 'gh-api-get'; resource: 'comments' | 'dependencies' | 'issue'; issue: number; page: number }
+  | { kind: 'gh-api-get'; resource: 'pull'; pr: number; page: number }
+  | { kind: 'gh-api-get'; resource: 'checks'; sha: string; page: number };
 
 export class ReadPorts {
   private disposed = false;
@@ -118,8 +120,9 @@ export class ReadPorts {
     return result as { size: number; mtimeMs: number };
   }
   private assertActive() { if (this.disposed) throw new ReadError('disposed'); }
-  async process(id: string, operation: ProcessOperation): Promise<string> {
+  async process(id: string, operation: ProcessOperation, timeoutMs = 10000): Promise<string> {
     this.assertActive();
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw new ReadError('unsafe_path');
     const deployment = this.repository.resolve(id);
     let command: string, args: string[];
     if (operation.kind === 'systemctl-show' || operation.kind === 'journalctl') {
@@ -134,12 +137,26 @@ export class ReadPorts {
       }
     } else if (operation.kind === 'gh-api-get') {
       if (!Number.isInteger(operation.page) || operation.page < 1 || operation.page > 10) throw new ReadError('unsafe_path');
-      let endpoint = `repos/${deployment.repo}/issues`;
-      if (operation.resource === 'comments') {
+      const root = `repos/${deployment.repo}`;
+      let endpoint: string;
+      const paging = `per_page=100&page=${operation.page}`;
+      if (operation.resource === 'issues') {
+        const state = operation.state ?? 'all';
+        if (state !== 'all' && state !== 'open') throw new ReadError('unsafe_path');
+        endpoint = `${root}/issues?state=${state}&sort=updated&direction=desc&${paging}`;
+      } else if (operation.resource === 'comments' || operation.resource === 'dependencies' || operation.resource === 'issue') {
         if (!Number.isSafeInteger(operation.issue) || operation.issue < 1) throw new ReadError('unsafe_path');
-        endpoint += `/${operation.issue}/comments`;
-      } else if (operation.resource !== 'issues') throw new ReadError('unsafe_path');
-      command = 'gh'; args = ['api', '--hostname', 'github.com', '--method', 'GET', `${endpoint}?per_page=100&page=${operation.page}`];
+        endpoint = `${root}/issues/${operation.issue}`;
+        if (operation.resource !== 'issue') endpoint += `${operation.resource === 'comments' ? '/comments' : '/dependencies/blocked_by'}?${paging}`;
+      } else if (operation.resource === 'pull') {
+        if (!Number.isSafeInteger(operation.pr) || operation.pr < 1) throw new ReadError('unsafe_path');
+        endpoint = `${root}/pulls/${operation.pr}`;
+      } else if (operation.resource === 'checks') {
+        if (!/^[0-9a-f]{40}$/.test(operation.sha)) throw new ReadError('unsafe_path');
+        endpoint = `${root}/commits/${operation.sha}/check-runs?${paging}`;
+      } else throw new ReadError('unsafe_path');
+      command = 'gh'; args = ['api', '--hostname', 'github.com', '--method', 'GET', '--include',
+        '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', endpoint];
     } else throw new ReadError('unsafe_path');
     if (this.children.size >= 2) throw new ReadError('process_limit');
     return new Promise((resolveResult, reject) => {
@@ -158,13 +175,18 @@ export class ReadPorts {
           catch { child.kill('SIGKILL'); }
         }
       };
-      const timer = setTimeout(() => stop('process_timeout'), 10000);
+      const timer = setTimeout(() => stop('process_timeout'), timeoutMs);
       const done = new Promise<void>(resolveDone => {
         child.once('close', code => {
           clearTimeout(timer); this.children.delete(child); resolveDone();
           if (failure) reject(failure);
-          else if (code !== 0) reject(new ReadError('process_failed'));
-          else resolveResult(Buffer.concat(output).toString('utf8'));
+          else {
+            const text = Buffer.concat(output).toString('utf8');
+            // gh exits nonzero for HTTP errors, but --include still supplies the
+            // bounded status/headers needed for safe typed backoff. Never return stderr.
+            if (code !== 0 && !(operation.kind === 'gh-api-get' && /^HTTP\//.test(text))) reject(new ReadError('process_failed'));
+            else resolveResult(text);
+          }
         });
       });
       this.children.set(child, () => { stop('disposed'); return done; });

@@ -316,12 +316,12 @@ These are reference candidates, not audited dependencies. Names and paths were c
 
 ## Application to paseo-orbi
 
-The following remains the v0.1 feature direction. The foundation implements screen registration, safe deployment discovery, bounded ports and the common observation contract, not the collectors:
+The following remains the v0.1 feature direction. The foundation implements screen registration, safe deployment discovery, bounded ports and the common observation contract. Issues now adds the GitHub collector and trusted report reader; Fleet, Runs and Blockers remain unimplemented:
 
 1. Use screens for Fleet, Issues, Runs, and Blockers. Add a workspace panel only when it adds useful repository context.
-2. Keep Orbi and GitHub reads behind narrow, typed server RPCs. Do not expose arbitrary command strings or unrestricted file paths.
-3. Use explicitly configured deployments. Validate repository identity, allowed paths, response size, timeouts, and sensitive output before displaying diagnostics.
-4. Show source identity, last refresh, partial failures, and stale results. Reading one repository must not hide another repository's failure.
+2. Keep Orbi and GitHub reads behind narrow, typed server RPCs. Issues implements transform-free `issues.list({deploymentId,page})` and on-demand `issues.get({deploymentId,issue})`; only validated projections cross the boundary. Do not expose arbitrary command strings, raw bodies/comments or unrestricted file paths. Server consumers reuse `GitHubReader.listIssueScope`, `readIssueReports` and `getPullRequestEvidence` rather than creating another report parser.
+3. Use explicitly configured deployments. Issues selects only safe `deployments.list` entries and preserves rejected-entry diagnostics. Validate exact repository/PR identity, allowed paths, response size, timeouts, and sensitive output before displaying diagnostics. GitHub credentials stay in the daemon user's existing gh context: no token extraction, plugin auth settings or `.orbi/env` sourcing. Trusted publication requires the operator-configured publisher login, never authorAssociation or marker shape alone.
+4. Show source identity, last refresh, partial failures, and stale results. Issues displays lifecycle label evidence/conflicts, report comment attribution, unknown dependencies and numbered pagination. Complete open-scope/comment reads use 100-record pages, ten-page/60-second limits and retain previous complete evidence stale on failure; partial collections never establish current membership/run. Cache/coalescing and the installation-wide Retry-After/reset/fallback gate also apply to manual refresh. Reading one repository must not hide another repository's failure. Labels/receipts report merges; only exact-repo PR `merged_at` verifies them.
 5. Keep v0.1 read-only. Do not change timers, execution state, permissions, worktrees, or merge state.
 6. Do not treat an external Orbi Pi session as a Paseo agent. Log observation does not prove interactive attachment or steering support.
 
@@ -329,7 +329,7 @@ Still to verify in feature/integration work:
 
 - Collector-specific schemas and safe projection of internal reads. All Orbi CLI commands and Git commands are excluded; there is no diagnostic execution loophole.
 - Real-host setup using the explicit startup authorization; no automatic deployment discovery.
-- GitHub authentication, rate limits, and issue/PR state mapping.
+- Live GitHub authentication/rate behavior and installed-app issue/PR mapping. Offline Issues fixtures now exercise typed auth failures, backoff, complete pagination, metadata trust, merge identity conflicts, and UI failure/repair.
 - Pi log formats, retention, redaction, and session identity.
 - Supported Paseo daemon/app versions and whether polling is sufficient before adding subscriptions.
 

@@ -1,0 +1,53 @@
+{
+  "source": "Synthetic GitHub REST shapes: https://docs.github.com/en/rest/issues/issues#list-repository-issues and https://cli.github.com/manual/gh_api",
+  "issue": {
+    "number": 4,
+    "title": "Browse issue evidence",
+    "state": "open",
+    "updated_at": "2026-10-15T06:20:20Z",
+    "labels": [
+      {
+        "name": "ai-ready"
+      },
+      {
+        "name": "ai-blocked"
+      }
+    ],
+    "body": "BODY_CANARY"
+  },
+  "pull": {
+    "number": 42,
+    "html_url": "https://github.com/Example/project/pull/42",
+    "merged_at": "2026-10-15T07:00:00Z",
+    "state": "closed",
+    "head": {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "base": {
+      "repo": {
+        "full_name": "Example/project"
+      }
+    }
+  },
+  "checks": {
+    "check_runs": [
+      {
+        "id": 1,
+        "name": "typecheck",
+        "status": "completed",
+        "conclusion": "success",
+        "output": {
+          "summary": "OUTPUT_CANARY"
+        }
+      }
+    ]
+  },
+  "rateHeaders": {
+    "Retry-After": "90",
+    "X-RateLimit-Remaining": "0"
+  },
+  "resetHeaders": {
+    "X-RateLimit-Reset": "1792022490",
+    "X-RateLimit-Remaining": "0"
+  }
+}
