@@ -1,0 +1,42 @@
+{
+  "source": "https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/docs/public-contracts.mdx",
+  "run": "86b57234",
+  "progress": {
+    "step": "review",
+    "reported_at": "2026-10-15T06:20:20Z",
+    "activity": {
+      "at": "2026-10-15T06:20:18Z",
+      "kind": "read",
+      "target": "TARGET_CANARY"
+    }
+  },
+  "scene": {
+    "schema": 1,
+    "run_id": "86b57234",
+    "base_branch": "main",
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pr_url": "https://github.com/Example/project/pull/42",
+    "external": "",
+    "review_round": 2,
+    "base_advance_round": 0,
+    "verdict_head_unknown_round": 0
+  },
+  "failure": {
+    "schema": 1,
+    "outcome": "blocked",
+    "reason_code": "base_ci_red",
+    "action_code": "fix_ticket",
+    "retry_safe": false
+  },
+  "baseCi": {
+    "schema": 1,
+    "state": "waiting",
+    "base_branch": "main",
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pr": 42,
+    "failing_checks": [
+      "typecheck"
+    ]
+  },
+  "receipt": "<details><summary>Run details</summary>\n\n- merge_commit=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n- review_rounds=2\n- commits=3\n- external_commits=0\n- run_id=86b57234\n- pr_url=https://github.com/Example/project/pull/42\n\n</details>"
+}

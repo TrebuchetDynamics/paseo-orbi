@@ -137,7 +137,7 @@ describe('config_and_compatibility', () => {
   it('server snapshots startup environment; contracts are synchronous JSON-only and transform-free', async () => {
     const f = await setup(); vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
     let handler!: () => Promise<unknown>;
-    cleanups.push(contribute({ handle: (c: unknown, h: () => Promise<unknown>) => { if (c === deploymentsList) handler = h; } } as unknown as PluginServerContext));
+    cleanups.push(contribute({ handle: (contract: unknown, h: () => Promise<unknown>) => { if (contract === deploymentsList) handler = h; } } as unknown as PluginServerContext));
     vi.stubEnv('PASEO_ORBI_CONFIG', '/SECRET_CANARY');
     expect(DeploymentCatalog.parse(await handler()).state).toBe('configured');
     expect(() => deploymentsList.input.parse({ path: '/secret' })).toThrow();
@@ -259,7 +259,7 @@ describe('bounded_reads_and_lifecycle', () => {
     const result = JSON.parse(await ports.process('demo', { kind: 'systemctl-show', slot: 1, unit: 'service' }));
     expect(result.args).toEqual(['--user', 'show', 'orbi-demo@1.service', '--property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic', '--no-pager']);
     expect(JSON.parse(await ports.process('demo', { kind: 'journalctl', slot: 2 })).args).toEqual(['--user-unit=orbi-demo@2.service', '--output=json', '--lines=100', '--no-pager']);
-    expect(JSON.parse(await ports.process('demo', { kind: 'gh-api-get', resource: 'comments', issue: 2, page: 1 })).args).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', 'repos/Example/project/issues/2/comments?per_page=100&page=1']);
+    expect(JSON.parse(await ports.process('demo', { kind: 'gh-api-get', resource: 'comments', issue: 2, page: 1 })).args).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', 'repos/Example/project/issues/2/comments?per_page=100&page=1']);
     await expect(ports.process('demo', { kind: 'systemctl-show', slot: 3, unit: 'service' })).rejects.toThrow('unsafe_path');
     await expect(ports.process('demo', { kind: 'gh-api-get', resource: 'issues', page: 11 })).rejects.toThrow('unsafe_path');
   });
@@ -351,7 +351,7 @@ describe('package_and_registration', () => {
     const client = queryClient();
     for (const screen of screens) {
       const renderer = await render(client, React.createElement(screen.Component, props));
-      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : 'feature not implemented');
+      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
