@@ -12,14 +12,14 @@ export const profiles = {
 } as const;
 export type SourceProfile = keyof typeof profiles;
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
-export async function fingerprint(root: string, profile: SourceProfile) {
+export async function fingerprint(root: string, profile: SourceProfile, signal?: AbortSignal) {
   let manifest = '';
-  for (const path of profiles[profile].paths) manifest += `${path}\0${sha(await readBytes(root, resolve(root, path)))}\n`;
+  for (const path of profiles[profile].paths) manifest += `${path}\0${sha(await readBytes(root, resolve(root, path), signal))}\n`;
   return sha(manifest);
 }
-export async function compatible(root: string, adapter: string): Promise<boolean> {
+export async function compatible(root: string, adapter: string, signal?: AbortSignal): Promise<boolean> {
   // Use own-property lookup: no inherited profile names can be authorized.
   if (!Object.hasOwn(profiles, adapter)) return false;
-  try { return await fingerprint(root, adapter as SourceProfile) === profiles[adapter as SourceProfile].fingerprint; }
+  try { return await fingerprint(root, adapter as SourceProfile, signal) === profiles[adapter as SourceProfile].fingerprint; }
   catch { return false; }
 }

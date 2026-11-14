@@ -5,8 +5,9 @@ import { ReadPorts } from './server/read-ports';
 
 export default function contribute(server: PluginServerContext) {
   // Read the environment once, not per RPC or poll. No environment values are logged.
-  const repository = ConfigRepository.load(process.env.PASEO_ORBI_CONFIG);
+  const lifetime = new AbortController();
+  const repository = ConfigRepository.load(process.env.PASEO_ORBI_CONFIG, lifetime.signal);
   const ports = repository.then(config => new ReadPorts(config));
   server.handle(deploymentsList, async () => (await repository).catalog());
-  return async () => { await (await ports).dispose(); };
+  return async () => { lifetime.abort(); await (await ports).dispose(); };
 }

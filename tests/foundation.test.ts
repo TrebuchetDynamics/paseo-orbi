@@ -186,6 +186,40 @@ describe('bounded_reads_and_lifecycle', () => {
     expect(atDeadline).toBe('read_limit');
     expect(vi.getTimerCount()).toBe(0);
   });
+  it('bounds startup directory checks and aborts initialization on cleanup', async () => {
+    const f = await setup();
+    const actual = await vi.importActual<typeof filesystem>('node:fs/promises');
+    let release!: () => void, entered!: () => void;
+    let blocked = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(filesystem, 'stat').mockImplementationOnce(async (...args) => {
+      entered(); await new Promise<void>(resolve => { release = resolve; }); return actual.stat(...args);
+    });
+    vi.useFakeTimers();
+    let result: DeploymentCatalog | undefined;
+    const loading = ConfigRepository.load(f.authorization).then(repository => { result = repository.catalog(); });
+    await blocked; await vi.advanceTimersByTimeAsync(10000);
+    const atDeadline = result;
+    release(); await loading;
+    expect(atDeadline?.entries[0]).toMatchObject({ status: 'invalid_config', problems: [{ code: 'read_limit' }] });
+    expect(vi.getTimerCount()).toBe(0);
+
+    blocked = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(filesystem, 'stat').mockImplementationOnce(async (...args) => {
+      entered(); await new Promise<void>(resolve => { release = resolve; }); return actual.stat(...args);
+    });
+    vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+    const cleanup = contribute({ handle: () => {} } as unknown as PluginServerContext);
+    await blocked;
+    const opened = vi.spyOn(filesystem, 'open'); opened.mockClear();
+    let disposed = false;
+    const disposing = cleanup().then(() => { disposed = true; });
+    await vi.advanceTimersByTimeAsync(1);
+    const disposedWhileBlocked = disposed;
+    release(); await disposing;
+    expect(opened).not.toHaveBeenCalled();
+    expect(disposedWhileBlocked).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it('rejects inode replacement between check and open', async () => {
     const f = await setup();
     const actual = await vi.importActual<typeof filesystem>('node:fs/promises');
@@ -236,6 +270,33 @@ describe('bounded_reads_and_lifecycle', () => {
     await expect(errorPorts.process('demo', { kind: 'journalctl', slot: 1 })).rejects.toThrow(/^process_failed$/);
     vi.stubEnv('PATH', '/does-not-exist');
     await expect(errorPorts.process('demo', { kind: 'journalctl', slot: 1 })).rejects.toThrow(/^process_failed$/);
+  });
+  it('timeout and disposal kill helpers that inherit process output pipes', async () => {
+    const f = await setup();
+    const pidFile = join(f.root, 'helper.pid');
+    const ports = await processFixture(`
+      const {spawn} = require('node:child_process');
+      const helper = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {stdio:['ignore',1,2]});
+      require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(helper.pid));
+      setInterval(()=>{},1000);
+    `);
+    // Emergency cleanup keeps the regression bounded even against the broken port.
+    let helperPid: number | undefined;
+    cleanups.push(() => { if (helperPid) { try { process.kill(helperPid, 'SIGKILL'); } catch {} } });
+    vi.useFakeTimers();
+    const op = { kind: 'journalctl', slot: 1 } as const;
+    for (const reason of ['process_timeout', 'disposed']) {
+      let errorCode: string | undefined;
+      const pending = ports.process('demo', op).catch(error => { errorCode = error.message; });
+      // Await a real child-side readiness marker, not fake timer progress.
+      await vi.waitFor(async () => { helperPid = Number(await filesystem.readFile(pidFile, 'utf8')); }, { timeout: 1000 });
+      if (reason === 'process_timeout') await vi.advanceTimersByTimeAsync(10000);
+      else void ports.dispose();
+      await vi.waitFor(() => { expect(errorCode).toBe(reason); }, { timeout: 1000 });
+      await pending;
+      await filesystem.unlink(pidFile);
+    }
+    expect(vi.getTimerCount()).toBe(0);
   });
   it('limits concurrency, kills timed-out children and reaps on disposal', async () => {
     const ports = await processFixture('setInterval(()=>{},1000)');

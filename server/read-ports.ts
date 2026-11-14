@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, realpath, open } from 'node:fs/promises';
+import { lstat, realpath, stat, open } from 'node:fs/promises';
 import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { ConfigRepository } from './config';
@@ -20,7 +20,10 @@ async function checkedFile(root: string, path: string, metadataOnly: boolean, li
   if (rel.startsWith('..' + sep) || rel === '..' || isAbsolute(rel)) throw new ReadError('unsafe_path');
   try {
     // Reject symlink components (including authorized roots), not merely a final symlink.
-    if (await realpath(root) !== root || await realpath(path) !== path) throw new ReadError('unsafe_path');
+    if (await realpath(root) !== root) throw new ReadError('unsafe_path');
+    if (lifetime.expired) throw new ReadError('read_limit');
+    if (await realpath(path) !== path) throw new ReadError('unsafe_path');
+    if (lifetime.expired) throw new ReadError('read_limit');
     const before = await lstat(path);
     if (!before.isFile()) throw new ReadError('unsafe_path');
     if (lifetime.expired) throw new ReadError('read_limit');
@@ -29,6 +32,7 @@ async function checkedFile(root: string, path: string, metadataOnly: boolean, li
     try {
       if (lifetime.expired) throw new ReadError('read_limit');
       const opened = await handle.stat();
+      if (lifetime.expired) throw new ReadError('read_limit');
       if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || await realpath(path) !== path) throw new ReadError('unsafe_path');
       const after = await lstat(path);
       if (after.dev !== opened.dev || after.ino !== opened.ino) throw new ReadError('unsafe_path');
@@ -50,7 +54,7 @@ async function checkedFile(root: string, path: string, metadataOnly: boolean, li
     } finally { await handle.close(); }
   } catch (error) { throw error instanceof ReadError ? error : new ReadError('read_failed'); }
 }
-export async function boundedFile(root: string, path: string, metadataOnly = false, signal?: AbortSignal) {
+async function boundedOperation<T>(work: (lifetime: { expired: boolean; close: () => Promise<void> }) => Promise<T>, signal?: AbortSignal) {
   const lifetime = { expired: false, close: async () => {} };
   let rejectCancellation!: (error: ReadError) => void;
   const cancellation = new Promise<never>((_, reject) => { rejectCancellation = reject; });
@@ -66,8 +70,21 @@ export async function boundedFile(root: string, path: string, metadataOnly = fal
   signal?.addEventListener('abort', abort, { once: true });
   try {
     if (signal?.aborted) throw new ReadError('disposed');
-    return await Promise.race([checkedFile(root, path, metadataOnly, lifetime), cancellation]);
+    return await Promise.race([work(lifetime), cancellation]);
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+}
+export async function boundedDirectory(path: string, signal?: AbortSignal) {
+  return boundedOperation(async lifetime => {
+    try {
+      if (!absolutePath(path) || await realpath(path) !== path) throw new ReadError('unsafe_path');
+      if (lifetime.expired) throw new ReadError('read_limit');
+      if (!(await stat(path)).isDirectory()) throw new ReadError('unsafe_path');
+      if (lifetime.expired) throw new ReadError('read_limit');
+    } catch (error) { throw error instanceof ReadError ? error : new ReadError('read_failed'); }
+  }, signal);
+}
+export async function boundedFile(root: string, path: string, metadataOnly = false, signal?: AbortSignal) {
+  return boundedOperation(lifetime => checkedFile(root, path, metadataOnly, lifetime), signal);
 }
 export async function readBytes(root: string, path: string, signal?: AbortSignal): Promise<Buffer> {
   return await boundedFile(root, path, false, signal) as Buffer;
@@ -127,12 +144,20 @@ export class ReadPorts {
     if (this.children.size >= 2) throw new ReadError('process_limit');
     return new Promise((resolveResult, reject) => {
       let child: ChildProcess;
-      try { child = spawn(command, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: process.env }); }
+      try { child = spawn(command, args, { shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env }); }
       catch { reject(new ReadError('process_failed')); return; }
       let failure: ReadError | undefined;
       let length = 0;
       const output: Buffer[] = [];
-      const stop = (code: ReadError['code']) => { failure ??= new ReadError(code); child.kill('SIGKILL'); };
+      const stop = (code: ReadError['code']) => {
+        failure ??= new ReadError(code);
+        // Linux server: give each operation its own process group so helpers
+        // cannot keep stdout/stderr alive after the direct child is killed.
+        if (child.pid) {
+          try { process.kill(-child.pid, 'SIGKILL'); }
+          catch { child.kill('SIGKILL'); }
+        }
+      };
       const timer = setTimeout(() => stop('process_timeout'), 10000);
       const done = new Promise<void>(resolveDone => {
         child.once('close', code => {
