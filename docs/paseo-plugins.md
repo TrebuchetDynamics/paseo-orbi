@@ -2,7 +2,7 @@
 
 This guide gathers the Paseo contracts relevant to `paseo-orbi`. It is a summary, not a copy of the complete API reference.
 
-**Project status:** planning only. There is no plugin to install or run in this repository.
+**Project status:** read-only bootstrap implemented. Four shell screens and the safe deployment catalog exist; telemetry features and live host qualification do not. See [setup and development](../README.md#setup).
 
 ## Official sources
 
@@ -17,7 +17,7 @@ Reviewed on **2026-11-14**, starting from the [official documentation index](htt
 | [Migration](https://paseo.sh/docs/plugins/migration.md) | Migration from the old single-entry format |
 | [SDK reference](https://paseo.sh/docs/sdk/reference.md) | Normal Paseo agent, workspace, and host operations |
 
-The deployed docs govern this summary. They can describe newer or unreleased APIs. Check both daemon and app compatibility before implementation. This review did not establish a minimum Paseo version for `paseo-orbi`.
+The deployed docs govern this summary. They can describe newer or unreleased APIs. Check both daemon and app compatibility before implementation. The bootstrap is pinned to SDK 0.15.4, with both daemon and app requirements `>=0.15.4 <0.16.0`. Newer documented APIs are not implicitly available.
 
 GitHub `main` resolved to [`6e2fee462f148fe1aa158976da4435c753cc814a`](https://github.com/getpaseo/paseo/tree/6e2fee462f148fe1aa158976da4435c753cc814a). The examples below use that revision. This does not prove that the deployed docs came from that commit.
 
@@ -47,7 +47,7 @@ A plugin is a TypeScript project installed into one Paseo daemon. Client contrib
 | `package.json`, `tsconfig.json` | Dependencies and TypeScript configuration |
 | `OVERVIEW.md` | Optional author-maintained listing page |
 
-At least one runtime entry is required. Each entry accepts `.ts` or `.tsx`, default-exports a contribution function, and returns cleanup. Cleanup can be asynchronous.
+At least one runtime entry is required. Each entry accepts `.ts` or `.tsx`, default-exports a contribution function, and returns cleanup. Cleanup can be asynchronous. This project registers `deployments.list` at startup, snapshots the operator's `PASEO_ORBI_CONFIG` once, and disposes read ports on teardown. Only `smol-toml` is a runtime dependency; host libraries remain dev dependencies. The manifest's Git build runs `npm ci --omit=dev --ignore-scripts` against the committed lock.
 
 Do not place other code modules in the root. Client code cannot import server code or Node modules. Server code cannot import client code or React. Shared code cannot import either runtime's modules or types. These restrictions include transitive imports.
 
@@ -86,6 +86,8 @@ The current contract parses input once in the plugin process and output once on 
 
 Use TanStack Query for request state and caching. Keep vendor credentials, filesystem access, and process execution in server handlers. Use the normal Paseo SDK for Paseo operations.
 
+The bootstrap uses synchronous, JSON-only, transform-free Zod contracts. `deployments.list({})` returns `ConfigRepository.catalog()`'s safe projection, never authorized paths or trusted publisher identities. Missing authorization is unconfigured; malformed/global identity errors reject the whole catalog; path/config/source failures retain a rejected entry alongside usable entries. Only usable IDs resolve server-side. No editable settings, arbitrary path RPC, subscriptions or telemetry collectors are implemented.
+
 Source: [backend behavior](https://paseo.sh/docs/plugins/reference.md#add-plugin-specific-backend-behavior).
 
 ### Subscriptions
@@ -114,7 +116,7 @@ An installation belongs to a daemon. When a plugin exists on several hosts, Pase
 
 `usePaseo()` borrows the selected host's existing connection. Do not open a separate connection inside a surface. The current API also supports explicit cross-host access. App-known hosts and daemon-saved host connections are distinct APIs. This is not automatic Orbi fleet discovery.
 
-Release timers, subscriptions, sockets, and watchers in cleanup. A temporary disconnect can preserve mounted client surfaces and caches. Reload, removal, changed bundles, or connection replacement can dispose them. Show stale or unavailable data instead of presenting it as current.
+Release timers, subscriptions, sockets, and watchers in cleanup. The common observation hook keys by selected host, deployment and selector, polls every 30 seconds only while foreground and connected, prevents overlapping refreshes, and marks data stale after 60 seconds without success. Failed refreshes immediately retain old data as stale. Cancelled generations cannot publish into replacement host/deployment selections. The four shell screens receive `client.openScreen` through their entry wrappers: `PluginScreenProps` itself has no `openScreen`. A temporary disconnect can preserve mounted client surfaces and caches. Reload, removal, changed bundles, or connection replacement can dispose them. Show stale or unavailable data instead of presenting it as current.
 
 For UI:
 
@@ -129,7 +131,7 @@ Sources: [hosts and lifecycle](https://paseo.sh/docs/plugins/reference.md#hosts-
 
 ## Compatibility cautions
 
-Do not copy an older example without checking the current contract.
+Do not copy an older example without checking the current contract. The table describes the upstream documentation review, not permission to adopt newer APIs in this pinned bootstrap. Source compatibility is separately checked against the two explicitly pinned Orbi subsets listed in the README. Their shared version string is not a compatibility test. The gate hashes only a finite source subset and does not authenticate an entire engine. Unknown or modified subsets fail before telemetry. Never execute/import source, run Orbi status (it can fetch Git refs), or inspect env/provider/Git/lock files.
 
 | Area | Current documented behavior |
 | --- | --- |
@@ -146,7 +148,7 @@ Sources: [requirements](https://paseo.sh/docs/plugins/reference.md#requirements)
 
 ## Development and diagnostics
 
-These are upstream workflow examples, not commands that can run against this repository yet. No installation or daemon changes were performed for this documentation.
+The repository's actual checks are in [Development](../README.md#development) and `.github/workflows/ci.yml`. The following are upstream workflow examples. No installation or daemon changes were performed for this bootstrap.
 
 Create a separate plugin project on the daemon machine:
 
@@ -188,7 +190,7 @@ Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/
 
 ## Install in Paseo
 
-**Prerequisite:** these steps require an implemented plugin with a manifest and runtime entries. The current `paseo-orbi` repository does not meet that requirement. Do not try to install this documentation-only revision.
+**Prerequisite:** these steps require operator authorization and a tested implemented commit. The bootstrap includes a manifest and runtime entries, but does not collect telemetry and has not been installed or qualified on a live host.
 
 ### Install through the app
 
@@ -250,7 +252,7 @@ Installation, UI registration, and public registry publication are separate oper
 - **Workspace context:** a registered workspace panel receives `workspaceId`. Use `useWorkspace(workspaceId, selector)` to read that workspace's identity and directory.
 - **Public registry publication:** makes an approved artifact discoverable and installable by registry ID. It does not install the plugin on your daemon.
 
-For `paseo-orbi`, mapping a Paseo workspace to an Orbi deployment still needs an explicit configuration contract. Installing the plugin alone must not imply that all repositories have been discovered or authorized. There is no implemented project-registration command or deployment settings screen yet.
+For `paseo-orbi`, only the operator-owned startup authorization described in the README grants deployment access. Installing the plugin does not discover or authorize repositories, or automatically map workspaces. There is no project-registration command or editable deployment settings screen.
 
 Sources: [workspace panels](https://paseo.sh/docs/plugins/reference.md#workspace-panels), [hosts and lifecycle](https://paseo.sh/docs/plugins/reference.md#hosts-and-lifecycle).
 
@@ -314,7 +316,7 @@ These are reference candidates, not audited dependencies. Names and paths were c
 
 ## Application to paseo-orbi
 
-The following is proposed project scope, not a verified Orbi integration:
+The following remains the v0.1 feature direction. The foundation implements screen registration, safe deployment discovery, bounded ports and the common observation contract, not the collectors:
 
 1. Use screens for Fleet, Issues, Runs, and Blockers. Add a workspace panel only when it adds useful repository context.
 2. Keep Orbi and GitHub reads behind narrow, typed server RPCs. Do not expose arbitrary command strings or unrestricted file paths.
@@ -323,12 +325,12 @@ The following is proposed project scope, not a verified Orbi integration:
 5. Keep v0.1 read-only. Do not change timers, execution state, permissions, worktrees, or merge state.
 6. Do not treat an external Orbi Pi session as a Paseo agent. Log observation does not prove interactive attachment or steering support.
 
-Still to verify before implementation:
+Still to verify in feature/integration work:
 
-- Supported Orbi commands and output schemas, including whether diagnostic commands have side effects.
-- Deployment configuration and discovery rules.
+- Collector-specific schemas and safe projection of internal reads. All Orbi CLI commands and Git commands are excluded; there is no diagnostic execution loophole.
+- Real-host setup using the explicit startup authorization; no automatic deployment discovery.
 - GitHub authentication, rate limits, and issue/PR state mapping.
 - Pi log formats, retention, redaction, and session identity.
 - Supported Paseo daemon/app versions and whether polling is sufficient before adding subscriptions.
 
-This documentation does not validate Orbi behavior, install a plugin, or qualify live desktop/mobile use.
+Foundation fixtures validate the two approved source subsets and the read boundary offline. They do not qualify live Orbi behavior or desktop/mobile use. Future features may share entry registration files; parallel changes must be reconciled rather than claimed conflict-free. This delivery does not install a plugin.
