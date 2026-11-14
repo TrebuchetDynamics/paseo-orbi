@@ -139,6 +139,17 @@ it('stale_compact_and_theme', async () => {
   expect(renderer.root.findAllByType('Text' as any).every(node => node.props.style.color === '#eee')).toBe(true);
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Active work for Demo' }).props.onPress());
   expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
+  // A collector reports failed reads as an unavailable observation, not an RPC
+  // rejection. This real failure path must retain the last successful snapshot too.
+  ports.process.mockRejectedValue(new ReadError('process_failed'));
+  ports.read.mockRejectedValue(new ReadError('read_failed'));
+  await act(async () => { await renderer.root.findAll(node => node.props.accessibilityLabel === 'Refresh')[0].props.onPress(); }); await settle();
+  expect(text()).toContain('stale');
+  expect(text()).toContain('Reported outcome: failed');
+  expect(text()).toContain('Active: inactive');
+  expect(text()).toContain('systemd: process_failed');
+  expect(text()).toContain('filesystem: read_failed');
+  expect(text()).toContain('Last success: 2026-11-14T23:00:00.000Z');
   host.readFleet.mockRejectedValue(new Error('SECRET raw error'));
   const refreshes = renderer.root.findAll(node => node.props.accessibilityLabel === 'Refresh');
   await act(async () => { await refreshes[0].props.onPress(); }); await settle();
