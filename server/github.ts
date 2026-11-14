@@ -125,7 +125,8 @@ export class GitHubReader {
         this.remember(this.complete, key, result); return result;
       }
       const previous = this.complete.get(key) as ReportSelection | undefined;
-      return previous ? { ...previous, complete: false } : selectReports(deployment.repo, issue, [], deployment.trustedPublisherLogins, false);
+      const retained = previous ?? selectReports(deployment.repo, issue, [], deployment.trustedPublisherLogins, false);
+      return { ...retained, complete: false, problems: comments.problems };
     });
   }
   async readDependencies(id: string, issue: number): Promise<CompleteCollection<IssueSummary>> {
@@ -156,12 +157,20 @@ export class GitHubReader {
         if (raw.number !== issue || raw.pull_request) throw new GitHubError('invalid_response');
         const reports = await this.readIssueReports(id, issue);
         const dependencies = await this.readDependencies(id, issue);
-        const problems = [...dependencies.problems];
-        if (!reports.complete) problems.push(problem('incomplete'));
+        const problems = [...dependencies.problems, ...reports.problems];
         let verified = false;
         if (reports.prIdentity.status === 'available') {
           try { verified = (await this.getPullRequestEvidence(id, reports.prIdentity.number)).mergedAt !== null; }
-          catch (error) { problems.push(problem(this.code(error))); }
+          catch (error) {
+            problems.push(problem(this.code(error)));
+            // A failed refresh is not evidence that an already confirmed merge
+            // disappeared. Retain it only for the very same associated run/PR;
+            // a new, missing or conflicting identity cannot borrow that fact.
+            const previous = this.complete.get(key) as Observation<IssueDetail> | undefined;
+            const identity = previous?.data?.reports.prIdentity;
+            verified = previous?.data?.mergeEvidence === 'verified' && identity?.status === 'available'
+              && identity.url === reports.prIdentity.url && identity.runId === reports.prIdentity.runId;
+          }
         }
         const summary = this.summary(repo, raw);
         const data: IssueDetail = { issue: { ...summary, ...classifyIssue(raw.state, summary.labels, verified) }, reports, dependencies,

@@ -50,7 +50,7 @@ function formal(comment: Comment): Formal | null {
 }
 export function selectReports(repo: string, issue: number, raw: unknown[], trusted: readonly string[], complete: boolean): ReportSelection {
   const missing = () => ({ status: 'missing' as const, attribution: null });
-  const result: ReportSelection = { selectedRunId: null, attribution: null, complete, progress: missing(), failure: missing(), scene: missing(), baseCi: missing(), mergedReceipt: missing(), prIdentity: { status: 'missing' } };
+  const result: ReportSelection = { selectedRunId: null, attribution: null, complete, problems: complete ? [] : [{ source: 'github', code: 'incomplete' }], progress: missing(), failure: missing(), scene: missing(), baseCi: missing(), mergedReceipt: missing(), prIdentity: { status: 'missing' } };
   // Initial incomplete reads cannot establish a current run.
   if (!complete) return result;
   const records = raw.flatMap(value => {

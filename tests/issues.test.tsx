@@ -271,6 +271,45 @@ describe('github_boundary_and_backoff', () => {
     f.advance(); f.process.mockResolvedValue(response({}, 401));
     expect(await f.reader.getIssue('demo', 4)).toMatchObject({ state: 'stale', data: verified.data });
   });
+  it('retains verified merge evidence stale when the same associated PR cannot be refreshed', async () => {
+    const f = fakeReader();
+    let denyPull = false, otherPr = false;
+    f.process.mockImplementation(async (_id, op) => {
+      if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+      if (op.resource === 'issue') return response({ ...rest.issue, state: 'closed', labels: [] });
+      if (op.resource === 'comments') return response([comment(1, `${marker()}\n${block('scene', otherPr ? { ...reports.scene, pr_url: `https://github.com/${repo}/pull/43` } : reports.scene)}`)]);
+      if (op.resource === 'pull') return denyPull ? response({}, 401) : response(rest.pull);
+      if (op.resource === 'checks') return response(rest.checks);
+      return response([]);
+    });
+    const verified = await f.reader.getIssue('demo', 4);
+    expect(verified).toMatchObject({ state: 'available', data: { issue: { state: 'Merged', provenance: 'verified' } } });
+    f.advance(); denyPull = true;
+    const stale = await f.reader.getIssue('demo', 4);
+    expect(stale).toMatchObject({ state: 'stale', lastSuccessfulAt: verified.lastSuccessfulAt,
+      problems: [{ code: 'auth_denied' }], data: { issue: { state: 'Merged', provenance: 'verified' }, mergeEvidence: 'verified' } });
+    f.advance(); otherPr = true;
+    expect(await f.reader.getIssue('demo', 4)).toMatchObject({ state: 'stale',
+      data: { issue: { state: 'Closed', provenance: 'github' }, mergeEvidence: 'unknown' } });
+  });
+  it('propagates the concrete safe comment-read problem through reports and the detail RPC projection', async () => {
+    const f = fakeReader();
+    let denyComments = false;
+    f.process.mockImplementation(async (_id, op) => {
+      if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+      if (op.resource === 'issue') return response(rest.issue);
+      if (op.resource === 'comments') return denyComments ? response({}, 401) : response([comment(1, `${marker()}\n${block('progress', reports.progress)}`)]);
+      return response([]);
+    });
+    const first = await f.reader.getIssue('demo', 4);
+    expect(first.state).toBe('available');
+    f.advance(); denyComments = true;
+    const stale = await f.reader.getIssue('demo', 4);
+    expect(stale).toMatchObject({ state: 'stale', problems: [{ source: 'github', code: 'auth_denied' }],
+      data: { reports: { complete: false, selectedRunId: run, progress: first.data?.reports.progress,
+        problems: [{ source: 'github', code: 'auth_denied' }] } } });
+    expect(() => IssueDetail.parse(stale.data)).not.toThrow();
+  });
   it('shows newly confirmed terminal facts even if report/dependency refresh is incomplete', async () => {
     const f = fakeReader();
     f.process.mockImplementation(async (_id, op) => response(op.kind === 'gh-api-get' && op.resource === 'issue' ? rest.issue : []));
@@ -366,6 +405,31 @@ describe('Issues user journey', () => {
     expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 2 });
     expect(renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.disabled).toBe(true);
     for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#eee');
+  });
+  it('names comment authentication failure on the selected issue and repairs it through detail Refresh', async () => {
+    vi.useFakeTimers();
+    const f = fakeReader();
+    let denyComments = true;
+    f.process.mockImplementation(async (_id, op) => {
+      if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+      if (op.resource === 'issues') return response([rest.issue]);
+      if (op.resource === 'issue') return response(rest.issue);
+      if (op.resource === 'comments') return denyComments ? response({}, 401) : response([comment(1, `${marker()}\n${block('progress', reports.progress)}`)]);
+      return response([]);
+    });
+    host.readCatalog.mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+    host.readIssues.mockImplementation(input => f.reader.listIssues(input.deploymentId, input.page));
+    host.readIssue.mockImplementation(input => f.reader.getIssue(input.deploymentId, input.issue));
+    const { renderer, settle } = await renderIssues();
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
+    expect(JSON.stringify(renderer.toJSON())).toContain('auth_denied');
+    expect(JSON.stringify(renderer.toJSON())).toContain("daemon user's existing gh authentication");
+    expect(JSON.stringify(renderer.toJSON())).toContain('incomplete — current run not established');
+    f.advance(); denyComments = false;
+    await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[1].props.onPress()); await settle(); await settle();
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('auth_denied\"');
+    expect(JSON.stringify(renderer.toJSON())).toContain(run);
+    expect((await f.reader.readIssueReports('demo', 4)).problems).toEqual([]);
   });
   it('shows concrete auth repair with no empty success, then Refresh repairs the actual read path', async () => {
     vi.useFakeTimers();

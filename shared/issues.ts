@@ -42,7 +42,7 @@ export const PrIdentity = z.discriminatedUnion('status', [
   z.object({ status: z.literal('available'), number: z.number().int().positive(), url: z.string(), source: z.enum(['scene', 'receipt']), runId: z.string() }).strict(),
   z.object({ status: z.enum(['missing', 'invalid', 'conflict']) }).strict(),
 ]);
-export const ReportSelection = z.object({ selectedRunId: z.string().nullable(), attribution: Attribution.nullable(), complete: z.boolean(), progress: classified(Progress), failure: classified(Failure), scene: classified(Scene), baseCi: classified(BaseCi), mergedReceipt: classified(Receipt), prIdentity: PrIdentity }).strict();
+export const ReportSelection = z.object({ selectedRunId: z.string().nullable(), attribution: Attribution.nullable(), complete: z.boolean(), problems: z.array(Problem), progress: classified(Progress), failure: classified(Failure), scene: classified(Scene), baseCi: classified(BaseCi), mergedReceipt: classified(Receipt), prIdentity: PrIdentity }).strict();
 export type ReportSelection = z.infer<typeof ReportSelection>;
 export const IssueDetail = z.object({ issue: IssueSummary, reports: ReportSelection, dependencies: z.object({ complete: z.boolean(), observedAt: z.iso.datetime(), records: z.array(IssueSummary), problems: z.array(Problem) }).strict(), mergeEvidence: z.enum(['verified', 'reported', 'unknown']) }).strict();
 export type IssueDetail = z.infer<typeof IssueDetail>;
