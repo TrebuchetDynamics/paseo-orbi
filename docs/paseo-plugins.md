@@ -2,7 +2,7 @@
 
 This guide gathers the Paseo contracts relevant to `paseo-orbi`. It is a summary, not a copy of the complete API reference.
 
-**Project status:** read-only bootstrap implemented. Four shell screens and the safe deployment catalog exist; telemetry features and live host qualification do not. See [setup and development](../README.md#setup).
+**Project status:** read-only Fleet telemetry and the safe deployment catalog are implemented. Issues, Runs and Blockers remain shells; live host qualification is not complete. See [setup and development](../README.md#setup).
 
 ## Official sources
 
@@ -86,7 +86,7 @@ The current contract parses input once in the plugin process and output once on 
 
 Use TanStack Query for request state and caching. Keep vendor credentials, filesystem access, and process execution in server handlers. Use the normal Paseo SDK for Paseo operations.
 
-The bootstrap uses synchronous, JSON-only, transform-free Zod contracts. `deployments.list({})` returns `ConfigRepository.catalog()`'s safe projection, never authorized paths or trusted publisher identities. Missing authorization is unconfigured; malformed/global identity errors reject the whole catalog; path/config/source failures retain a rejected entry alongside usable entries. Only usable IDs resolve server-side. No editable settings, arbitrary path RPC, subscriptions or telemetry collectors are implemented.
+The bootstrap uses synchronous, JSON-only, transform-free Zod contracts. `deployments.list({})` returns `ConfigRepository.catalog()`'s safe projection, never authorized paths or trusted publisher identities. Missing authorization is unconfigured; malformed/global identity errors reject the whole catalog; path/config/source failures retain a rejected entry alongside usable entries. Only usable IDs resolve server-side. Fleet adds `fleet.read({deploymentId})` with a shared `Observation<FleetSnapshot>` contract; concrete timer/service and health reads remain behind the bounded ports. No editable settings, arbitrary path RPC or subscriptions are implemented.
 
 Source: [backend behavior](https://paseo.sh/docs/plugins/reference.md#add-plugin-specific-backend-behavior).
 
@@ -316,7 +316,7 @@ These are reference candidates, not audited dependencies. Names and paths were c
 
 ## Application to paseo-orbi
 
-The following remains the v0.1 feature direction. The foundation implements screen registration, safe deployment discovery, bounded ports and the common observation contract. Issues now adds the GitHub collector and trusted report reader; Fleet, Runs and Blockers remain unimplemented:
+The following remains the v0.1 feature direction. The foundation implements screen registration, safe deployment discovery, bounded ports and the common observation contract. Issues now adds the GitHub collector and trusted report reader; Fleet adds read-only deployment telemetry; Runs and Blockers remain unimplemented:
 
 1. Use screens for Fleet, Issues, Runs, and Blockers. Add a workspace panel only when it adds useful repository context.
 2. Keep Orbi and GitHub reads behind narrow, typed server RPCs. Issues implements transform-free `issues.list({deploymentId,page})` and on-demand `issues.get({deploymentId,issue})`; only validated projections cross the boundary. Do not expose arbitrary command strings, raw bodies/comments or unrestricted file paths. Server consumers reuse `GitHubReader.listIssueScope`, `readIssueReports` and `getPullRequestEvidence` rather than creating another report parser.
@@ -325,12 +325,16 @@ The following remains the v0.1 feature direction. The foundation implements scre
 5. Keep v0.1 read-only. Do not change timers, execution state, permissions, worktrees, or merge state.
 6. Do not treat an external Orbi Pi session as a Paseo agent. Log observation does not prove interactive attachment or steering support.
 
+Fleet satisfies items 2–5 through a narrow `fleet.read` RPC: server-authorized concrete instance names, an explicit systemd property list, validated pinned health schema, safe projection, per-deployment observations and unit-local problems. Rejected catalog entries render diagnostics without telemetry reads. Capacity is configured, occupancy and active delivery counts are unknown, and active-work navigation opens Issues with the deployment ID. No all-fleet scheduler or service control is introduced. See [Fleet behavior and repairs](../README.md#fleet).
+
+Fleet's committed tests cover partial/missing/corrupt sources, successful inactive services, exact bounded reads, stale timestamps, theme colors and compact props. A separate Playwright flow rendered the real component via React Native Web with fixture RPCs at 1920×1080, 768×1024 and 375×667: cards survived source/refresh failures, active-work navigation selected the deployment in Issues, stale data retained timestamps after 60 seconds, text switched theme and compact content did not overflow horizontally. Browser errors were checked; screenshots remain run artifacts, not evidence of a live Paseo installation or native-device qualification.
+
 Still to verify in feature/integration work:
 
-- Collector-specific schemas and safe projection of internal reads. All Orbi CLI commands and Git commands are excluded; there is no diagnostic execution loophole.
+- Other collector-specific schemas and safe projection of internal reads. All Orbi CLI commands and Git commands are excluded; there is no diagnostic execution loophole.
 - Real-host setup using the explicit startup authorization; no automatic deployment discovery.
 - Live GitHub authentication/rate behavior and installed-app issue/PR mapping. Offline Issues fixtures now exercise typed auth failures, backoff, complete pagination, metadata trust, merge identity conflicts, and UI failure/repair.
 - Pi log formats, retention, redaction, and session identity.
 - Supported Paseo daemon/app versions and whether polling is sufficient before adding subscriptions.
 
-Foundation fixtures validate the two approved source subsets and the read boundary offline. They do not qualify live Orbi behavior or desktop/mobile use. Future features may share entry registration files; parallel changes must be reconciled rather than claimed conflict-free. This delivery does not install a plugin.
+Foundation and Fleet fixtures validate the two approved source subsets and the read boundary offline. Browser fixture checks do not qualify live Orbi behavior or native mobile use. Future features may share entry registration files; parallel changes must be reconciled rather than claimed conflict-free. This delivery does not install a plugin.

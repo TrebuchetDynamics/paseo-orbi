@@ -2,7 +2,7 @@
 
 A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for observing explicitly authorized local [Orbi](https://github.com/orbi-build/orbi) deployments.
 
-**Status:** Issues browsing and trusted report reading are implemented. Fleet, Runs, and Blockers remain **feature not implemented** screens. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. No live installation or desktop/mobile qualification has been performed.
+**Status:** Issues browsing and trusted report reading are implemented. Fleet reads deployment timers, services and recorded health. Runs and Blockers remain **feature not implemented** screens. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Fixture-backed browser checks cover Fleet and Issues; live installation and native mobile qualification remain unperformed.
 
 ## Responsibilities
 
@@ -14,7 +14,7 @@ A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for obs
 
 | View | Purpose / status |
 | --- | --- |
-| Fleet | Deployments, timers, health, active work, and capacity |
+| Fleet | Implemented: deployments, timers/services, recorded health, configured capacity; active work links to Issues, counts unknown |
 | Issues | Implemented: repository-selected lifecycle pages, source evidence, on-demand reports and dependency uncertainty |
 | Runs | Structured Pi activity, run IDs, branches, tests, and PR status |
 | Blockers | Failures, preserved worktrees, evidence, and recovery guidance |
@@ -23,7 +23,7 @@ Version 0.1 is strictly read-only: no timer control, execution-state mutation, m
 
 ## Setup
 
-Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4** (`>=0.15.4 <0.16.0`). Issues uses the daemon user's existing authenticated GitHub CLI. Other future collectors will also need user systemd; Issues never invokes systemd. No provider/model/auth changes are required or performed.
+Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4** (`>=0.15.4 <0.16.0`). Issues uses the daemon user's existing authenticated GitHub CLI. Fleet uses existing user systemd units and does not invoke GitHub; Issues never invokes systemd. No provider/model/auth changes are required or performed.
 
 An operator supplies an existing JSON file via the daemon environment's absolute `PASEO_ORBI_CONFIG`. It is read once at plugin startup; changes require an explicitly authorized plugin reload. The plugin does not write configuration or discover repositories.
 
@@ -99,6 +99,20 @@ A selected run's formal merged comment must carry one unquoted details block wit
 
 Offline fixture tests exercise the registered RPC, real reader and React Native screen path, including auth failure/repair, pagination, stale retention and forbidden canaries. A separate Playwright fixture preview exercised the actual screen components with React Native Web, registered RPCs and a bounded fake-gh executable at desktop/tablet/mobile widths (light/dark), including auth failure and repair/Refresh, with no browser errors or horizontal overflow. Neither is live GitHub or installed Paseo qualification; those remain the final integration issue's responsibility. No installation, credential change or GitHub mutation is part of this feature.
 
+## Fleet
+
+Open **Orbi → Fleet** on the intended host. Every catalog entry has a card, including rejected entries with safe diagnostics and repair guidance. Only available entries call `fleet.read({deploymentId})`; the server resolves that ID against startup authorization. No paths or command strings come from the client.
+
+Each card reports repository/profile identity, configured capacity (1..5), **Occupancy: unknown**, and **Active deliveries: unknown**. Neither active labels nor leftover PID/lock files establish occupancy. Capacity is not a machine-wide promise. **View active work in Issues** opens Issues with that deployment filter.
+
+For instances `1..max_concurrency`, Fleet independently reads `orbi-<unit_name>@<instance>.timer` and `.service`, or `orbi@<instance>` when `unit_name` is absent. The fixed read is `systemctl --user show <authorized-instance> --property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic --no-pager`. No `Environment`, `ExecStart`, unrestricted properties, control commands, locks or PID probes are requested. Only safe state fields and recognized trigger timestamp strings reach the UI; unknown/missing fields remain unavailable. Monotonic trigger values are not guessed into wall-clock times.
+
+Recorded health comes only from bounded `<repoDir>/.orbi/health.json` reads, validated against the two pinned writers' `runs`, `last_pickup_ts` and `alerted` shape (at most 50 runs). The public projection contains only last pickup and run repository, issue, run ID, reported outcome and timestamp, never raw health JSON, alert keys or fingerprints. Missing/corrupt files are **unavailable**, not an empty successful history. Reported run outcomes are separate from current service state: `inactive/dead` with `Result=success` is not a failed service. No issue pickup is inferred from timers.
+
+Cards keep independent source problems and timestamps. One inaccessible deployment or failed timer does not remove the others. `systemd: process_failed` means that unit read failed; check access to the selected host's user units externally, then **Refresh**. `filesystem: read_failed` means health could not be read/validated; check the health writer/file externally, then **Refresh**. Port deadlines/output limits retain their safe codes. `process_limit` means the foundation's two-child bound was reached; retry Refresh after pending reads finish. Rejected entries require operator configuration/source repair and an authorized plugin reload. Refresh only reads; it never repairs or controls a service.
+
+The shared observation lifecycle polls foreground/connected cards every 30 seconds. A failed refresh preserves previous data with a stale badge; after 60 seconds without success, data is visibly stale. Observed/last-success timestamps remain visible. Text uses theme tokens and compact layouts wrap within the viewport. These are design bounds, not measured performance claims. No new fleet daemon or scheduler is required.
+
 ### Authorized installation (not performed here)
 
 Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's `pluginsEnabled` switch, typecheck the tested revision, and use the official direct-Git flow:
@@ -109,7 +123,7 @@ paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-Require `running` on the intended host; open each shell screen and exercise configuration errors there. An initial Git ref does not pin later updates. Git preparation runs `npm ci --omit=dev --ignore-scripts`; host libraries are not bundled. No registry submission, npm publication, service activation, daemon restart or runtime installation is part of this delivery.
+Require `running` on the intended host; open Fleet and exercise its read-only success, partial-failure and refresh states, plus shell configuration errors. An initial Git ref does not pin later updates. Git preparation runs `npm ci --omit=dev --ignore-scripts`; host libraries are not bundled. No registry submission, npm publication, service activation, daemon restart or runtime installation is part of this delivery.
 
 ## Development
 
@@ -119,13 +133,14 @@ On Node 22.19.0:
 npm ci --ignore-scripts
 npm test -- tests/foundation.test.ts
 npm test -- tests/issues.test.tsx
+npm test -- tests/fleet.test.tsx
 npm run test:boundaries
 npm run typecheck
 npm test
 npm pack --dry-run --ignore-scripts
 ```
 
-CI runs the same checks with bounded command timeouts. UI tests use mocked host/RN primitives, a real isolated QueryClient, and react-test-renderer in Node, not a live daemon. The test host supplies React Native's minimal `window` global so QueryClient polling is not silently disabled as SSR; no DOM library is enabled. Vite is overridden to 7.3.8 because unconstrained newer optional devtools peers caused npm 10's dependency resolver to crash with the requested Vitest version. The requested direct dependency versions remain pinned and the lock is synchronized. The install audit reports four development-tree advisories (one low, two moderate, one high), including explicitly pinned Vitest/Zod; no development server is started by these checks. Do not run `npm audit fix --force` to change those pins implicitly.
+CI runs the same checks with bounded command timeouts. Committed UI tests use mocked host/RN primitives, a real isolated QueryClient, and react-test-renderer in Node, not a live daemon. Fleet tests also exercise real ConfigRepository/ReadPorts against inert process and health fixtures, asserting exact argv/filesystem access. A separate Playwright check rendered the real Fleet component with React Native Web and fixture RPC transport, checked navigation, refresh failure, 60-second staleness and browser errors, and captured wide/compact light/dark screenshots. This does not qualify an installed Paseo host or live systemd data. The test host supplies React Native's minimal `window` global so QueryClient polling is not silently disabled as SSR; no DOM library is enabled. Vite is overridden to 7.3.8 because unconstrained newer optional devtools peers caused npm 10's dependency resolver to crash with the requested Vitest version. The requested direct dependency versions remain pinned and the lock is synchronized. The install audit reports four development-tree advisories (one low, two moderate, one high), including explicitly pinned Vitest/Zod; no development server is started by these checks. Do not run `npm audit fix --force` to change those pins implicitly.
 
 The npm pack listing must contain manifest, entries and runtime modules. npm excludes `package-lock.json` from packs; it must instead be committed for Git preparation. No npm publishing is supported by this bootstrap.
 

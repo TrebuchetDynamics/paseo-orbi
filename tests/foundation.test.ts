@@ -257,7 +257,7 @@ describe('bounded_reads_and_lifecycle', () => {
   it('uses only documented fixed argv; no shell or client endpoint', async () => {
     const ports = await processFixture('console.log(JSON.stringify({args:process.argv.slice(2),stdin:require("node:fs").fstatSync(0).isCharacterDevice()}))');
     const result = JSON.parse(await ports.process('demo', { kind: 'systemctl-show', slot: 1, unit: 'service' }));
-    expect(result.args).toEqual(['--user', 'show', 'orbi-demo@1.service', '--property=ActiveState,SubState,Result,ExecMainStatus,NextElapseUSecRealtime', '--no-pager']);
+    expect(result.args).toEqual(['--user', 'show', 'orbi-demo@1.service', '--property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic', '--no-pager']);
     expect(JSON.parse(await ports.process('demo', { kind: 'journalctl', slot: 2 })).args).toEqual(['--user-unit=orbi-demo@2.service', '--output=json', '--lines=100', '--no-pager']);
     expect(JSON.parse(await ports.process('demo', { kind: 'gh-api-get', resource: 'comments', issue: 2, page: 1 })).args).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', 'repos/Example/project/issues/2/comments?per_page=100&page=1']);
     await expect(ports.process('demo', { kind: 'systemctl-show', slot: 3, unit: 'service' })).rejects.toThrow('unsafe_path');
@@ -351,13 +351,20 @@ describe('package_and_registration', () => {
     const client = queryClient();
     for (const screen of screens) {
       const renderer = await render(client, React.createElement(screen.Component, props));
-      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'issues' ? 'select a repository to browse' : 'feature not implemented');
+      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
-      expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo')).toHaveLength(1);
-      const selectors = renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '));
-      expect(selectors).toHaveLength(1);
-      await act(async () => selectors[0].props.onPress());
-      expect(openScreen).toHaveBeenCalledWith({ screenId: screen.id, params: { deploymentId: 'demo' } });
+      if (screen.id === 'fleet') {
+        expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
+        await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Active work for Demo' }).props.onPress());
+        expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
+        expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
+      } else {
+        expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo')).toHaveLength(1);
+        const selectors = renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '));
+        expect(selectors).toHaveLength(1);
+        await act(async () => selectors[0].props.onPress());
+        expect(openScreen).toHaveBeenCalledWith({ screenId: screen.id, params: { deploymentId: 'demo' } });
+      }
       expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(16);
       const light = { ...props, theme: { colors: { foreground: '#222', foregroundMuted: '#555', surface0: '#fff' } }, layout: { compact: false, platform: 'web' } } as PluginScreenProps;
       await act(async () => renderer.update(tree(client, React.createElement(screen.Component, light))));

@@ -30,7 +30,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   const selected = query.observation?.data?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
   return <ScrollView style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }} contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 12 }}>
     <Text style={text}>{title(route)}{route === 'issues' ? ' — select a repository to browse' : ' — feature not implemented'}</Text>
-    <Text style={text}>Read-only. Fleet, Runs, and Blockers are not implemented.</Text>
+    <Text style={text}>Read-only. Runs and Blockers are not implemented. Open Fleet for deployment telemetry.</Text>
     {!connected && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
     <ObservationView {...query} theme={props.theme}>{catalog => <View>
       {catalog.state === 'unconfigured' && <Text style={text}>Unconfigured: ask the operator to set PASEO_ORBI_CONFIG to an authorized JSON file and reload this plugin.</Text>}

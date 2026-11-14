@@ -1,5 +1,7 @@
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import { deploymentsList } from './shared/common';
+import { fleetRead } from './shared/fleet';
+import { readFleet } from './server/fleet';
 import { ConfigRepository } from './server/config';
 import { ReadPorts } from './server/read-ports';
 import { GitHubReader } from './server/github';
@@ -14,5 +16,6 @@ export default function contribute(server: PluginServerContext) {
   server.handle(deploymentsList, async () => (await repository).catalog());
   server.handle(issuesList, async input => (await github).listIssues(input.deploymentId, input.page));
   server.handle(issuesGet, async input => (await github).getIssue(input.deploymentId, input.issue));
+  server.handle(fleetRead, async input => readFleet(await repository, await ports, input));
   return async () => { lifetime.abort(); await (await ports).dispose(); };
 }

@@ -51,7 +51,9 @@ export function useObservationQuery<T>(options: {
       // The QueryClient aborts consumed signals on teardown/key changes. A late RPC
       // cannot publish into a new host/deployment generation, even if transport cannot abort.
       if (signal.aborted) throw new Error('disposed');
-      if (next.data === null && previous?.data != null) return { ...next, state: 'stale', data: previous.data, lastSuccessfulAt: previous.lastSuccessfulAt };
+      // Collectors can return an unavailable diagnostic snapshot instead of
+      // throwing. It must not replace previously successful data with blanks.
+      if ((next.data === null || (next.state === 'unavailable' && previous?.lastSuccessfulAt != null)) && previous?.data != null) return { ...next, state: 'stale', data: previous.data, lastSuccessfulAt: previous.lastSuccessfulAt };
       return next;
     },
   });
