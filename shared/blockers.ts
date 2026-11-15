@@ -4,8 +4,8 @@ import { DeploymentId, observationSchema } from './common';
 import { IssueSummary, ReportSelection, type ReportSelection as Reports } from './issues';
 
 export const blockerLabels = ['ai-blocked', 'ai-needs-detail', 'ai-awaiting-merge', 'ai-fix-needed'] as const;
-export function attention(issue: Pick<z.infer<typeof IssueSummary>, 'githubState' | 'labels'>) {
-  if (issue.githubState === 'closed' || issue.labels.includes('ai-merged')) return 'github_terminal' as const;
+export function attention(issue: Pick<z.infer<typeof IssueSummary>, 'githubState' | 'labels' | 'state'>) {
+  if (issue.githubState === 'closed' || issue.state === 'Merged' || issue.labels.includes('ai-merged')) return 'github_terminal' as const;
   if (issue.labels.includes('ai-blocked') || issue.labels.includes('ai-needs-detail')) return 'manual_attention' as const;
   if (issue.labels.includes('ai-fix-needed')) return 'automatic_fix_pending' as const;
   if (issue.labels.includes('ai-awaiting-merge')) return 'maintainer_merge_wait' as const;

@@ -11,6 +11,7 @@ export function BlockerEvidence({ data, theme }: { data: Blocker | BlockerDetail
   const link = (url: string, label: string) => <Text style={text} accessibilityRole="link" onPress={() => { void Linking.openURL(url).catch(() => undefined); }}>{label}: {url}</Text>;
   return <View style={{ gap: 8 }}>
     <Text style={text}>#{data.issue.number} {data.issue.title} — GitHub {data.issue.githubState}; updated {data.issue.updatedAt}</Text>
+    <Text style={text}>Classification: {data.issue.state}; provenance: {data.issue.provenance}{data.issue.badge ? ` (${data.issue.badge})` : ''}</Text>
     <Text style={text}>Labels: {data.issue.labels.join(', ') || 'none'}{data.issue.warning ? ' — conflicting lifecycle labels' : ''}</Text>
     {link(data.issue.url, 'GitHub source')}
     <Text style={text}>{attentionText[data.attention]}</Text>

@@ -144,7 +144,7 @@ it('distinguishes_waits_and_base_states_and_rejects_unknown_formal_metadata', ()
     expect(attention(issue(4, [...labels]))).toBe(classification);
     expect(attentionText[classification]).toContain(text);
   }
-  expect(attention({ githubState: 'closed', labels: ['ai-blocked'] })).toBe('github_terminal');
+  expect(attention({ githubState: 'closed', labels: ['ai-blocked'], state: 'Closed' })).toBe('github_terminal');
   expect(attention(issue(4, ['ai-human-review']))).toBe('not_candidate');
   for (const status of ['waiting', 'resuming', 'merged', 'stale'] as const) {
     const data = selectReports(repo, 4, [{ ...comments()[0], body: comments()[0].body.replace('"state":"resuming"', `"state":"${status}"`) }], ['publisher-canary'], true);
@@ -185,6 +185,26 @@ it('registered_rpc_journey_handles_partial_stale_and_empty_complete_scope', asyn
   partial.process.mockImplementation(async (_id, op) => response(op.kind === 'gh-api-get' && op.resource === 'issues' ? [raw()] : {}, op.kind === 'gh-api-get' && op.resource === 'issues' ? 200 : 401));
   expect(await partial.reader.list({ deploymentId: 'demo', page: 1 })).toMatchObject({ state: 'partial', data: { complete: true, records: [{ reports: { complete: false, selectedRunId: null } }] }, problems: [{ code: 'auth_denied' }] });
   expect(JSON.stringify([page, detail, good])).not.toMatch(/CANARY|\/tmp\/|prompt|token/);
+});
+
+it('verified_pr_merge_makes_retained_failure_historical_even_with_open_issue_labels', async () => {
+  const f = await setup();
+  const process = f.process.getMockImplementation()!;
+  f.process.mockImplementation(async (id, op, ...args) => op.kind === 'gh-api-get' && op.resource === 'pull'
+    ? response({ number: 42, html_url: `https://github.com/${repo}/pull/42`, state: 'closed', merged_at: stamp, head: { sha: 'a'.repeat(40) }, base: { repo: { full_name: repo } } })
+    : process(id, op, ...args));
+  const result = blockersRead.output.parse(await f.reader.read({ deploymentId: 'demo', issue: 4 }));
+  expect(result).toMatchObject({ state: 'available', data: {
+    issue: { githubState: 'open', labels: ['ai-blocked'], state: 'Merged', provenance: 'verified' },
+    attention: 'github_terminal', reports: { failure: { status: 'available' } },
+  } });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<BlockerEvidence data={result.data!} theme={theme} />); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('historical');
+  expect(text).toContain('PR merged_at');
+  expect(text).not.toContain('Manual attention reported');
 });
 
 import './helpers/host';
