@@ -2,7 +2,7 @@
 
 This guide gathers the Paseo contracts relevant to `paseo-orbi`. It is a summary, not a copy of the complete API reference.
 
-**Project status:** read-only Fleet telemetry, Issues, Runs, Blockers and the safe deployment catalog are implemented; live host qualification is not complete. See [setup and development](../README.md#setup).
+**Project status:** read-only Fleet telemetry, Issues, Runs, Blockers and the safe deployment catalog are implemented and composed in offline integration checks. Tracked Git preparation is tested in isolation; live host qualification is not complete. See [setup and development](../README.md#setup).
 
 ## Official sources
 
@@ -61,7 +61,7 @@ Source: [project files and runtime modules](https://paseo.sh/docs/plugins/refere
 
 | Need | API | Relevance to this project |
 | --- | --- | --- |
-| Full-screen dashboard | `addScreen` | Candidate for Fleet, Issues, Runs, and Blockers |
+| Full-screen dashboard | `addScreen` | Implemented for Fleet, Issues, Runs, and Blockers |
 | Sidebar entry | `addSidebarHeaderItem`, `addSidebarFooterItem` | Open the dashboard through `SidebarRow` |
 | Workspace tab | `addWorkspacePanel` | Candidate for repository-specific diagnostics |
 | Agent tab | `addAgentPanel` | Only when a corresponding Paseo agent exists |
@@ -148,7 +148,7 @@ Sources: [requirements](https://paseo.sh/docs/plugins/reference.md#requirements)
 
 ## Development and diagnostics
 
-The repository's actual checks are in [Development](../README.md#development) and `.github/workflows/ci.yml`. The following are upstream workflow examples. No installation or daemon changes were performed for this bootstrap.
+The repository's actual checks are in [Development](../README.md#development) and `.github/workflows/ci.yml`: script-disabled dependency installation, typecheck, tests, transitive boundary guard and pack inspection. Typecheck precedes `artifact_contract`'s isolated production-only npm preparation. That test copies candidate tracked Git files into its own temporary tree, verifies the locked runtime TOML dependency and removes the tree; npm pack alone is not Git installation proof. `four_views_read_only_journey` uses actual entries/schemas/adapters/screens with injected process/network responses and real bounded filesystem ports. These are offline checks, not a live daemon. The following are upstream workflow examples. No installation or daemon changes were performed for this delivery.
 
 Create a separate plugin project on the daemon machine:
 
@@ -190,7 +190,7 @@ Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/
 
 ## Install in Paseo
 
-**Prerequisite:** these steps require operator authorization and a tested implemented commit. The bootstrap includes a manifest and runtime entries, but does not collect telemetry and has not been installed or qualified on a live host.
+**Prerequisite:** these steps require operator authorization and a tested implemented commit. The plugin implements four telemetry/evidence views, but has not been installed or qualified on a live host. The [README installation procedure](../README.md#authorized-installation-not-performed-here) owns the exact offline-tested Git pin and startup JSON example. `PASEO_ORBI_CONFIG` must already be visible to the daemon/plugin at startup; a CLI-shell export cannot change an existing daemon's environment. Authorization/TOML/profile changes require an explicitly authorized plugin reload, not Refresh.
 
 ### Install through the app
 
@@ -199,7 +199,7 @@ Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/
 3. Review the trust warning in the development section. Enable **Enable plugins** only if you accept that access.
 4. Enter a source in **Plugin source**:
    - A local development directory: `/absolute/path/to/paseo-orbi`. It must exist on the daemon machine.
-   - A future implemented Git source: `git:TrebuchetDynamics/paseo-orbi`.
+   - The direct Git source (select the tested revision from the README): `git:TrebuchetDynamics/paseo-orbi`.
    - A published registry ID, once approved. Use the exact ID shown on its listing.
 5. Select **Install plugin**.
 6. Confirm that the installed row reports `running` with no error.
@@ -211,7 +211,7 @@ The installed row provides an enable switch and a menu for settings, logs, reloa
 
 For a local development checkout, run the typecheck and installation commands in [Development and diagnostics](#development-and-diagnostics).
 
-Once an implemented commit is public, direct Git installation does not require registry approval:
+Direct Git installation does not require registry approval. Use the exact tested revision from the README, not default HEAD:
 
 ```bash
 paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref <tested-commit-sha>
@@ -219,7 +219,7 @@ paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-Replace `<tested-commit-sha>` with the exact tested revision. The log command assumes the future manifest ID is `paseo-orbi`. Use the actual installation ID if different. The initial Git reference does not pin later ordinary updates.
+Replace `<tested-commit-sha>` with the exact offline-tested revision documented in the README. The manifest ID is `paseo-orbi`; use the actual installation ID if overridden. The initial Git reference does not pin later ordinary updates.
 
 For a remote daemon, place the global host option before the command:
 
@@ -264,7 +264,7 @@ Sources: [workspace panels](https://paseo.sh/docs/plugins/reference.md#workspace
 - Ordinary direct Git updates follow default HEAD. Ordinary npm updates check `latest`. `--check` previews an update.
 - Include the manifest, runtime entries, all imported modules, and declared assets in the distributed artifact.
 - Runtime dependency trees need locked inputs for registry review. npm packages with installed runtime dependencies need a published `npm-shrinkwrap.json`.
-- Git preparation that installs dependencies should use a synchronized lockfile. Manifest `build` contains argv arrays, not shell strings.
+- Git preparation that installs dependencies should use a synchronized lockfile. Manifest `build` contains argv arrays, not shell strings. This repository is Git-only: tracked `package-lock.json` is consumed by `npm ci --omit=dev --ignore-scripts`; only `smol-toml` is installed, with lifecycle scripts disabled. The tracked candidate check includes manifest, entries, imported modules, fingerprint data, OVERVIEW and synchronized package/lock. npm pack intentionally omits the lock and is only an inspection aid; do not add shrinkwrap for this Git delivery.
 - A visual registry listing needs an image of the current interface. Use sample data and remove private details.
 - Keep installation commands in the README. An author-supplied `OVERVIEW.md` explains behavior, setup, permissions, data flow, and limitations without plugin installation commands.
 
@@ -316,7 +316,7 @@ These are reference candidates, not audited dependencies. Names and paths were c
 
 ## Application to paseo-orbi
 
-The following remains the v0.1 feature direction. The foundation implements screen registration, safe deployment discovery, bounded ports and the common observation contract. Issues now adds the GitHub collector and trusted report reader; Fleet adds read-only deployment telemetry; Runs adds attributed run observation; Blockers explains trusted failures and stat-only evidence:
+The assembled v0.1 implements screen/sidebar registration, safe deployment discovery, bounded ports and the common observation contract. Issues adds the GitHub collector and trusted report reader; Fleet adds read-only deployment telemetry; Runs adds attributed run observation; Blockers explains trusted failures and stat-only evidence. The offline integration journey composes all of them against both source-profile fixtures and two repositories, including complete/partial/stale state, malformed reports, retained history, host/deployment changes, canary suppression, unchanged files and teardown. It does not replace the adapters with canned successful RPCs:
 
 1. Use screens for Fleet, Issues, Runs, and Blockers. Add a workspace panel only when it adds useful repository context.
 2. Keep Orbi and GitHub reads behind narrow, typed server RPCs. Issues implements transform-free `issues.list({deploymentId,page})` and on-demand `issues.get({deploymentId,issue})`; only validated projections cross the boundary. Do not expose arbitrary command strings, raw bodies/comments or unrestricted file paths. Server consumers reuse `GitHubReader.listIssueScope`, `readIssueReports` and `getPullRequestEvidence` rather than creating another report parser.
@@ -337,12 +337,14 @@ Only exact attributed scenes permit bounded metadata checks for the derived work
 
 Offline Blockers tests cover every closed reason/action, invalid/unknown/missing metadata, wait/base-CI states, both retention profiles, metadata-only reads, escaping/missing/unreadable scenes, rejected entries, partial/stale/empty scopes, selection cancellation and theme/compact props. A separate Playwright preview exercised the registered screen and typed RPCs with the real shared reader/ports and bounded fake-gh GETs at 1920×1080, 768×1024 and 375×667, checking stat metadata, auth failure/repair/Refresh, complete-empty scope, no executable recovery control, browser errors and horizontal overflow. Screenshots remain excluded run artifacts. No installation, live failed delivery or recovery was required or attempted.
 
-Still to verify in feature/integration work:
+Still to verify through separately authorized live work (not performed here):
 
-- Other collector-specific schemas and safe projection of internal reads. All Orbi CLI commands and Git commands are excluded; there is no diagnostic execution loophole.
+- Test-daemon installation of the exact tested commit; inspect `pluginsEnabled` and obtain explicit consent if absent/false; require `running`. No offline result grants installation or enablement approval.
+- Selected-host live RPC success/failure for all four views; wide/compact and light/dark physical clients; authorized reload cleanup. No real-client screenshots or approvals are supplied by these offline checks.
+- Collector projection remains limited to the pinned formats. All Orbi CLI commands and Git commands are excluded; there is no diagnostic execution loophole.
 - Real-host setup using the explicit startup authorization; no automatic deployment discovery.
 - Live GitHub authentication/rate behavior and installed-app issue/PR mapping. Offline Issues fixtures now exercise typed auth failures, backoff, complete pagination, metadata trust, merge identity conflicts, and UI failure/repair.
 - Live Pi log formats, retention, redaction, and session identity. Runs' synthetic header/tail/increment/rotation/privacy tests are offline evidence, not live-format qualification.
 - Supported Paseo daemon/app versions and whether polling is sufficient before adding subscriptions.
 
-Foundation and Fleet fixtures validate the two approved source subsets and the read boundary offline. Browser fixture checks do not qualify live Orbi behavior or native mobile use. Future features may share entry registration files; parallel changes must be reconciled rather than claimed conflict-free. This delivery does not install a plugin.
+The feature and assembled integration fixtures validate the two approved source subsets and the read boundary offline. An altered supported source file is rejected before any telemetry port call; unknown source builds remain unsupported. The exact SDK baseline is [1c00b365c9e0b74c1580eba33d905d693125ae21](https://github.com/getpaseo/paseo/tree/1c00b365c9e0b74c1580eba33d905d693125ae21); deployed docs above may describe newer APIs and are not live compatibility evidence. Browser fixture checks do not qualify live Orbi behavior or native mobile use. Future features may share entry registration files; parallel changes must be reconciled rather than claimed conflict-free. This delivery does not install a plugin.

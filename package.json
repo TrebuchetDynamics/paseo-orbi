@@ -10,7 +10,8 @@
     "client",
     "server",
     "shared",
-    "README.md"
+    "README.md",
+    "OVERVIEW.md"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.client.json && tsc -p tsconfig.server.json",

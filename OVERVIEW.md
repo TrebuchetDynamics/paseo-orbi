@@ -1,0 +1,28 @@
+# Orbi observations in Paseo
+
+paseo-orbi adds four read-only screens to the selected Paseo host:
+
+- Fleet: configured deployments, user timers/services, recorded health and capacity. Occupancy and active delivery counts remain unknown.
+- Issues: repository lifecycle pages, source labels, trusted structured reports and on-demand dependency evidence.
+- Runs: attributed run/session metadata, limited activity kinds, scoped lifecycle events and observed PR-head checks. Retained issue history is separate from active membership.
+- Blockers: reported failure/wait guidance, source attribution and stat-only artifact presence, size and modification time. Recovery remains Orbi/operator-owned.
+
+## Setup and compatibility
+
+The operator supplies an existing authorization JSON file through the daemon's startup environment variable `PASEO_ORBI_CONFIG`. It selects exact repositories, canonical local roots, TOML configuration, trusted report publisher logins and a supported source profile. Authorization and configuration changes require an explicitly authorized plugin reload; Refresh only rereads observations. See the [README](README.md#setup) for the exact JSON/TOML example and operator procedure.
+
+The baseline is Linux, Node 22.19.0 and Paseo daemon/app 0.15.4 (manifest range `>=0.15.4 <0.16.0`). Existing user systemd/journal access and the daemon user's authenticated GitHub CLI with repository read permissions are required. No provider credentials are configured by the plugin. The two supported Orbi profiles are `orbi-0.7.41-release` at `fbafd09fe49a20299e96565f100633bca61ae2af` and `orbi-0.7.41-1a8b2f96` at `1a8b2f9603f6258cb105293f238a8d3f775f3393`. A finite source fingerprint gate rejects changed/unknown subsets before telemetry; it does not authenticate the whole engine.
+
+## Data access and limitations
+
+Plugins are trusted, unsandboxed code with the daemon user's permissions. This plugin reads the explicit authorization/TOML, inspected source files, bounded health/run/session records, fixed systemd properties and a bounded journal window. It sends read-only GitHub.com API requests using existing `gh` authentication. Validated projections cross the Paseo RPC connection to the selected host's clients; caches are memory-only. Git preparation downloads the locked `smol-toml` runtime dependency from npm with lifecycle scripts disabled. Runtime observation installs no software and sends no prompts or tool results to agent providers.
+
+Safe activity is metadata, not raw logs: prompts, reasoning, arguments, targets, tool output, raw journals/test logs, environment values and private roots are not transported. Artifact contents are not opened by Blockers. Partial/unavailable sources remain explicit; previous evidence may be retained stale with timestamps. Missing evidence never establishes idle, successful checks, an empty queue or permission to recover.
+
+There are no writes to Orbi runtime/configuration/GitHub, service controls, Orbi/Git execution, arbitrary command/path RPCs, retries, merges, session attachment or live steering. Reported retry safety is never approval. Release cleanup may remove failed worktrees; retention settings do not guarantee presence or automatic cleanup.
+
+## Qualification status
+
+Offline checks compose real registrations, validation, adapters, QueryClient and all four screens with isolated filesystem fixtures and injected process/network responses. Both pinned profiles and tracked Git production-only preparation are checked. This is installation readiness, not deployment or live-client qualification.
+
+Not run: separately authorized test-daemon installation; consent to enable `pluginsEnabled` if absent/false; running-status confirmation; selected-host live RPC success/failure; wide/compact and light/dark physical clients; reload cleanup. No installation approval, real-client screenshots, registry listing or npm publication is claimed.

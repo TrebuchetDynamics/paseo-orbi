@@ -1,0 +1,14 @@
+[
+  {
+    "fixture": "release",
+    "adapter": "orbi-0.7.41-release",
+    "commit": "fbafd09fe49a20299e96565f100633bca61ae2af",
+    "fingerprint": "ff662193032fc0caf59e2742a3892c31af90a6d66726f38b2ac2256cb663140e"
+  },
+  {
+    "fixture": "installed",
+    "adapter": "orbi-0.7.41-1a8b2f96",
+    "commit": "1a8b2f9603f6258cb105293f238a8d3f775f3393",
+    "fingerprint": "ae5bd552aef7e1689b7352d99794f6dc0a04e257cf3668cad08be9473b9d859d"
+  }
+]
