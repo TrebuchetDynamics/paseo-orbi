@@ -2,7 +2,7 @@
 
 A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for observing explicitly authorized local [Orbi](https://github.com/orbi-build/orbi) deployments.
 
-**Status:** Issues browsing and trusted report reading are implemented. Fleet reads deployment timers, services and recorded health. Runs and Blockers remain **feature not implemented** screens. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Fixture-backed browser checks cover Fleet and Issues; live installation and native mobile qualification remain unperformed.
+**Status:** Issues browsing and trusted report reading are implemented. Fleet reads deployment timers, services and recorded health. Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers remains a **feature not implemented** screen. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Fixture-backed browser checks cover Fleet, Issues and Runs; live installation and native mobile qualification remain unperformed.
 
 ## Responsibilities
 
@@ -16,10 +16,10 @@ A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for obs
 | --- | --- |
 | Fleet | Implemented: deployments, timers/services, recorded health, configured capacity; active work links to Issues, counts unknown |
 | Issues | Implemented: repository-selected lifecycle pages, source evidence, on-demand reports and dependency uncertainty |
-| Runs | Structured Pi activity, run IDs, branches, tests, and PR status |
+| Runs | Implemented: attributed run/session identity, safe activity, branch/SHA evidence, on-demand events and PR head checks |
 | Blockers | Failures, preserved worktrees, evidence, and recovery guidance |
 
-Version 0.1 is strictly read-only: no timer control, execution-state mutation, merging, Orbi CLI, Git commands, or arbitrary shell/path RPCs. No raw logs, prompts, reasoning, or interactive Pi attachment. External Pi sessions are not Paseo-managed sessions. Future feature work may share entry files and must reconcile edits there.
+Version 0.1 is strictly read-only: no timer control, execution-state mutation, merging, Orbi CLI, Git commands, or arbitrary shell/path RPCs. No raw logs, prompts, reasoning, or interactive Pi attachment. External Pi sessions are not Paseo-managed sessions. Reading their projected activity does not establish interactive attachment, live steering, token streaming, or that a process is still alive. Future feature work may share entry files and must reconcile edits there.
 
 ## Setup
 
@@ -99,6 +99,24 @@ A selected run's formal merged comment must carry one unquoted details block wit
 
 Offline fixture tests exercise the registered RPC, real reader and React Native screen path, including auth failure/repair, pagination, stale retention and forbidden canaries. A separate Playwright fixture preview exercised the actual screen components with React Native Web, registered RPCs and a bounded fake-gh executable at desktop/tablet/mobile widths (light/dark), including auth failure and repair/Refresh, with no browser errors or horizontal overflow. Neither is live GitHub or installed Paseo qualification; those remain the final integration issue's responsibility. No installation, credential change or GitHub mutation is part of this feature.
 
+## Runs and log privacy
+
+Open **Orbi → Runs** on the intended host, select an available catalog deployment, then select a run for detail evidence. Rejected deployments retain their diagnostics and cannot be selected. `runs.list({deploymentId,issue?})` and `runs.read({deploymentId,issue,runId})` accept only deployment/issue/run identities, never paths, commands or cursors. Keys include deployment, configured repository, exact issue number and eight-hex run ID. Summary screens poll every 30 seconds while foreground/connected; event/PR detail loads only on explicit selection or its manual **Refresh**, with observation time visible. Host/deployment/issue changes and unmount discard late results and release owned timers/children.
+
+Active rows require the **last complete successful open-issue scope**, an Implementing/Reviewing lifecycle and the trusted report reader's selected run identity. Terminal/manual states (including Blocked) win over progress. An initial incomplete scope establishes no members; a failed refresh retains the last complete scope visibly stale. A newer report without progress never borrows another run's stage. Local directories alone cannot create active rows or prove liveness. Enter an exact issue number and choose **Inspect issue history** to inspect local retained runs separately; history is never labeled active. Old runs without selected trusted PR identity do not borrow a newer run's PR.
+
+Discovery is confined to `<repoDir>/.worktrees/orbi-<owner>-<repo>-issue-<N>-<8hex>/`, with exact 42/420 separation. More than 200 matching entries per requested scope or 16 JSONL sessions per run yields `read_limit`, not an arbitrary filename/mtime-selected subset. Run-state repository/issue/run/branch must agree with that attribution; its `worktree` field is never followed. `created_at` is a recorded timestamp, **not a guaranteed start time**. Branch, pushed SHA and reviewed SHA are evidence values, not process-state probes.
+
+Session reads validate the complete first header within 64 KiB and read at most 256 KiB tail/increment per session, with 64 KiB records. In-memory offsets reset on observed truncation/replacement. Incomplete fragments are dropped; malformed data or missing identity means **unavailable activity, not idle**. Only session ID, activity timestamp and `read|edit|command|analysis` kind cross the boundary. No prompt, reasoning, message, tool arguments/targets/output, raw session/journal/test logs or command/path text is exposed. There is no terminal embedding, session creation/attachment, Git read/fetch, process signaling or lock probing.
+
+The fixed journal query is `journalctl --user -u <authorized-service> --no-pager --since '-1 hour' -n 200 -o json`, independently for configured slots. JSONL plus strict Orbi grammar permits only exact scoped `run_start`, `run_end`, `worktree_cleaned` and (installed profile only) `worktree_retained`. Prefix and run/issue fields must agree; duplicate/ambiguous fields and free-text tails are rejected. Only journal `__REALTIME_TIMESTAMP`, event, run ID and issue number are projected, at most 200 events / 64 KiB. Ticket-only `run_end` need not carry PR/commit. Failure details belong to structured reports, never `run_failed`/heartbeat parsing. This bounded window always reports `journal: incomplete`: gaps/rotation are not fabricated into continuous history.
+
+PR identity comes **only** from Issues' trusted `readIssueReports.prIdentity`; missing/invalid/conflicting identity triggers no guessed lookup. PR number/URL/state/`merged_at`/`head.sha` and safe check name/status/conclusion/GitHub URL are evidence, never check output/annotations. Only checks explicitly matching that observed head qualify it; absent, missing, pending, inaccessible or stale-head checks are **not passed**. Reported stage `checks` is not test success.
+
+For `auth_denied`/`rate_limited`, follow [GitHub failure and repair](#github-failure-and-repair). For filesystem `read_failed`, `invalid_response`, `incomplete` or `read_limit`, inspect the attributed writer/retention externally, repair it without broadening authorization, then Refresh. Refresh never repairs files or controls Orbi. These limits are planner bounds, not inherited Orbi latency promises.
+
+Offline tests compare fixture tree/content/metadata before/after observation (excluding atime), assert canary suppression, exact process argv, head-check states and teardown. A Playwright preview exercised the real registered Runs component and typed RPCs with bounded inert gh/journal/file fixtures at desktop/tablet/mobile widths, including auth failure → external repair → Refresh, without browser errors or horizontal overflow. Screenshots are run artifacts. This is **not** live-log-format, installed Paseo or native-mobile qualification; no real agent turn/Orbi process was started.
+
 ## Fleet
 
 Open **Orbi → Fleet** on the intended host. Every catalog entry has a card, including rejected entries with safe diagnostics and repair guidance. Only available entries call `fleet.read({deploymentId})`; the server resolves that ID against startup authorization. No paths or command strings come from the client.
@@ -134,6 +152,7 @@ npm ci --ignore-scripts
 npm test -- tests/foundation.test.ts
 npm test -- tests/issues.test.tsx
 npm test -- tests/fleet.test.tsx
+npm test -- tests/runs.test.tsx
 npm run test:boundaries
 npm run typecheck
 npm test

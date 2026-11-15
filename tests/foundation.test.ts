@@ -258,7 +258,7 @@ describe('bounded_reads_and_lifecycle', () => {
     const ports = await processFixture('console.log(JSON.stringify({args:process.argv.slice(2),stdin:require("node:fs").fstatSync(0).isCharacterDevice()}))');
     const result = JSON.parse(await ports.process('demo', { kind: 'systemctl-show', slot: 1, unit: 'service' }));
     expect(result.args).toEqual(['--user', 'show', 'orbi-demo@1.service', '--property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic', '--no-pager']);
-    expect(JSON.parse(await ports.process('demo', { kind: 'journalctl', slot: 2 })).args).toEqual(['--user-unit=orbi-demo@2.service', '--output=json', '--lines=100', '--no-pager']);
+    expect(JSON.parse(await ports.process('demo', { kind: 'journalctl', slot: 2 })).args).toEqual(['--user', '-u', 'orbi-demo@2.service', '--no-pager', '--since', '-1 hour', '-n', '200', '-o', 'json']);
     expect(JSON.parse(await ports.process('demo', { kind: 'gh-api-get', resource: 'comments', issue: 2, page: 1 })).args).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', 'repos/Example/project/issues/2/comments?per_page=100&page=1']);
     await expect(ports.process('demo', { kind: 'systemctl-show', slot: 3, unit: 'service' })).rejects.toThrow('unsafe_path');
     await expect(ports.process('demo', { kind: 'gh-api-get', resource: 'issues', page: 11 })).rejects.toThrow('unsafe_path');
@@ -351,7 +351,7 @@ describe('package_and_registration', () => {
     const client = queryClient();
     for (const screen of screens) {
       const renderer = await render(client, React.createElement(screen.Component, props));
-      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' ? 'select a repository to browse' : 'feature not implemented');
+      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'runs' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
