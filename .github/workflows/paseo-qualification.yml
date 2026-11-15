@@ -1,0 +1,94 @@
+name: Installed Paseo qualification (owner approved only)
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact full committed candidate SHA reviewed by the owner
+        required: true
+        type: string
+      approval_url:
+        description: Owner consent comment on execution issue 12
+        required: true
+        type: string
+      owner_instruction_verified:
+        description: I read and verified owner consent for trusted plugins, disposable daemons, fixture telemetry and browser evidence
+        required: true
+        default: false
+        type: boolean
+permissions:
+  contents: read
+  issues: read
+jobs:
+  qualification:
+    if: inputs.owner_instruction_verified
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PASEO_E2E_CANDIDATE_REPO: ${{ github.workspace }}
+      PASEO_E2E_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      PASEO_E2E_OUTPUT: ${{ github.workspace }}/.artifacts/paseo-qualification/${{ github.run_id }}
+      PASEO_E2E_APPROVAL_URL: ${{ inputs.approval_url }}
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/tests/e2e/runtime/.browsers
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: Verify recorded owner comment (human review is still required)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          timeout 30 node --input-type=module <<'JS'
+          const url = process.env.PASEO_E2E_APPROVAL_URL;
+          const match = /^https:\/\/github\.com\/TrebuchetDynamics\/paseo-orbi\/issues\/12#issuecomment-(\d+)$/.exec(url);
+          if (!match || !/^[0-9a-f]{40}$/.test(process.env.PASEO_E2E_CANDIDATE_SHA)) throw Error('Explicit issue-12 approval and committed SHA required');
+          const response = await fetch(`https://api.github.com/repos/TrebuchetDynamics/paseo-orbi/issues/comments/${match[1]}`, { headers: { Authorization: `Bearer ${process.env.GH_TOKEN}` }, signal: AbortSignal.timeout(15000) });
+          if (!response.ok) throw Error('Cannot verify approval comment');
+          const comment = await response.json();
+          if (comment.html_url !== url || comment.user.login !== 'XelHaku' || !comment.body.trim()) throw Error('Recorded instruction is not the named owner comment');
+          // Do NOT treat a URL, author, flag or keyword as semantic proof of consent.
+          // The dispatching execution owner must have read and verified this exact instruction.
+          JS
+      - name: Offline tooling setup
+        run: timeout 180 npm ci --ignore-scripts
+      - name: Offline gates
+        run: |
+          timeout 60 npm run typecheck
+          timeout 60 npm run test:e2e:typecheck
+          timeout 60 npm run test:e2e:unit
+          timeout 60 npm run test:e2e:list
+      - name: Explicit isolated locked runtime and browser acquisition
+        run: |
+          mkdir tests/e2e/runtime/.setup
+          setup="$GITHUB_WORKSPACE/tests/e2e/runtime/.setup"
+          mkdir "$setup/home" "$setup/config" "$setup/data" "$setup/cache" "$setup/tmp"
+          touch "$setup/npmrc" "$setup/global-npmrc"
+          setup_path="$(dirname "$(command -v node)"):/usr/bin:/bin"
+          timeout 300 env -i PATH="$setup_path" HOME="$setup/home" XDG_CONFIG_HOME="$setup/config" XDG_DATA_HOME="$setup/data" XDG_CACHE_HOME="$setup/cache" TMPDIR="$setup/tmp" NPM_CONFIG_CACHE="$setup/cache/npm" NPM_CONFIG_USERCONFIG="$setup/npmrc" NPM_CONFIG_GLOBALCONFIG="$setup/global-npmrc" npm ci --prefix tests/e2e/runtime --ignore-scripts
+          timeout 300 env -i PATH="$setup_path" HOME="$setup/home" XDG_CONFIG_HOME="$setup/config" XDG_DATA_HOME="$setup/data" XDG_CACHE_HOME="$setup/cache" TMPDIR="$setup/tmp" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ./node_modules/.bin/playwright install chromium firefox webkit
+          # Missing OS browser libraries are a blocked prerequisite: no sudo/--with-deps.
+      - name: Authorized disposable installed journey (20-minute whole-run ceiling)
+        env:
+          PASEO_E2E_ENABLE_TRUSTED_PLUGINS: '1'
+        run: timeout --signal=TERM --kill-after=30 1230 npm run test:e2e
+      - name: Check upload safety, including startup/test/cleanup failures
+        id: safety
+        if: always()
+        run: timeout 60 node tests/e2e/evidence.mjs --check-upload "$PASEO_E2E_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        id: evidence
+        if: always() && steps.safety.outcome == 'success'
+        with:
+          name: paseo-qualification-${{ github.run_id }}
+          path: ${{ env.PASEO_E2E_OUTPUT }}
+          retention-days: 30
+          if-no-files-found: error
+      - name: Publish exact artifact link and limits
+        if: always() && steps.evidence.outcome == 'success'
+        env:
+          ARTIFACT_URL: ${{ steps.evidence.outputs.artifact-url }}
+        run: |
+          printf 'Browser evidence (manual image inspection and validator still required): %s\nExpires after 30 days. Not native or live Orbi qualification.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"

@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
-export async function fixture(profile: 'release' | 'installed' = 'release') {
-  const root = await mkdtemp(join(tmpdir(), 'paseo-orbi-'));
+export async function fixture(profile: 'release' | 'installed' = 'release', parent = tmpdir()) {
+  const root = await mkdtemp(join(parent, 'paseo-orbi-'));
   const source = join(root, 'source'), repoDir = join(root, 'repo'), deployHome = join(root, 'home');
   await Promise.all([mkdir(source), mkdir(repoDir), mkdir(deployHome)]);
   const files = JSON.parse(gunzipSync(await readFile(new URL(`./${profile}.json.gz`, import.meta.url))).toString()) as Record<string, string>;

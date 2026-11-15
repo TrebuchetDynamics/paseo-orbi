@@ -1,2 +1,5 @@
 node_modules/
 *.tgz
+.artifacts/
+tests/e2e/runtime/.browsers/
+tests/e2e/runtime/.setup/

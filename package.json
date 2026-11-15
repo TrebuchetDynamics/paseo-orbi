@@ -16,25 +16,31 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.client.json && tsc -p tsconfig.server.json",
     "test": "vitest run",
-    "test:boundaries": "vitest run tests/boundaries.test.ts"
+    "test:boundaries": "vitest run tests/boundaries.test.ts",
+    "test:e2e:unit": "vitest run tests/e2e-harness.test.ts",
+    "test:e2e:list": "playwright test --config tests/e2e/playwright.config.ts --list",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
+    "test:e2e:verify": "node tests/e2e/evidence.mjs",
+    "test:e2e:typecheck": "tsc --project tests/e2e/tsconfig.json --noEmit"
   },
   "dependencies": {
     "smol-toml": "1.9.1"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "0.15.4",
     "@getpaseo/client": "0.15.4",
+    "@getpaseo/plugin": "0.15.4",
     "@getpaseo/protocol": "0.15.4",
-    "react": "19.2.3",
-    "react-test-renderer": "19.2.3",
-    "react-native": "0.86.3",
+    "@playwright/test": "1.65.1",
     "@tanstack/react-query": "5.90.21",
-    "zod": "4.4.3",
-    "typescript": "5.9.3",
-    "@types/react": "19.2.14",
     "@types/node": "22.19.21",
+    "@types/react": "19.2.14",
+    "@types/react-test-renderer": "19.1.0",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-test-renderer": "19.2.3",
+    "typescript": "5.9.3",
     "vitest": "4.1.7",
-    "@types/react-test-renderer": "19.1.0"
+    "zod": "4.4.3"
   },
   "overrides": {
     "vite": "7.3.8"
