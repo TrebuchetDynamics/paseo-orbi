@@ -1,0 +1,8 @@
+{
+  "source": "Synthetic records based on pinned Orbi pi_activity.py, run_state.py, journal.py and GitHub Checks REST. Offline projection evidence, not live-qualified formats.",
+  "session": {"type":"session","version":3,"id":"session-42","timestamp":"2026-10-15T06:00:00Z","cwd":"PRIVATE_CWD_CANARY"},
+  "message": {"type":"message","timestamp":"2026-10-15T06:01:00Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"REASONING_CANARY"},{"type":"toolCall","name":"bash","arguments":{"command":"COMMAND_SECRET_CANARY"}}],"errorMessage":"ERROR_SECRET_CANARY"}},
+  "journal": {"_SYSTEMD_USER_UNIT":"orbi-demo@1.service","__REALTIME_TIMESTAMP":"1792044000000000","MESSAGE":"INFO [22222222] run_start run=22222222 issue=Example/project#42 role=implement branch=orbi/Example-project-issue-42 worktree=/PRIVATE_PATH session=session-42 session_file=/PRIVATE_SESSION phase=bash last_activity=- action=\"PROMPT_SECRET_CANARY run=ffffffff\" result=-"},
+  "pull": {"number":7,"html_url":"https://github.com/Example/project/pull/7","state":"open","merged_at":null,"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"base":{"repo":{"full_name":"Example/project"}}},
+  "check": {"id":1,"name":"unit tests","status":"completed","conclusion":"success","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","html_url":"https://github.com/Example/project/actions/runs/123/job/456","output":{"summary":"CHECK_OUTPUT_CANARY"}}
+}
