@@ -1,0 +1,7 @@
+{
+  "name": "paseo-orbi-qualification-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "engines": { "node": "22.19.0" },
+  "dependencies": { "@getpaseo/cli": "0.15.4" }
+}

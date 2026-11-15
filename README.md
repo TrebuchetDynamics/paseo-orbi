@@ -218,3 +218,7 @@ The tracked Git artifact must include manifest, both entries, all imported clien
 ## Documentation
 
 [Paseo plugin reference and project cautions](docs/paseo-plugins.md). Offline qualification does not replace the separately authorized live checks listed above. [Listing overview](OVERVIEW.md).
+
+### Installed qualification harness (offline delivery)
+
+The [qualification guide](docs/testing/qualification.md) defines the pinned installed-Paseo browser harness, 42-image matrix, safe unit/list/typecheck commands, evidence validator and opt-in workflow. #11 delivers tooling only; #12 owns browser execution after explicit disposable-daemon trusted-plugin consent. #13 separately requires named native targets/access and applicable consent. No browser/daemon run, installed screenshot, native success or new installation approval is claimed. Existing #7 offline package evidence and all installation/trust/privacy/live-check caveats above remain in force. Never run `test:e2e` against a user/default profile; a consent flag or URL alone is not authority.

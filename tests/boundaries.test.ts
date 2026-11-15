@@ -68,14 +68,33 @@ describe('package_and_registration boundaries', () => {
       '@getpaseo/plugin': '0.15.4', '@getpaseo/client': '0.15.4', '@getpaseo/protocol': '0.15.4',
       react: '19.2.3', 'react-test-renderer': '19.2.3', 'react-native': '0.86.3',
       '@tanstack/react-query': '5.90.21', zod: '4.4.3', typescript: '5.9.3', '@types/react': '19.2.14',
-      '@types/node': '22.19.21', vitest: '4.1.7', '@types/react-test-renderer': '19.1.0',
+      '@types/node': '22.19.21', vitest: '4.1.7', '@types/react-test-renderer': '19.1.0', '@playwright/test': '1.65.1',
     });
     expect(lock.packages[''].dependencies).toEqual(pkg.dependencies);
     expect(lock.packages[''].devDependencies).toEqual(pkg.devDependencies);
     for (const [name, version] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) expect(lock.packages[`node_modules/${name}`].version).toBe(version);
     expect(json('paseo-plugin.json')).toEqual({ id: 'paseo-orbi', requirements: { paseo: '>=0.15.4 <0.16.0' }, build: [['npm', 'ci', '--omit=dev', '--ignore-scripts']] });
-    expect(pkg.scripts).toEqual({ typecheck: 'tsc -p tsconfig.client.json && tsc -p tsconfig.server.json', test: 'vitest run', 'test:boundaries': 'vitest run tests/boundaries.test.ts' });
+    expect(pkg.scripts).toEqual({ typecheck: 'tsc -p tsconfig.client.json && tsc -p tsconfig.server.json', test: 'vitest run', 'test:boundaries': 'vitest run tests/boundaries.test.ts',
+      'test:e2e:unit': 'vitest run tests/e2e-harness.test.ts', 'test:e2e:list': 'playwright test --config tests/e2e/playwright.config.ts --list',
+      'test:e2e': 'playwright test --config tests/e2e/playwright.config.ts', 'test:e2e:verify': 'node tests/e2e/evidence.mjs', 'test:e2e:typecheck': 'tsc --project tests/e2e/tsconfig.json --noEmit',
+    });
     for (const file of modules) expect(pkg.files.some((included: string) => included === file || file.startsWith(included + '/'))).toBe(true);
+  });
+  it('isolates installed qualification tooling and keeps the default CI offline', () => {
+    const server = json('tsconfig.server.json'), browser = json('tests/e2e/tsconfig.json');
+    expect(server.exclude).toContain('tests/e2e/**');
+    expect(server.include).toContain('tests/**/*.ts');
+    expect(browser.extends).toBeUndefined(); expect(browser.compilerOptions.lib).toEqual(['ES2023', 'DOM']);
+    expect(read('vitest.config.ts')).toContain("exclude: [...configDefaults.exclude, 'tests/e2e/**']");
+    const runtime = json('tests/e2e/runtime/package.json'), lock = json('tests/e2e/runtime/package-lock.json');
+    expect(runtime.dependencies).toEqual({ '@getpaseo/cli': '0.15.4' }); expect(runtime.engines.node).toBe('22.19.0');
+    expect(lock.packages[''].dependencies).toEqual(runtime.dependencies);
+    for (const name of ['cli', 'client', 'server']) expect(lock.packages[`node_modules/@getpaseo/${name}`].version).toBe('0.15.4');
+    expect(json('package.json').files).not.toContain('tests');
+    expect(read('.github/workflows/ci.yml')).not.toContain('npm run test:e2e\n');
+    expect(read('.github/workflows/paseo-qualification.yml')).toContain('workflow_dispatch:');
+    expect(read('.github/workflows/paseo-qualification.yml')).toContain('retention-days: 30');
+    expect(read('.github/workflows/paseo-qualification.yml')).toContain('if: always()');
   });
   it('limits transitive runtime capabilities to read-only named imports and fixed RPCs', () => {
     const nodeImports: Record<string, string[]> = {
