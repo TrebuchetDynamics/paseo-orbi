@@ -1,0 +1,336 @@
+import { describe, expect, it } from 'vitest';
+import { failureGuidance, waitGuidance, attention, attentionText, BlockerDetails, BlockerPage, blockersList, blockersRead, artifactNames, type Blocker } from '../shared/blockers';
+import guidance from './fixtures/blockers/guidance.json';
+import { Failure } from '../shared/issues';
+import { selectReports } from '../server/reports';
+
+describe('Blockers', () => {
+  it('failure_guidance_without_actions', () => {
+    const expected = guidance;
+    const reasons = Failure.shape.reason_code.options;
+    const actions = Failure.shape.action_code.options;
+    for (const reason_code of reasons) for (const action_code of actions) {
+      const failure = Failure.parse({ schema: 1, outcome: 'blocked', reason_code, action_code, retry_safe: true });
+      const guidance = failureGuidance({ status: 'available', data: failure, attribution: { repo: 'Example/project', issue: 4, commentId: 1, updatedAt: '2026-01-01T00:00:00Z' } });
+      expect(guidance).toContain('Reported');
+      expect(guidance).toContain(expected.reasons[reason_code]);
+      expect(guidance).toContain(expected.actions[action_code]);
+      expect(guidance).toContain('never permission');
+      expect(guidance).not.toContain('CANARY');
+    }
+    for (const status of ['missing', 'invalid', 'unsupported'] as const) expect(failureGuidance({ status, attribution: null })).toContain(status);
+    for (const state of ['waiting', 'resuming', 'merged', 'stale'] as const) expect(waitGuidance(state)).toContain(state);
+    expect(waitGuidance('resuming')).toContain('not delivery success');
+    const report = selectReports('Example/project', 4, [{ id: 1, user: { login: 'runner' }, updated_at: '2026-01-01T00:00:00Z', body: '<!-- orbi:run=12345678 -->\n<!-- orbi:comment=failure -->\n<!-- orbi:failure:v1 {"schema":1,"reason_code":"CANARY"} -->\nRAW_DIAGNOSTIC_CANARY' }], ['runner'], true);
+    expect(report.failure.status).toBe('invalid');
+    expect(failureGuidance(report.failure)).not.toContain('CANARY');
+  });
+});
+
+import { afterEach, vi } from 'vitest';
+import * as fs from 'node:fs/promises';
+vi.mock('node:fs/promises', async importOriginal => ({ ...await importOriginal<typeof import('node:fs/promises')>() }));
+import { join } from 'node:path';
+import { fixture } from './helpers/fixtures';
+import { ConfigRepository } from '../server/config';
+import { ReadPorts } from '../server/read-ports';
+import { GitHubReader } from '../server/github';
+import { BlockersReader } from '../server/blockers';
+import { classifyIssue, type IssueSummary } from '../shared/issues';
+import contribute from '../index.server';
+import type { PluginServerContext } from '@getpaseo/plugin/server';
+const cleanups: (() => unknown)[] = [];
+afterEach(async () => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+const repo = 'Example/project', run = '12345678', stamp = '2026-11-01T00:00:00Z';
+const issue = (number = 4, labels = ['ai-blocked']): IssueSummary => ({ number, title: 'Synthetic blocker', githubState: 'open', updatedAt: stamp, labels, url: `https://github.com/${repo}/issues/${number}`, ...classifyIssue('open', labels) });
+const raw = (number = 4, labels = ['ai-blocked']) => ({ number, title: 'Synthetic blocker', state: 'open', updated_at: stamp, labels: labels.map(name => ({ name })), body: 'TOKEN_PROMPT_CANARY' });
+const block = (name: string, data: unknown, version = 1) => `<!-- orbi:${name}:v${version} ${JSON.stringify(data)} -->`;
+const comments = (scene: unknown = guidance.scene) => [{ id: 1, user: { login: 'publisher-canary' }, updated_at: stamp, body: `<!-- orbi:run=${run} -->\n<!-- orbi:comment=failure -->\n${block('failure', guidance.failure)}\n${block('scene', scene)}\n${block('base-ci-red', guidance.base)}\n\nRAW_DIAGNOSTIC_CANARY` }];
+const reports = (scene: unknown = guidance.scene) => selectReports(repo, 4, comments(scene), ['publisher-canary'], true);
+const response = (data: unknown, status = 200) => `HTTP/2.0 ${status} Status\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}`;
+async function setup(profile: 'release' | 'installed' = 'release') {
+  const f = await fixture(profile); cleanups.push(f.cleanup);
+  const repository = await ConfigRepository.load(f.authorization);
+  const ports = new ReadPorts(repository); cleanups.push(() => ports.dispose());
+  let now = Date.parse(stamp), denied = false, scene: unknown = guidance.scene;
+  vi.spyOn(ports, 'clock').mockImplementation(() => new Date(now));
+  const process = vi.spyOn(ports, 'process').mockImplementation(async (_id, op) => {
+    if (op.kind !== 'gh-api-get') throw new Error('mutation');
+    if (denied) return response({}, 401);
+    if (op.resource === 'issues') return response([raw()]);
+    if (op.resource === 'issue') return response(raw(op.issue));
+    if (op.resource === 'comments') return response(comments(scene));
+    if (op.resource === 'pull') return response({ number: 42, html_url: `https://github.com/${repo}/pull/42`, state: 'open', merged_at: null, head: { sha: 'a'.repeat(40) }, base: { repo: { full_name: repo } } });
+    if (op.resource === 'checks') return response({ check_runs: [] });
+    return response([]);
+  });
+  const github = new GitHubReader(repository, ports), reader = new BlockersReader(repository, github, ports);
+  return { ...f, ports, process, github, reader, repository, advance: () => { now += 60001; }, deny: (value: boolean) => { denied = value; }, scene: (value: unknown) => { scene = value; } };
+}
+
+it('retention_and_artifact_metadata', async () => {
+  for (const profile of ['release', 'installed'] as const) {
+    const f = await setup(profile);
+    const scene = join(f.repoDir, '.worktrees', `orbi-Example-project-issue-4-${run}`);
+    const directory = join(scene, '.orbi');
+    await fs.mkdir(directory, { recursive: true });
+    for (const name of artifactNames.slice(1)) await fs.writeFile(join(scene, name), 'ARTIFACT_CONTENT_CANARY');
+    // All raw data setup precedes the read-only evidence boundary.
+    const open = vi.spyOn(fs, 'open'), read = vi.spyOn(fs, 'readFile'), write = vi.spyOn(fs, 'writeFile');
+    const stats = vi.spyOn(fs, 'lstat');
+    const good = blockersRead.output.parse(await f.reader.read({ deploymentId: 'demo', issue: 4 }));
+    expect(good.data?.artifacts.map(a => a.status)).toEqual(Array(5).fill('present'));
+    expect(good.data?.artifacts[1]).toMatchObject({ size: 23, modifiedAt: expect.any(String) });
+    expect(good.data?.retention).toEqual({ profile: f.entry.adapter, worktreeRetainHours: 72, keepFailedWorktrees: profile === 'release' ? null : true });
+    expect(stats.mock.calls.every(([path]) => String(path).startsWith(join(f.repoDir, '.worktrees')))).toBe(true);
+    expect(open).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+    expect(JSON.stringify(good)).not.toMatch(/CANARY|\/tmp\/|repoDir|external|failing_checks/);
+    stats.mockRestore(); open.mockRestore(); read.mockRestore(); write.mockRestore();
+    await fs.rm(scene, { recursive: true });
+    const missing = await f.reader.read({ deploymentId: 'demo', issue: 4 });
+    expect(missing.data?.issue.number).toBe(4); expect(missing.data?.reports.failure.status).toBe('available');
+    expect(missing.data?.artifacts.every(a => a.status === 'missing')).toBe(true);
+    await fs.symlink(f.deployHome, scene);
+    const escaping = await f.reader.read({ deploymentId: 'demo', issue: 4 });
+    expect(escaping.data?.artifacts.every(a => a.status === 'invalid')).toBe(true);
+    await fs.unlink(scene); await fs.mkdir(directory, { recursive: true });
+    await fs.symlink(f.configPath, join(directory, 'test.log'));
+    expect((await f.reader.read({ deploymentId: 'demo', issue: 4 })).data?.artifacts.find(a => a.name === '.orbi/test.log')?.status).toBe('invalid');
+    const original = fs.lstat;
+    const denied = vi.spyOn(fs, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
+      if (String(args[0]).includes('/.worktrees/')) throw Object.assign(new Error('SECRET'), { code: 'EACCES' });
+      return original(...args);
+    }) as typeof fs.lstat);
+    expect((await f.reader.read({ deploymentId: 'demo', issue: 4 })).data?.artifacts.every(a => a.status === 'unreadable')).toBe(true);
+    denied.mockRestore();
+    for (const invalidScene of [{ ...guidance.scene, run_id: '87654321' }, { ...guidance.scene, pr_url: 'https://github.com/Other/repo/pull/42' }, { ...guidance.scene, path: '/escape' }]) {
+      f.advance(); f.scene(invalidScene);
+      const stat = vi.spyOn(f.ports, 'statArtifact');
+      const mismatch = await f.reader.read({ deploymentId: 'demo', issue: 4 });
+      expect(mismatch.data?.reports.scene.status).toBe('invalid');
+      expect(mismatch.data?.artifacts.every(a => a.status === 'unattributed')).toBe(true);
+      expect(stat).not.toHaveBeenCalled(); stat.mockRestore();
+    }
+    expect(f.process.mock.calls.every(([, op]) => op.kind === 'gh-api-get')).toBe(true);
+    await expect(f.ports.statArtifact('demo', 0, run, 'worktree')).rejects.toThrow('unsafe_path');
+    await expect(f.ports.statArtifact('demo', 4, '../escape', 'worktree')).rejects.toThrow('unsafe_path');
+    await expect(f.ports.statArtifact('demo', 4, run, '../env' as any)).rejects.toThrow('unsafe_path');
+  }
+});
+
+it('validates_only_profile_supported_retention_values', async () => {
+  for (const profile of ['release', 'installed'] as const) {
+    const f = await fixture(profile); cleanups.push(f.cleanup);
+    for (const value of ['true', '0', '-1', '"72"', 'nan', 'inf']) {
+      await fs.writeFile(f.configPath, f.toml + `worktree_retain_hours = ${value}\n`);
+      expect((await ConfigRepository.load(f.authorization)).catalog().entries[0].status).toBe('invalid_config');
+    }
+    for (const value of ['"true"', '1', '[]']) {
+      await fs.writeFile(f.configPath, f.toml + `keep_failed_worktrees = ${value}\n`);
+      const config = await ConfigRepository.load(f.authorization);
+      expect(config.catalog().entries[0].status).toBe(profile === 'release' ? 'available' : 'invalid_config');
+      if (profile === 'release') expect(config.resolve('demo').keepFailedWorktrees).toBeNull();
+    }
+    await fs.writeFile(f.configPath, f.toml + 'worktree_retain_hours = 12.5\nkeep_failed_worktrees = false\n');
+    expect((await ConfigRepository.load(f.authorization)).resolve('demo')).toMatchObject({ worktreeRetainHours: 12.5, keepFailedWorktrees: profile === 'release' ? null : false });
+  }
+});
+
+it('distinguishes_waits_and_base_states_and_rejects_unknown_formal_metadata', () => {
+  for (const [labels, classification, text] of [
+    [['ai-blocked'], 'manual_attention', 'operator must assess'], [['ai-needs-detail'], 'manual_attention', 'operator must assess'],
+    [['ai-fix-needed'], 'automatic_fix_pending', 'not a terminal failure'], [['ai-awaiting-merge'], 'maintainer_merge_wait', 'maintainer decides'],
+  ] as const) {
+    expect(attention(issue(4, [...labels]))).toBe(classification);
+    expect(attentionText[classification]).toContain(text);
+  }
+  expect(attention({ githubState: 'closed', labels: ['ai-blocked'] })).toBe('github_terminal');
+  expect(attention(issue(4, ['ai-human-review']))).toBe('not_candidate');
+  for (const status of ['waiting', 'resuming', 'merged', 'stale'] as const) {
+    const data = selectReports(repo, 4, [{ ...comments()[0], body: comments()[0].body.replace('"state":"resuming"', `"state":"${status}"`) }], ['publisher-canary'], true);
+    expect(data.baseCi).toMatchObject({ status: 'available', data: { state: status } });
+  }
+  for (const data of [{ ...guidance.failure, reason_code: 'new_reason' }, { ...guidance.failure, action_code: 'execute' }, { ...guidance.failure, retry_safe: 'true' }, { ...guidance.failure, schema: 2 }]) {
+    const parsed = selectReports(repo, 4, [{ ...comments()[0], body: `<!-- orbi:run=${run} -->\n<!-- orbi:comment=failure -->\n${block('failure', data)}\nRAW_DIAGNOSTIC_CANARY` }], ['publisher-canary'], true);
+    expect(parsed.failure.status).toBe('invalid'); expect(failureGuidance(parsed.failure)).toContain('unknown');
+  }
+  const unsupported = selectReports(repo, 4, [{ ...comments()[0], body: `<!-- orbi:run=${run} -->\n<!-- orbi:comment=failure -->\n${block('failure', guidance.failure, 2)}` }], ['publisher-canary'], true);
+  expect(unsupported.failure.status).toBe('unsupported');
+});
+
+it('registered_rpc_journey_handles_partial_stale_and_empty_complete_scope', async () => {
+  const f = await setup();
+  vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+  const handlers = new Map<unknown, (input: any) => Promise<any>>();
+  cleanups.push(contribute({ handle: (contract: unknown, handler: (input: any) => Promise<any>) => handlers.set(contract, handler) } as unknown as PluginServerContext));
+  vi.spyOn(ReadPorts.prototype, 'process').mockImplementation(f.process.getMockImplementation()!);
+  const page = blockersList.output.parse(await handlers.get(blockersList)!({ deploymentId: 'demo', page: 1 }));
+  expect(page).toMatchObject({ state: 'available', data: { complete: true, records: [{ reports: { selectedRunId: run }, attention: 'manual_attention' }] } });
+  const detail = blockersRead.output.parse(await handlers.get(blockersRead)!({ deploymentId: 'demo', issue: 4 }));
+  expect(detail.data?.artifacts.every(a => a.status === 'missing')).toBe(true);
+  for (const page of [0, -1, 1.5, NaN, Infinity]) {
+    expect(() => blockersList.input.parse({ deploymentId: 'demo', page })).toThrow();
+    await expect(f.reader.list({ deploymentId: 'demo', page })).rejects.toThrow('unsafe_path');
+  }
+  expect(() => blockersRead.input.parse({ deploymentId: 'demo', issue: 4, path: '/escape' })).toThrow();
+  await expect(f.reader.list({ deploymentId: 'rejected', page: 1 })).rejects.toThrow('deployment_unavailable');
+  const good = await f.reader.list({ deploymentId: 'demo', page: 1 });
+  f.advance(); f.deny(true);
+  expect(await f.reader.list({ deploymentId: 'demo', page: 1 })).toMatchObject({ state: 'stale', lastSuccessfulAt: good.lastSuccessfulAt, data: { complete: false, records: [{ issue: { number: 4 }, reports: { complete: false } }] } });
+  const initial = await setup(); initial.deny(true);
+  expect(await initial.reader.list({ deploymentId: 'demo', page: 1 })).toMatchObject({ state: 'unavailable', data: null, problems: [{ code: 'auth_denied' }] });
+  initial.advance(); initial.deny(false); initial.process.mockResolvedValue(response([]));
+  expect(await initial.reader.list({ deploymentId: 'demo', page: 1 })).toMatchObject({ state: 'available', data: { complete: true, records: [] } });
+  const partial = await setup();
+  partial.process.mockImplementation(async (_id, op) => response(op.kind === 'gh-api-get' && op.resource === 'issues' ? [raw()] : {}, op.kind === 'gh-api-get' && op.resource === 'issues' ? 200 : 401));
+  expect(await partial.reader.list({ deploymentId: 'demo', page: 1 })).toMatchObject({ state: 'partial', data: { complete: true, records: [{ reports: { complete: false, selectedRunId: null } }] }, problems: [{ code: 'auth_denied' }] });
+  expect(JSON.stringify([page, detail, good])).not.toMatch(/CANARY|\/tmp\/|prompt|token/);
+});
+
+import './helpers/host';
+import { host } from './helpers/host';
+import React from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Shell } from '../client/shell';
+import { BlockerEvidence } from '../client/blockers';
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const theme = { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } } as any;
+const props = { theme, host: { id: 'host-a', label: 'Host A' }, layout: { compact: true, platform: 'web' }, params: { deploymentId: 'demo' }, route: 'blockers', openScreen: vi.fn() } as unknown as React.ComponentProps<typeof Shell>;
+function safeBlocker(number = 4): Blocker {
+  const r = reports();
+  return { issue: issue(number), attention: 'manual_attention', reports: { selectedRunId: run, attribution: r.attribution, complete: true, failure: r.failure, scene: r.scene, baseCi: r.baseCi.status === 'available' ? { ...r.baseCi, data: { state: r.baseCi.data.state, pr: r.baseCi.data.pr } } : r.baseCi } };
+}
+const available = <T,>(data: T) => ({ state: 'available' as const, data, observedAt: stamp, lastSuccessfulAt: stamp, problems: [] });
+const realSetTimeout = globalThis.setTimeout;
+async function renderScreen(initial = props) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  const mount = (p: typeof props) => <QueryClientProvider client={client}><Shell {...p} /></QueryClientProvider>;
+  await act(async () => { renderer = create(mount(initial)); });
+  const settle = async () => { await act(async () => { await new Promise(resolve => realSetTimeout(resolve, 10)); await vi.advanceTimersByTimeAsync(2); }); };
+  await settle(); await settle();
+  cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
+  return { renderer, settle, update: async (p: typeof props) => { await act(async () => renderer.update(mount(p))); await settle(); await settle(); } };
+}
+function catalog() {
+  host.readCatalog.mockResolvedValue({ state: 'configured', problems: [], entries: [
+    { id: 'demo', label: 'Demo', repo, adapter: 'orbi-0.7.41-release', status: 'available', problems: [] },
+    { id: 'other', label: 'Other', repo: 'Example/other', adapter: 'orbi-0.7.41-release', status: 'available', problems: [] },
+    { id: 'rejected', label: 'Rejected', repo: 'Other/rejected', adapter: 'unsupported', status: 'invalid_config', problems: [{ source: 'config', code: 'config_mismatch' }] },
+  ] });
+}
+it('renders_each_formal_guidance_with_provenance_and_no_recovery_controls', async () => {
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<BlockerEvidence data={safeBlocker()} theme={theme} />); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  for (const reason_code of Failure.shape.reason_code.options) for (const action_code of Failure.shape.action_code.options) {
+    const data = safeBlocker();
+    if (data.reports.failure.status === 'available') data.reports.failure.data = { schema: 1, outcome: 'fix_needed', reason_code, action_code, retry_safe: false };
+    await act(async () => renderer.update(<BlockerEvidence data={data} theme={theme} />));
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain(guidance.reasons[reason_code]); expect(text).toContain(guidance.actions[action_code]);
+    expect(text).toContain('never permission'); expect(text).toContain('issuecomment-1'); expect(text).toContain(stamp);
+    expect(renderer.root.findAll(node => node.props.accessibilityRole === 'button')).toHaveLength(0);
+  }
+  for (const state of ['waiting', 'resuming', 'merged', 'stale'] as const) {
+    const data = safeBlocker(); if (data.reports.baseCi.status === 'available') data.reports.baseCi.data.state = state;
+    await act(async () => renderer.update(<BlockerEvidence data={data} theme={theme} />));
+    expect(JSON.stringify(renderer.toJSON())).toContain(waitGuidance(state));
+  }
+  for (const status of ['missing', 'invalid', 'unsupported'] as const) {
+    const data = safeBlocker(); data.reports.failure = { status, attribution: null };
+    await act(async () => renderer.update(<BlockerEvidence data={data} theme={theme} />));
+    expect(JSON.stringify(renderer.toJSON())).toContain(`metadata ${status}`);
+    expect(JSON.stringify(renderer.toJSON())).toContain('No prose fallback');
+  }
+});
+
+it('partial_stale_and_layout', async () => {
+  const f = await setup();
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  host.readBlockers.mockImplementation(input => f.reader.list(input));
+  host.readBlocker.mockImplementation(input => f.reader.read(input));
+  const screen = await renderScreen();
+  const { renderer, settle } = screen;
+  expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Rejected')).toHaveLength(0);
+  expect(JSON.stringify(renderer.toJSON())).toContain('Base CI resuming');
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 4' }).props.onPress()); await settle(); await settle();
+  expect(JSON.stringify(renderer.toJSON())).toContain('Artifact metadata only');
+  expect(JSON.stringify(renderer.toJSON())).toContain('missing');
+  expect(JSON.stringify(renderer.toJSON())).not.toMatch(/CANARY|\/tmp\//);
+  const allowed = /^(Refresh|Inspect blocker \d+|Previous blockers page|Next blockers page|Select .+|Open (Fleet|Issues|Runs|Blockers))$/;
+  for (const button of renderer.root.findAll(node => node.type === ('Pressable' as any))) expect(button.props.accessibilityLabel).toMatch(allowed);
+  for (const compact of [true, false]) for (const foreground of ['#eee', '#111']) {
+    await screen.update({ ...props, layout: { ...props.layout, compact }, theme: { colors: { ...theme.colors, foreground } } as any });
+    for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe(foreground);
+    expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(compact ? 16 : 24);
+  }
+  f.advance(); f.deny(true);
+  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  let visible = JSON.stringify(renderer.toJSON());
+  expect(visible).toContain('stale'); expect(visible).toContain('auth_denied'); expect(visible).toContain(stamp);
+  expect(visible).toContain('Synthetic blocker'); expect(visible).not.toContain('No blockers in');
+  expect(visible).toContain("daemon user's existing gh authentication");
+  f.advance(); f.deny(false);
+  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  expect(JSON.stringify(renderer.toJSON())).not.toContain('github: auth_denied');
+  host.readBlockers.mockResolvedValue({ ...available({ repo, page: 1, hasNextPage: false, complete: true, records: [{ ...safeBlocker(), reports: { ...safeBlocker().reports, complete: false } }] }), state: 'partial', lastSuccessfulAt: null, problems: [{ source: 'github', code: 'incomplete' }] });
+  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  expect(JSON.stringify(renderer.toJSON())).toContain('partial');
+  expect(JSON.stringify(renderer.toJSON())).toContain('current run not established');
+  // A complete empty scope is distinguishable from an initial failure on another selection.
+  host.readBlockers.mockResolvedValue({ state: 'unavailable', data: null, observedAt: stamp, lastSuccessfulAt: null, problems: [{ source: 'github', code: 'auth_denied' }] });
+  await screen.update({ ...props, params: { deploymentId: 'other' } });
+  visible = JSON.stringify(renderer.toJSON()); expect(visible).toContain('unavailable'); expect(visible).not.toContain('No blockers in');
+  host.readBlockers.mockResolvedValue(available({ repo: 'Example/other', page: 1, hasNextPage: false, complete: true, records: [] }));
+  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  expect(JSON.stringify(renderer.toJSON())).toContain('No blockers in the complete observed scope');
+});
+
+it('ignores_late_issue_deployment_and_host_callbacks', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  host.readBlockers.mockResolvedValue(available({ repo, page: 1, hasNextPage: true, complete: true, records: [safeBlocker(4), safeBlocker(5)] }));
+  let finish!: (value: unknown) => void;
+  host.readBlocker.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(available({ ...safeBlocker(5), reports: { ...safeBlocker(5).reports, selectedRunId: '22222222' }, artifacts: [], retention: { profile: 'orbi-0.7.41-release', worktreeRetainHours: 72, keepFailedWorktrees: null } }));
+  const screen = await renderScreen();
+  await act(async () => screen.renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 4' }).props.onPress()); await screen.settle();
+  await act(async () => screen.renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 5' }).props.onPress()); await screen.settle(); await screen.settle();
+  await act(async () => finish(available({ ...safeBlocker(4), reports: { ...safeBlocker(4).reports, selectedRunId: 'deadbeef' } }))); await screen.settle();
+  expect(JSON.stringify(screen.renderer.toJSON())).toContain('22222222'); expect(JSON.stringify(screen.renderer.toJSON())).not.toContain('deadbeef');
+  let late!: (value: unknown) => void;
+  host.readBlockers.mockImplementationOnce(() => new Promise(resolve => { late = resolve; })).mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: true, records: [] }));
+  await act(async () => screen.renderer.root.findByProps({ accessibilityLabel: 'Next blockers page' }).props.onPress()); await screen.settle();
+  await screen.update({ ...props, params: { deploymentId: 'other' } });
+  await act(async () => late(available({ repo: 'LATE_CALLBACK_CANARY', page: 2, hasNextPage: false, complete: true, records: [] }))); await screen.settle();
+  expect(JSON.stringify(screen.renderer.toJSON())).not.toContain('LATE_CALLBACK_CANARY');
+  let lateHost!: (value: unknown) => void;
+  host.readBlockers.mockImplementationOnce(() => new Promise(resolve => { lateHost = resolve; }));
+  await screen.update({ ...props, params: { deploymentId: 'demo' } });
+  await act(async () => { screen.renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress(); }); await screen.settle();
+  host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
+  cleanups.push(() => host.hosts.pop());
+  host.readBlockers.mockResolvedValue(available({ repo: 'Host B evidence', page: 1, hasNextPage: false, complete: true, records: [] }));
+  await screen.update({ ...props, host: { ...props.host, id: 'host-b' } });
+  await act(async () => lateHost(available({ repo: 'LATE_HOST_CANARY', page: 1, hasNextPage: false, complete: true, records: [] }))); await screen.settle();
+  expect(JSON.stringify(screen.renderer.toJSON())).toContain('Host B evidence'); expect(JSON.stringify(screen.renderer.toJSON())).not.toContain('LATE_HOST_CANARY');
+});
+
+it('paginates_only_candidate_states_without_scanning_unrelated_comments', async () => {
+  const f = await setup();
+  f.process.mockImplementation(async (_id, op) => {
+    if (op.kind !== 'gh-api-get') throw new Error('mutation');
+    if (op.resource === 'issues') return response([
+      ...Array.from({ length: 21 }, (_, i) => raw(i + 1, [['ai-blocked'], ['ai-needs-detail'], ['ai-fix-needed'], ['ai-awaiting-merge']][i % 4])),
+      raw(80, ['ai-human-review']), raw(81, ['ai-ready']), raw(82, ['ai-pr-opened']),
+    ]);
+    return response(comments());
+  });
+  const first = BlockerPage.parse((await f.reader.list({ deploymentId: 'demo', page: 1 })).data);
+  expect(first.records).toHaveLength(20); expect(first.hasNextPage).toBe(true);
+  expect(first.records.slice(0, 4).map(r => r.attention)).toEqual(['manual_attention', 'manual_attention', 'automatic_fix_pending', 'maintainer_merge_wait']);
+  const second = BlockerPage.parse((await f.reader.list({ deploymentId: 'demo', page: 2 })).data);
+  expect(second.records.map(r => r.issue.number)).toEqual([21]); expect(second.hasNextPage).toBe(false);
+  expect(f.process.mock.calls.filter(([, op]) => op.kind === 'gh-api-get' && op.resource === 'comments').map(([, op]) => 'issue' in op ? op.issue : 0)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
+});
