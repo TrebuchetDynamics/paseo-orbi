@@ -31,6 +31,7 @@ import { fixture } from './helpers/fixtures';
 import contribute from '../index.server';
 import { deploymentsList } from '../shared/common';
 import { fleetRead } from '../shared/fleet';
+import { blockersList, blockersRead } from '../shared/blockers';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 const reports = JSON.parse(await readFile(new URL('./fixtures/github/reports.json', import.meta.url), 'utf8'));
 const rest = JSON.parse(await readFile(new URL('./fixtures/github/rest.json', import.meta.url), 'utf8'));
@@ -346,7 +347,7 @@ describe('github_boundary_and_backoff', () => {
     const f = await fixture(); cleanups.push(f.cleanup); vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
     const handlers = new Map<unknown, (input: any) => Promise<unknown>>();
     cleanups.push(contribute({ handle: (contract: unknown, handler: (input: any) => Promise<unknown>) => { handlers.set(contract, handler); } } as unknown as PluginServerContext));
-    expect([...handlers.keys()]).toEqual([deploymentsList, issuesList, issuesGet, fleetRead]);
+    expect([...handlers.keys()]).toEqual([blockersList, blockersRead, deploymentsList, issuesList, issuesGet, fleetRead]);
     const process = vi.spyOn(ReadPorts.prototype, 'process').mockImplementation(async (_id, op) => response(op.kind === 'gh-api-get' && op.resource === 'issues' ? [rest.issue] : []));
     const result = issuesList.output.parse(await handlers.get(issuesList)!({ deploymentId: 'demo', page: 1 }));
     expect(result.data?.records[0].state).toBe('Blocked');

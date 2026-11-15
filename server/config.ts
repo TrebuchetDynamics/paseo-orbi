@@ -17,6 +17,7 @@ const configuration = z.object({ schema: z.literal(1), deployments: z.array(iden
 export type ValidatedDeployment = Readonly<{
   id: string; repo: string; configPath: string; engineSourcePath: string; repoDir: string; deployHome: string;
   sourceProfile: SourceProfile; unitName: string | null; capacity: number; trustedPublisherLogins: readonly string[];
+  worktreeRetainHours: number; keepFailedWorktrees: boolean | null;
 }>;
 const problem = (code: Problem['code'], source: Problem['source'] = 'config'): Problem => ({ source, code });
 function tomlPath(value: unknown, base: string) {
@@ -67,11 +68,15 @@ export class ConfigRepository {
         if (!await compatible(entry.engineSourcePath, entry.adapter, signal)) {
           safe.status = 'unsupported_source_profile'; safe.problems = [problem('unsupported_source_profile', 'compatibility')]; continue;
         }
+        const worktreeRetainHours = toml.worktree_retain_hours ?? 72;
+        const keepFailedWorktrees = entry.adapter === 'orbi-0.7.41-1a8b2f96' ? toml.keep_failed_worktrees ?? true : null;
+        if (typeof worktreeRetainHours !== 'number' || !Number.isFinite(worktreeRetainHours) || worktreeRetainHours <= 0
+          || (keepFailedWorktrees !== null && typeof keepFailedWorktrees !== 'boolean')) throw new Error('config_mismatch');
         safe.status = 'available';
         valid.set(entry.id, Object.freeze({
           id: entry.id, repo: entry.repo, configPath: entry.configPath, engineSourcePath: entry.engineSourcePath,
           repoDir: entry.repoDir, deployHome: entry.deployHome, sourceProfile: entry.adapter as SourceProfile,
-          unitName, capacity, trustedPublisherLogins: Object.freeze([...entry.trustedPublisherLogins]),
+          unitName, capacity, worktreeRetainHours, keepFailedWorktrees, trustedPublisherLogins: Object.freeze([...entry.trustedPublisherLogins]),
         }));
       } catch (error) { safe.problems = [problem(error instanceof ReadError ? error.code : 'config_mismatch')]; }
     }

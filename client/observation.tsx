@@ -71,19 +71,22 @@ export function useObservationQuery<T>(options: {
   }, [success]);
   let observation = query.data;
   if (observation?.data != null && (!options.connected || (success && now >= Date.parse(success) + 60000))) observation = { ...observation, state: 'stale' };
-  return { observation, refreshing: query.isFetching, refresh: () => enabled ? query.refetch({ cancelRefetch: false }) : Promise.resolve(undefined) };
+  return { observation, refreshing: query.isFetching, canRefresh: enabled && !query.isFetching,
+    refresh: () => enabled ? query.refetch({ cancelRefetch: false }) : Promise.resolve(undefined) };
 }
 
-export function ObservationView<T>({ observation, refreshing, refresh, theme, children }: {
-  observation?: Observation<T>; refreshing: boolean; refresh: () => unknown;
+export function ObservationView<T>({ observation, refreshing, canRefresh, refresh, theme, children }: {
+  observation?: Observation<T>; refreshing: boolean; canRefresh: boolean; refresh: () => unknown;
   theme: PluginHostProps['theme']; children: (data: T) => React.ReactNode;
 }) {
   const text = { color: theme.colors.foreground };
+  const status = observation?.state ?? 'Loading';
+  const problems = observation?.problems.map(p => `${p.source}: ${p.code}`).join('; ') ?? '';
   return <View>
-    <Text style={text}>{observation?.state ?? 'Loading'}</Text>
+    <Text accessibilityLabel={`Observation status: ${status}`} style={text}>{status}</Text>
     {observation && <Text style={text}>Observed: {observation.observedAt}; Last success: {observation.lastSuccessfulAt ?? 'never'}</Text>}
-    {observation?.problems.map((p, i) => <Text key={i} style={text}>{p.source}: {p.code}</Text>)}
+    <Text accessibilityRole="alert" style={text}>{problems}</Text>
     {observation?.data != null && children(observation.data)}
-    <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={refreshing} onPress={refresh}><Text style={text}>{refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!canRefresh} accessibilityState={{ disabled: !canRefresh, busy: refreshing }} style={{ opacity: canRefresh ? 1 : 0.5 }} onPress={refresh}><Text style={text}>{refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
   </View>;
 }

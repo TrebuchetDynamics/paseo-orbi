@@ -351,7 +351,7 @@ describe('package_and_registration', () => {
     const client = queryClient();
     for (const screen of screens) {
       const renderer = await render(client, React.createElement(screen.Component, props));
-      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' ? 'select a repository to browse' : 'feature not implemented');
+      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'blockers' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
@@ -408,6 +408,96 @@ describe('bounded_reads_and_lifecycle client', () => {
     return { state: 'available', observedAt: now, lastSuccessfulAt: now, data: { value }, problems: [] };
   }
   const options = (read: Options['read']): Options => ({ hostId: 'host-a', deploymentId: 'demo', selector: 'test', connected: true, foreground: true, read });
+  it('observation_accessibility_and_refresh_gate', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-15T00:00:00Z'));
+    let complete!: (value: Observation<Value>) => void;
+    const read = vi.fn().mockImplementationOnce(() => new Promise<Observation<Value>>(resolve => { complete = resolve; }));
+    const client = queryClient();
+    const renderer = await render(client, React.createElement(Harness, options(read)));
+    const button = () => renderer.root.findByType('Pressable' as any);
+    const alert = () => renderer.root.findByProps({ accessibilityRole: 'alert' });
+    const status = (value: string) => renderer.root.findByProps({ accessibilityLabel: `Observation status: ${value}` });
+    const gate = (disabled: boolean, busy: boolean) => {
+      expect(current).toMatchObject({ canRefresh: !disabled, refreshing: busy });
+      expect(button().props).toMatchObject({ disabled, accessibilityLabel: 'Refresh', accessibilityRole: 'button', accessibilityState: { disabled, busy } });
+      expect(button().findByType('Text' as any).children).toEqual([busy ? 'Refreshing' : 'Refresh']);
+      expect(button().props.style.opacity).toBe(disabled ? 0.5 : 1);
+      expect(button().findByType('Text' as any).props.style.color).toBe(props.theme.colors.foreground);
+    };
+    const activate = async () => { await act(async () => { if (!button().props.disabled) await button().props.onPress(); }); await settle(); };
+    const update = async (connected: boolean, foreground: boolean) => {
+      await act(async () => renderer.update(tree(client, React.createElement(Harness, { ...options(read), connected, foreground }))));
+      await settle();
+    };
+    gate(true, true);
+    expect(status('Loading').children).toEqual(['Loading']);
+    expect(read).toHaveBeenCalledTimes(1);
+    await activate(); expect(read).toHaveBeenCalledTimes(1);
+    await act(async () => { complete(success('retained data')); }); await settle();
+    gate(false, false);
+    expect(status('available').children).toEqual(['available']);
+    expect(renderer.root.findAllByType('View' as any).every(node => !node.props.accessible)).toBe(true);
+
+    // A selected-host disconnect and backgrounding disable the real control;
+    // direct callers also retain the hook's defensive no-read guard.
+    await update(false, true); gate(true, false);
+    expect(status('stale').children).toEqual(['stale']);
+    expect(alert().children).toEqual([]); // Offline is not a backend failure.
+    await activate(); await act(async () => { await current.refresh(); });
+    await update(true, false); gate(true, false);
+    await activate(); await act(async () => { await current.refresh(); });
+    expect(read).toHaveBeenCalledTimes(1);
+    await update(true, true); gate(false, false);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Activation when available starts one read; a same-key direct activation
+    // while busy coalesces rather than starting an overlapping RPC.
+    let reject!: (error: Error) => void;
+    read.mockImplementationOnce(() => new Promise<Observation<Value>>((_resolve, fail) => { reject = fail; }));
+    let first!: Promise<unknown>, second!: Promise<unknown>;
+    await act(async () => { first = button().props.onPress(); }); await settle();
+    gate(true, true);
+    expect(read).toHaveBeenCalledTimes(2);
+    await activate();
+    await act(async () => { second = current.refresh(); });
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => { reject(new Error('SECRET_CANARY raw exception')); await Promise.all([first, second]); }); await settle();
+    gate(false, false);
+    expect(status('stale').children).toEqual(['stale']);
+    const problemRegion = alert();
+    expect(problemRegion.children).toEqual(['filesystem: refresh_failed']);
+    expect(JSON.stringify(renderer.toJSON())).toContain('retained data');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
+    expect(problemRegion.findAllByType('Pressable' as any)).toHaveLength(0);
+
+    // Repeated unchanged failures update observation time, not alert identity or
+    // content. Timestamps remain visible in a separate Text node.
+    const previousTime = current.observation!.observedAt;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    read.mockRejectedValue(new Error('SECRET_CANARY repeated exception'));
+    await activate();
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(current.observation!.observedAt).not.toBe(previousTime);
+    expect(alert()).toBe(problemRegion);
+    expect(alert().children).toEqual(['filesystem: refresh_failed']);
+    expect(renderer.root.findAllByType('Text' as any).some(node => node !== alert() && JSON.stringify(node.children).includes(current.observation!.observedAt))).toBe(true);
+
+    // Repair and Refresh removes the problem, but keeps children and status
+    // independently accessible. Age-only staleness must not invent an error.
+    read.mockImplementation(async () => success('repaired data'));
+    await activate(); gate(false, false);
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(status('available').children).toEqual(['available']);
+    expect(alert()).toBe(problemRegion); expect(alert().children).toEqual([]);
+    expect(JSON.stringify(renderer.toJSON())).toContain('repaired data');
+    await update(true, false); gate(true, false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60001); });
+    await activate();
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(status('stale').children).toEqual(['stale']);
+    expect(alert().children).toEqual([]);
+  });
   it('polls every 30 seconds, coalesces manual refresh and retains failed data as visibly stale', async () => {
     vi.useFakeTimers();
     const read = vi.fn().mockResolvedValue(success('last good'));
