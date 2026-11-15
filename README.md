@@ -136,6 +136,8 @@ Cards keep independent source problems and timestamps. One inaccessible deployme
 
 The shared observation lifecycle polls foreground/connected cards every 30 seconds. A failed refresh preserves previous data with a stale badge; after 60 seconds without success, data is visibly stale. Observed/last-success timestamps remain visible. Text uses theme tokens and compact layouts wrap within the viewport. These are design bounds, not measured performance claims. No new fleet daemon or scheduler is required.
 
+Shared observations declare descriptive loading/status accessibility labels and a stable alert region containing only safe problem source/code summaries, separate from timestamps and retained data. Age/offline staleness alone does not invent an error. **Refresh** stays named Refresh, shows Refresh/Refreshing, and is disabled with dimmed theme-colored text and disabled/busy accessibility state while the selected host is offline, the app is backgrounded, or a read is in flight. Reconnect the selected host/return to the foreground and repair the reported source externally before retrying; no other host is used and no service/settings controls are added. Mocked renderer tests verify these declarative semantics, not actual screen-reader speech, announcement timing, or WCAG conformance. Installed desktop/native mobile screen-reader qualification remains unperformed.
+
 ### Authorized installation (not performed here)
 
 Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's `pluginsEnabled` switch, typecheck the tested revision, and use the official direct-Git flow:
