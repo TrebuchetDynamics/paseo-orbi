@@ -166,15 +166,15 @@ Shared observations declare descriptive loading/status accessibility labels and 
 
 ### Authorized installation (not performed here)
 
-Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's root `pluginsEnabled` switch. If absent/false, obtain separate explicit consent before enabling it; do not assume plugin installation grants that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git) with the exact offline-tested commit (the final documented pin is recorded below):
+Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's root `pluginsEnabled` switch. If absent/false, obtain separate explicit consent before enabling it; do not assume plugin installation grants that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git) with the exact offline-tested candidate commit:
 
 ```sh
-paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref <tested-commit-sha>
+paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref 875c69a101a102a8f14b064f0664069b5e603f4f
 paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An initial `--ref` does not pin later ordinary updates (which follow default HEAD); inspect and authorize updates separately. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
+Commit `875c69a101a102a8f14b064f0664069b5e603f4f` is the offline-qualified Git candidate (Node 22.19.0; 97 tests, typecheck, boundary guard, pack inspection and isolated locked production preparation passed). This installation pin was added in a documentation-only follow-up; runtime/package/lock contents are unchanged. The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An initial `--ref` does not pin later ordinary updates (which follow default HEAD); inspect and authorize updates separately. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
 
 ### Live qualification not run
 
