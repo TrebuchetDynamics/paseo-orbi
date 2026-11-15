@@ -41,7 +41,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         ? <Pressable key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })}><Text style={text}>{entry.label} ({entry.repo})</Text></Pressable>
         : <View key={entry.id}><Text style={text}>{entry.label} ({entry.repo}): {entry.status}</Text>{entry.problems.map((p, i) => <Text key={i} style={text}>{p.code}</Text>)}</View>)}
       {selected && (route === 'issues'
-        ? <Issues key={selected.id} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
+        ? <Issues key={selected.id} deploymentId={selected.id} repo={selected.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
         : route === 'runs' ? <Runs key={`${props.host.id}:${selected.id}:${selected.repo}`} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
         : route === 'blockers' ? <Blockers key={selected.id} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
         : <Text style={text}>Selected: {selected.label}. Feature not implemented.</Text>)}
