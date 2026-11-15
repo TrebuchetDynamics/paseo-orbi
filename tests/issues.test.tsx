@@ -373,9 +373,159 @@ async function renderIssues() {
   const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
   await settle(); await settle();
   cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
-  return { renderer, settle };
+  return { renderer, settle, client, rerender: async (props: typeof screenProps) => {
+    await act(async () => renderer.update(<QueryClientProvider client={client}><Shell {...props} /></QueryClientProvider>));
+    await settle(); await settle();
+  } };
 }
 describe('Issues user journey', () => {
+  it('safe_external_evidence_links', async () => {
+    vi.useFakeTimers();
+    host.openExternalUrl.mockReset().mockResolvedValue(undefined);
+    const f = fakeReader();
+    f.process.mockImplementation(async (_id, op) => {
+      if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+      if (op.resource === 'issues') return response(op.page === 1 ? Array.from({ length: 100 }, (_, i) => ({ ...rest.issue, number: i + 1, html_url: `https://github.com/${repo}/issues/${i + 1}` })) : [{ ...rest.issue, number: 101, html_url: `https://github.com/${repo}/issues/101` }]);
+      if (op.resource === 'issue') return response({ ...rest.issue, number: op.issue, html_url: `https://github.com/${repo}/issues/${op.issue}` });
+      if (op.resource === 'comments') return response([comment(1, `${marker()}\n${block('scene', reports.scene)}`)]);
+      if (op.resource === 'pull') return response({ ...rest.pull, merged_at: null });
+      if (op.resource === 'checks') return response(rest.checks);
+      return response([]);
+    });
+    const catalog = (selectedRepo = repo, id = 'demo', status = 'available') => ({ state: 'configured', entries: [{ id, label: 'Demo', repo: selectedRepo, status, problems: [] }], problems: [] });
+    host.readCatalog.mockResolvedValue(catalog());
+    host.readIssues.mockImplementation(async input => issuesList.output.parse(await f.reader.listIssues(input.deploymentId, input.page)));
+    host.readIssue.mockImplementation(async input => issuesGet.output.parse(await f.reader.getIssue(input.deploymentId, input.issue)));
+    const { renderer, settle, client, rerender } = await renderIssues();
+    const links = () => renderer.root.findAll(node => node.type === ('ExternalLink' as any));
+    const link = (kind: 'issue' | 'pull request', number: number, selectedRepo = repo) => links().find(node => node.props.accessibilityLabel === `Open ${selectedRepo} ${kind} ${number} on GitHub`)!;
+    const rpcCounts = () => [host.readCatalog.mock.calls.length, host.readIssues.mock.calls.length, host.readIssue.mock.calls.length, f.process.mock.calls.length];
+    expect(host.openExternalUrl).not.toHaveBeenCalled();
+    const issueLink = link('issue', 4);
+    expect(issueLink).toBeDefined();
+    expect(issueLink.props.accessibilityRole).toBe('link');
+    expect(issueLink.findByType('Text' as any).props.style.color).toBe('#eee');
+    // The host link is a sibling, never inside the inspect press target.
+    const inspect = renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' });
+    expect(inspect.findAll(node => node.type === ('ExternalLink' as any))).toHaveLength(0);
+    const beforeOpen = rpcCounts();
+    await act(async () => issueLink.props.onPress());
+    expect(host.openExternalUrl).toHaveBeenLastCalledWith(`https://github.com/${repo}/issues/4`);
+    expect(rpcCounts()).toEqual(beforeOpen);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('PR identity:');
+    await act(async () => inspect.props.onPress()); await settle(); await settle();
+    expect(host.readIssue).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 4 });
+    const prLink = link('pull request', 42);
+    expect(prLink).toBeDefined();
+    expect(prLink.findByType('Text' as any).props.style.color).toBe('#eee');
+    const beforePr = rpcCounts();
+    await act(async () => prLink.props.onPress());
+    expect(host.openExternalUrl).toHaveBeenLastCalledWith(`https://github.com/${repo}/pull/42`);
+    expect(rpcCounts()).toEqual(beforePr);
+    expect(JSON.stringify(renderer.toJSON())).toContain('(scene)');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Merge evidence: ');
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.onPress()); await settle(); await settle();
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 2 });
+    expect(link('pull request', 42)).toBeUndefined();
+    expect(host.openExternalUrl).toHaveBeenCalledTimes(2);
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Previous page' }).props.onPress()); await settle(); await settle();
+    expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 1 });
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
+
+    const listKey = (hostId = 'host-a', id = 'demo') => ['paseo-orbi', hostId, id, 'issues.list:1'];
+    const detailKey = ['paseo-orbi', 'host-a', 'demo', 'issues.get:4'];
+    const page = issuesList.output.parse(client.getQueryData(listKey()));
+    const detail = issuesGet.output.parse(client.getQueryData(detailKey));
+    const setPage = async (url: string, hostId = 'host-a', selectedRepo = repo, id = 'demo') => {
+      await act(async () => { client.setQueryData(listKey(hostId, id), issuesList.output.parse({ ...page, data: { ...page.data!, repo: selectedRepo, records: [{ ...page.data!.records[0], url }] } })); });
+      await settle();
+    };
+    // Both issue URLs and available PR identities must be exact canonical destinations.
+    const invalidUrls = (kind: string, number: number) => [
+      `https://github.com/Foreign/project/${kind}/${number}`, `https://user@github.com/${repo}/${kind}/${number}`,
+      `https://github.com/${repo}/${kind}/${number}?next=evil`, `https://github.com/${repo}/${kind}/${number}#fragment`,
+      `https://github.com/${repo}/${kind}/%${number}`, `https://github.com/${repo}/${kind}/0${number}`,
+      `https://github.com/${repo}/${kind}/${number + 1}`, `https://github.com/${repo}/${kind}/${number}/`,
+      `http://github.com/${repo}/${kind}/${number}`, `https://github.com:443/${repo}/${kind}/${number}`,
+      `https://github.com.evil/${repo}/${kind}/${number}`, 'javascript:alert(1)', '', 'not a URL',
+    ];
+    // Remove the detail override when checking list destinations.
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.onPress()); await settle(); await settle();
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Previous page' }).props.onPress()); await settle(); await settle();
+    for (const url of invalidUrls('issues', 1)) {
+      await setPage(url);
+      expect(links()).toHaveLength(0);
+      expect(JSON.stringify(renderer.toJSON())).toContain('Inspect issue 1');
+    }
+    await setPage(`https://github.com/${repo}/issues/1`);
+    await act(async () => { client.setQueryData(listKey(), { ...client.getQueryData<object>(listKey()), state: 'stale' }); }); await settle();
+    expect(link('issue', 1)).toBeDefined(); // retained evidence still belongs to selected repo
+    expect(JSON.stringify(renderer.toJSON())).toContain('stale');
+    expect(host.openExternalUrl).toHaveBeenCalledTimes(2);
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 1' }).props.onPress()); await settle(); await settle();
+    const currentDetailKey = ['paseo-orbi', 'host-a', 'demo', 'issues.get:1'];
+    for (const url of invalidUrls('pull', 42)) {
+      await act(async () => { client.setQueryData(currentDetailKey, issuesGet.output.parse({ ...detail, data: { ...detail.data!, reports: { ...detail.data!.reports, prIdentity: { status: 'available', number: 42, url, source: 'scene', runId: run } } } })); });
+      await settle();
+      expect(link('pull request', 42)).toBeUndefined();
+      expect(JSON.stringify(renderer.toJSON())).toContain('PR identity: ');
+    }
+    for (const status of ['missing', 'invalid', 'conflict'] as const) {
+      await act(async () => { client.setQueryData(currentDetailKey, issuesGet.output.parse({ ...detail, data: { ...detail.data!, reports: { ...detail.data!.reports, prIdentity: { status } } } })); });
+      await settle();
+      expect(link('pull request', 42)).toBeUndefined();
+      expect(JSON.stringify(renderer.toJSON())).toContain(status);
+    }
+    // Error handling consumes rejection without leaking raw diagnostics or adding reads.
+    const error = vi.spyOn(console, 'error'), warn = vi.spyOn(console, 'warn');
+    host.openExternalUrl.mockRejectedValueOnce(new Error('OPENER_SECRET'));
+    const beforeError = rpcCounts();
+    await act(async () => link('issue', 1).props.onPress());
+    const safeMessage = 'Could not open GitHub. Try again using the link.';
+    expect(JSON.stringify(renderer.toJSON())).toContain(safeMessage);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('OPENER_SECRET');
+    expect(error).not.toHaveBeenCalled(); expect(warn).not.toHaveBeenCalled();
+    expect(rpcCounts()).toEqual(beforeError);
+    await act(async () => link('issue', 1).props.onPress()); // deliberate retry
+    expect(host.openExternalUrl).toHaveBeenLastCalledWith(`https://github.com/${repo}/issues/1`);
+
+    const setCatalog = async (selectedRepo: string, status = 'available', hostId = 'host-a') => {
+      await act(async () => { client.setQueryData(['paseo-orbi', hostId, 'catalog', 'deployments.list'], { state: 'available', observedAt: new Date().toISOString(), lastSuccessfulAt: new Date().toISOString(), data: catalog(selectedRepo, 'demo', status), problems: [] }); });
+      await settle();
+    };
+    const oldControl = link('issue', 1);
+    await setCatalog('Other/project');
+    expect(links()).toHaveLength(0); // retained old evidence cannot navigate a different selected repo
+    expect(JSON.stringify(renderer.toJSON())).not.toContain(safeMessage);
+    for (const invalidRepo of ['owner/..', 'owner/.', 'owner/name/extra', 'owner%2fname/repo', 'owner/repo\n', '/repo', 'owner/', '-owner/repo', 'é/repo']) {
+      await setCatalog(invalidRepo); await setPage(`https://github.com/${invalidRepo}/issues/1`);
+      expect(links()).toHaveLength(0);
+    }
+    await setCatalog(repo, 'invalid_config');
+    expect(links()).toHaveLength(0);
+    await setCatalog(repo);
+    await setPage(`https://github.com/${repo}/issues/1`);
+    expect(link('issue', 1)).not.toBe(oldControl);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain(safeMessage);
+    // Reused deployment/issue IDs on a different host/repo: activate ONLY newly mounted control.
+    const originalHosts = host.hosts;
+    host.hosts = [{ serverId: 'host-b', label: 'Host B', status: 'online' }];
+    cleanups.push(() => { host.hosts = originalHosts; });
+    host.readCatalog.mockResolvedValue(catalog('Other/project'));
+    await rerender({ ...screenProps, host: { ...screenProps.host, id: 'host-b' } });
+    expect(links()).toHaveLength(0);
+    await setPage('https://github.com/Other/project/issues/1', 'host-b', 'Other/project');
+    const newControl = link('issue', 1, 'Other/project');
+    expect(newControl).toBeDefined(); expect(newControl).not.toBe(oldControl);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain(safeMessage);
+    const beforeNewOpen = rpcCounts();
+    await act(async () => newControl.props.onPress());
+    expect(host.openExternalUrl).toHaveBeenLastCalledWith('https://github.com/Other/project/issues/1');
+    expect(rpcCounts()).toEqual(beforeNewOpen);
+    expect(host.openExternalUrl).toHaveBeenCalledTimes(5); // no render/selection/error-handler navigation
+    // SDK does not revoke retained callbacks or cancel already-dispatched opens; no such claim here.
+    for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#eee');
+  });
   it('opens safe selected repository, groups lifecycle evidence, paginates and inspects dependency/report uncertainty', async () => {
     vi.useFakeTimers();
     const f = fakeReader();
