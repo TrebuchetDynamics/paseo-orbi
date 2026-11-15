@@ -1,4 +1,5 @@
 import { readFile, writeFile, readdir, realpath } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, join, isAbsolute, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,6 +84,7 @@ export async function validate(directory, manifest) {
   let required = [];
   if (manifest.evidenceKind === 'browser') {
     required = matrix.map(c => c.id);
+    require(manifest.executionStatus === 'passed', 'whole browser run must pass, including setup/teardown');
     for (const test of requiredTests) require(manifest.tests?.some(t => t.browser === test.browser && t.title === test.title && t.status === 'pass'), `mandatory test missing/failed: ${test.browser}: ${test.title}`);
     require(manifest.daemonVersion === '0.15.4' && manifest.appVersion === '0.15.4' && manifest.playwrightVersion === '1.65.1' && manifest.nodeVersion === 'v22.19.0', 'pinned browser/runtime versions required');
     require(['chromium', 'firefox', 'webkit'].every(browser => manifest.tests?.some(t => t.browser === browser && t.status === 'pass')), 'three-engine functional smoke required');
@@ -137,12 +139,26 @@ export async function validate(directory, manifest) {
 // Playwright reporter: retains only sanitized test outcomes, never raw errors/traces.
 export default class EvidenceReporter {
   tests = [];
+  output;
+  ownedRoot;
+  onBegin() {
+    if (process.argv.includes('--list')) return;
+    // Capture the successful global setup lease before teardown removes it.
+    // An approval/startup failure must not overwrite an existing output path.
+    try {
+      const lease = JSON.parse(readFileSync(process.env.PASEO_E2E_LEASE, 'utf8'));
+      if (isAbsolute(lease.input.output) && lease.input.output === process.env.PASEO_E2E_OUTPUT) {
+        this.output = lease.input.output; this.ownedRoot = lease.root;
+      }
+    } catch { /* no successful owned setup */ }
+  }
   async saveFailure(message) {
-    const output = process.env.PASEO_E2E_OUTPUT;
+    if (process.argv.includes('--list')) return;
+    const output = this.output;
     if (!output) return;
     try {
       let safe = message.split(process.cwd()).join('[CHECKOUT]');
-      if (process.env.PASEO_E2E_LEASE) { const lease = JSON.parse(await readFile(process.env.PASEO_E2E_LEASE, 'utf8')); safe = safe.split(lease.root).join('[OWNED]'); }
+      if (this.ownedRoot) safe = safe.split(this.ownedRoot).join('[OWNED]');
       safe = safe.replace(/(?:[A-Z_]*(?:SECRET|TOKEN|PROMPT|REASONING|PRIVATE)[A-Z_]*CANARY|gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|Bearer\s+\S+|https?:\/\/[^\s/]+:[^\s/@]+@|[?&](?:token|password|key)=[^\s&]+|\/home\/[^\s:]+|\/Users\/[^\s:]+)/gi, '[REDACTED]');
       await writeFile(join(output, 'test-failure.log'), safe.slice(-262144));
     } catch { /* missing approval/output must never create runtime state */ }
@@ -153,8 +169,8 @@ export default class EvidenceReporter {
     if (result.errors.length) await this.saveFailure(result.errors.map(e => e.message ?? 'Test failed').join('\n'));
   }
   async onEnd(result) {
-    const output = process.env.PASEO_E2E_OUTPUT;
-    if (!output || !isAbsolute(output)) return;
+    const output = this.output;
+    if (!output) return;
     try {
       let receipt;
       try { receipt = JSON.parse(await readFile(join(output, 'receipt.json'), 'utf8')); }

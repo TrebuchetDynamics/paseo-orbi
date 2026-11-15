@@ -7,10 +7,10 @@ for (const view of views) {
     const host = lease.hosts[0]; await state(host, 'available'); await configure(host, 'available');
     await page.goto(host.url); await navigate(page, view); await select(page, view);
     await assertState(page, view, 'available');
-    const name = view === 'fleet' ? 'Active work for Demo' : view === 'issues' ? 'Inspect issue 42' : view === 'runs' ? 'Inspect run 42 84360d31' : 'Inspect blocker 42';
+    const name = view === 'fleet' ? 'Active work for Demo' : view === 'issues' ? 'Inspect issue 42' : view === 'runs' ? 'Inspect run 42 84360d31' : 'Inspect blocker 43';
     const control = page.getByRole('button', { name, exact: true });
     await control.focus(); await page.keyboard.press('Enter');
-    await expect(page.getByText(view === 'fleet' ? /Issues — select a repository/ : view === 'issues' ? /Dependencies: no open blockers observed/ : view === 'runs' ? /Detail evidence — loaded only on selection/ : /Artifact metadata only/).first()).toBeVisible();
+    await expect(page.getByText(view === 'fleet' ? /Page 1\./ : view === 'issues' ? /Dependencies: no open blockers observed/ : view === 'runs' ? /Detail evidence — loaded only on selection/ : /Artifact metadata only/).first()).toBeVisible();
     await page.setViewportSize({ width: 375, height: 667 });
     const end = page.getByRole('button', { name: 'Refresh', exact: true }).last();
     await end.scrollIntoViewIfNeeded(); await expect(end).toBeInViewport();
@@ -50,7 +50,8 @@ test('refresh coalesces, polls at 30 seconds and selection-only detail ages at 6
   await page.waitForTimeout(31000);
   expect(Date.now() - start).toBeGreaterThanOrEqual(30000); expect(await count()).toBeGreaterThan(before);
   await state(host, 'late');
-  const control = page.getByRole('button', { name: 'Refresh', exact: true }).last();
+  // The outer catalog Refresh is last; exercise the Fleet telemetry request itself.
+  const control = page.getByRole('button', { name: 'Refresh', exact: true }).first();
   await control.click(); await expect(control).toBeDisabled();
   // Disabled UI does not issue a second request; every unit is read once per refresh.
   const during = await count(); await page.waitForTimeout(200);
@@ -97,12 +98,17 @@ test('two hosts with identical labels/IDs: selected detail/page, late result, no
   await expect(page.getByText(/Reported run: 84360d31/).first()).toBeVisible();
   await page.getByRole('button', { name: 'Next page', exact: true }).click();
   await expect(page.getByText(/Page 2\./)).toBeVisible();
-  await state(a, 'late'); await page.getByRole('button', { name: 'Inspect issue 62', exact: true }).click();
+  await state(a, 'late'); await page.getByRole('button', { name: 'Inspect issue 142', exact: true }).click();
   await page.getByTestId('plugin-host-filter-trigger').click();
   const choices = page.getByRole('button', { name: 'Qualification', exact: true }); await expect(choices).toHaveCount(2); await choices.nth(secondaryIndex).click();
   await expect(page.getByText(/host-b synthetic issue 42/).first()).toBeVisible();
   await expect(page.getByText(/Page 2\./)).toHaveCount(0); // local selection identity, not just cache keys
-  await page.waitForTimeout(2200);
+  // A detail request reads issue, comments, then dependencies sequentially. Wait
+  // for its final delayed stand-in to complete, not merely the first 1.8s read.
+  await expect.poll(async () => (await readFile(a.calls, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).some(call =>
+    call.scenario === 'late' && call.phase === 'completed' && call.args.at(-1) === 'repos/Example/project/issues/142/dependencies/blocked_by?per_page=100&page=1'
+  )).toBe(true);
+  await page.waitForTimeout(1000); // permit the real RPC/React delivery after the last process exits
   await expect(page.getByText(/host-a synthetic issue/)).toHaveCount(0);
   const beforeA = (await readFile(a.calls, 'utf8')).length;
   network.blocked.add(b.port);

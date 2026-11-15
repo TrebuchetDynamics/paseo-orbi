@@ -2,11 +2,17 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, writeFile, rm, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ConfigRepository } from '../server/config';
+import { GitHubReader } from '../server/github';
+import { RunsReader } from '../server/runs';
+import { BlockersReader } from '../server/blockers';
+import { ReadPorts } from '../server/read-ports';
+import { readFleet } from '../server/fleet';
 import { deflateSync } from 'node:zlib';
-import { approveLaunch, isolation, environment, stopOwned, boundedWait, sanitize, checkFreshPath, requireListenerOwnership, start, type Identity } from './e2e/harness';
+import { approveLaunch, isolation, environment, stopOwned, boundedWait, sanitize, checkFreshPath, requireListenerOwnership, start, prepareTelemetry, type Identity } from './e2e/harness';
 const evidenceUrl = new URL('./e2e/evidence.mjs', import.meta.url);
 const toolUrl = new URL('./e2e/fixtures/tool.mjs', import.meta.url);
-const { matrix, requiredTests, validate, sha256, provenance, pngSize } = await import(evidenceUrl.href);
+const { default: EvidenceReporter, matrix, requiredTests, validate, sha256, provenance, pngSize } = await import(evidenceUrl.href);
 const { operation } = await import(toolUrl.href);
 const approved = { PASEO_E2E_ENABLE_TRUSTED_PLUGINS: '1', PASEO_E2E_APPROVAL_URL: 'https://github.com/TrebuchetDynamics/paseo-orbi/issues/12#issuecomment-123', PASEO_E2E_CANDIDATE_REPO: '/candidate', PASEO_E2E_CANDIDATE_SHA: 'a'.repeat(40), PASEO_E2E_OUTPUT: '/owned/.artifacts/paseo-qualification/84360d31' };
 
@@ -72,7 +78,7 @@ async function complete(kind = 'browser') {
   const root = await mkdtemp(join(tmpdir(), 'orbi-evidence-unit-')); roots.push(root);
   const fixture = (await provenance())[0];
   const manifest: any = { evidenceKind: kind, status: 'pass', pluginSha: 'a'.repeat(40), dirty: false, runId: '84360d31', observedAt: '2026-11-15T00:00:00Z', approvalUrl: approved.PASEO_E2E_APPROVAL_URL,
-    artifactUrl: 'https://github.com/TrebuchetDynamics/paseo-orbi/actions/runs/123/artifacts/456', expiresAt: '2026-12-15T00:00:00Z', cleanup: { status: 'pass' }, daemonVersion: '0.15.4', appVersion: '0.15.4', playwrightVersion: '1.65.1', nodeVersion: 'v22.19.0',
+    artifactUrl: 'https://github.com/TrebuchetDynamics/paseo-orbi/actions/runs/123/artifacts/456', expiresAt: '2026-12-15T00:00:00Z', cleanup: { status: 'pass' }, daemonVersion: '0.15.4', appVersion: '0.15.4', playwrightVersion: '1.65.1', nodeVersion: 'v22.19.0', executionStatus: 'passed',
     tests: requiredTests.map((t: any) => ({ ...t, id: `${t.browser}:${t.title}`, status: 'pass' })), screenshots: [] };
   let cases = matrix;
   if (kind === 'native') {
@@ -98,7 +104,7 @@ it('evidence manifest requires exactly the 42 browser matrix cases and all funct
     (m: any) => { m.screenshots[0].sha256 = '0'.repeat(64); }, (m: any) => { m.screenshots[0].pixelWidth++; },
     (m: any) => { m.screenshots[0].fixture.sha256 = '0'.repeat(64); }, (m: any) => { m.screenshots[0].pluginSha = 'b'.repeat(40); },
     (m: any) => { m.screenshots[0].inspection = null; }, (m: any) => { m.screenshots[0].path = '../outside.png'; },
-    (m: any) => { m.dirty = true; }, (m: any) => { m.cleanup.status = 'fail'; }, (m: any) => { m.appVersion = 'latest'; },
+    (m: any) => { m.executionStatus = 'failed'; }, (m: any) => { m.dirty = true; }, (m: any) => { m.cleanup.status = 'fail'; }, (m: any) => { m.appVersion = 'latest'; },
   ]) { const changed = structuredClone(manifest); mutate(changed); expect((await validate(root, changed)).status).toBe('partial'); }
 });
 it('rejects absent/corrupt PNG, symlink, secret canaries and incomplete success claims', async () => {
@@ -117,4 +123,90 @@ it('native evidence preserves all platform slots and never applies or waives the
     (m: any) => { m.targets[0].status = 'fail'; }, (m: any) => { m.screenshots.pop(); }, (m: any) => { m.screenshots[0].viewport = { width: 375, height: 667 }; },
     (m: any) => { m.targets[0].osVersion = 'unknown'; }, (m: any) => { m.screenshots[0].targetId = 'invented'; },
   ]) { const changed = structuredClone(manifest); mutate(changed); expect((await validate(root, changed)).status).toBe('partial'); }
+});
+
+
+it('listing reporter never overwrites existing evidence even when output is supplied', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orbi-list-unit-')); roots.push(root);
+  await writeFile(join(root, 'manifest.json'), 'existing evidence');
+  await writeFile(join(root, 'cleanup.json'), '{"status":"pass"}');
+  vi.stubEnv('PASEO_E2E_OUTPUT', root);
+  try {
+    const reporter = new EvidenceReporter(); reporter.onBegin();
+    await reporter.onError({ message: 'Owner approval required' });
+    await reporter.onEnd({ status: 'failed' });
+    expect(await readFile(join(root, 'manifest.json'), 'utf8')).toBe('existing evidence');
+    await expect(readFile(join(root, 'test-failure.log'))).rejects.toThrow();
+  } finally { vi.unstubAllEnvs(); }
+});
+
+it('reporter retains its owned output after teardown deletes the lease', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orbi-reporter-unit-')); roots.push(root);
+  const lease = join(root, 'lease.json');
+  await writeFile(lease, JSON.stringify({ root: '/owned-runtime', input: { output: root } }));
+  await writeFile(join(root, 'cleanup.json'), '{"status":"pass"}');
+  vi.stubEnv('PASEO_E2E_OUTPUT', root); vi.stubEnv('PASEO_E2E_LEASE', lease);
+  try {
+    const reporter = new EvidenceReporter(); reporter.onBegin();
+    await rm(lease);
+    await reporter.onError({ message: 'Owned process /owned-runtime failed' });
+    await reporter.onEnd({ status: 'failed' });
+    expect(await readFile(join(root, 'test-failure.log'), 'utf8')).toBe('Owned process [OWNED] failed');
+    expect(JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'))).toMatchObject({ status: 'partial', executionStatus: 'failed', cleanup: { status: 'pass' } });
+  } finally { vi.unstubAllEnvs(); }
+});
+
+it('generated browser telemetry reaches all real adapters with successful/empty/partial/unavailable data and real pagination', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orbi-adapters-unit-')); roots.push(root);
+  for (const profile of ['release', 'installed'] as const) {
+    const f = await prepareTelemetry(root, 'host-a', profile);
+    const repository = await ConfigRepository.load(f.data.authorization);
+    const ports = new ReadPorts(repository);
+    const processPort = vi.spyOn(ports, 'process').mockImplementation(async (_id, op) => {
+      let name: string, args: string[];
+      if (op.kind === 'systemctl-show') {
+        name = 'systemctl'; args = ['--user', 'show', `orbi-demo@${op.slot}.${op.unit}`, '--property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic', '--no-pager'];
+      } else if (op.kind === 'journalctl') {
+        name = 'journalctl'; args = ['--user', '-u', `orbi-demo@${op.slot}.service`, '--no-pager', '--since', '-1 hour', '-n', '200', '-o', 'json'];
+      } else {
+        const endpoint = op.resource === 'issues' ? `issues?state=${op.state}&sort=updated&direction=desc&per_page=100&page=${op.page}`
+          : op.resource === 'comments' ? `issues/${op.issue}/comments?per_page=100&page=${op.page}`
+          : op.resource === 'dependencies' ? `issues/${op.issue}/dependencies/blocked_by?per_page=100&page=${op.page}`
+          : op.resource === 'issue' ? `issues/${op.issue}` : op.resource === 'pull' ? `pulls/${op.pr}` : op.resource === 'checks' ? `commits/${op.sha}/check-runs?per_page=100&page=${op.page}` : '';
+        name = 'gh'; args = ['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', `repos/Example/project/${endpoint}`];
+      }
+      const result = operation(name, args, JSON.parse(await readFile(f.state, 'utf8')));
+      expect(result.allowed).toBe(true);
+      if (result.code && !result.body.startsWith('HTTP/')) throw new Error('fixture unavailable');
+      return result.body;
+    });
+    try {
+      for (const scenario of ['available', 'empty', 'partial', 'unavailable']) {
+        await f.setState(scenario);
+        // Fresh adapters, like the scenario's plugin reload: no borrowed success cache.
+        const github = new GitHubReader(repository, ports), runs = new RunsReader(repository, ports, github), blockers = new BlockersReader(repository, github, ports);
+        const fleet = await readFleet(repository, ports, { deploymentId: 'demo' });
+        const issues = scenario === 'partial' ? await github.getIssue('demo', 42) : await github.listIssues('demo', 1);
+        const runList = await runs.list({ deploymentId: 'demo' }), blockerList = await blockers.list({ deploymentId: 'demo', page: 1 });
+        const expected = scenario === 'empty' ? 'available' : scenario;
+        for (const observation of [fleet, issues, runList, blockerList]) expect(observation.state, `${profile}/${scenario}`).toBe(expected);
+        if (scenario === 'available') {
+          expect(fleet.data?.health?.recentRuns).toHaveLength(1);
+          expect((await github.listIssues('demo', 1)).data?.hasNextPage).toBe(true);
+          expect((await github.listIssues('demo', 2)).data?.records[0].number).toBe(142);
+          expect((await github.getIssue('demo', 142)).data?.issue.number).toBe(142);
+          expect(runList.data?.map(r => [r.issue, r.runId])).toEqual([[42, '84360d31']]);
+          const detail = await runs.read({ deploymentId: 'demo', issue: 42, runId: '84360d31' });
+          expect(detail.problems).toEqual([{ source: 'journal', code: 'incomplete' }]);
+          expect(detail.state).toBe('partial'); expect(detail.data?.events).toHaveLength(1);
+          expect(blockerList.data?.records[0].issue.number).toBe(43);
+          expect((await blockers.read({ deploymentId: 'demo', issue: 43 })).state).toBe('available');
+        }
+        if (scenario === 'empty') {
+          expect(fleet.data?.health?.recentRuns).toEqual([]);
+          expect(runList.data).toEqual([]); expect(blockerList.data?.records).toEqual([]);
+        }
+      }
+    } finally { processPort.mockRestore(); ports.dispose(); }
+  }
 });

@@ -32,7 +32,7 @@ for (const c of matrix) test(`screenshot ${c.id}`, async ({ page, browser, lease
   await capture(page, lease, browser.version(), c);
   // Full-page PNG cannot expand nested RN ScrollViews. Also retain reachable detail/end images.
   if (c.scenario === 'available' && c.viewport.width === 375) {
-    const control = page.getByRole('button', { name: c.view === 'fleet' ? 'Active work for Demo' : c.view === 'issues' ? 'Inspect issue 42' : c.view === 'runs' ? 'Inspect run 42 84360d31' : 'Inspect blocker 42', exact: true });
+    const control = page.getByRole('button', { name: c.view === 'fleet' ? 'Active work for Demo' : c.view === 'issues' ? 'Inspect issue 42' : c.view === 'runs' ? 'Inspect run 42 84360d31' : 'Inspect blocker 43', exact: true });
     await control.scrollIntoViewIfNeeded(); await expect(control).toBeVisible();
     if (c.view !== 'fleet') { await control.focus(); await page.keyboard.press('Enter'); }
     const end = page.getByRole('button', { name: 'Refresh', exact: true }).last();

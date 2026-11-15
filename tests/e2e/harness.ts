@@ -80,12 +80,30 @@ export async function stopOwned(owned: Identity[], seams: { table: () => Promise
 }
 export function sanitize(text: string, roots: string[] = []) {
   let result = text.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|Bearer\s+\S+|[A-Z_]*(?:SECRET|TOKEN|PROMPT|REASONING|PRIVATE)[A-Z_]*CANARY)/gi, '[REDACTED]')
-    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1[REDACTED]@').replace(/[?&](?:token|password|key)=[^\s&]+/gi, '?[REDACTED]');
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1[REDACTED]@').replace(/[?&](?:token|password|key)=[^\s&]+/gi, '?[REDACTED]').replace(/\/(?:home|Users)\/[^/\s]+/g, '[PROFILE]');
   for (const root of roots.filter(Boolean).sort((a, b) => b.length - a.length)) result = result.split(root).join('[OWNED]');
   return result;
 }
 export async function command(file: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, timeout = 60000) {
   return (await exec(file, args, { env, cwd, timeout, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' })).stdout;
+}
+export async function prepareTelemetry(root: string, alias: string, profile: 'release' | 'installed') {
+  const data = await fixture(profile, root); // existing pinned source data, no engine execution
+  const registry = join(root, `${alias}-reads.jsonl`), calls = join(root, `${alias}-calls.jsonl`), state = join(root, `${alias}-state.json`);
+  await writeFile(registry, ''); await writeFile(calls, '');
+  const records = JSON.parse(await readFile(new URL('../fixtures/runs/records.json', import.meta.url), 'utf8'));
+  const guidance = JSON.parse(await readFile(new URL('../fixtures/blockers/guidance.json', import.meta.url), 'utf8'));
+  const scene = join(data.repoDir, '.worktrees/orbi-Example-project-issue-42-84360d31');
+  await mkdir(join(scene, '.orbi'), { recursive: true }); await mkdir(join(scene, '.pi-session'));
+  await writeFile(join(scene, '.orbi/run-state.json'), JSON.stringify({ repo: 'Example/project', issue: 42, run_id: '84360d31', branch: 'orbi/Example-project-issue-42', created_at: new Date().toISOString() }));
+  await writeFile(join(scene, '.pi-session/one.jsonl'), [records.session, records.message].map(r => JSON.stringify(r)).join('\n') + '\n');
+  const setState = async (scenario: string) => {
+    await writeFile(state, JSON.stringify({ scenario, alias, records, guidance }));
+    await mkdir(join(data.repoDir, '.orbi'), { recursive: true });
+    await writeFile(join(data.repoDir, '.orbi/health.json'), ['unavailable', 'partial', 'stale'].includes(scenario) ? '{}' : JSON.stringify({ runs: scenario === 'empty' ? [] : [{ repo: 'Example/project', issue: 42, run_id: '84360d31', outcome: 'pr_opened', fingerprint: 'synthetic', ts: Date.now() / 1000 }], last_pickup_ts: Date.now() / 1000, alerted: [] }));
+  };
+  await setState('available');
+  return { data, registry, calls, state, setState };
 }
 export type Host = Awaited<ReturnType<typeof makeHost>>;
 async function makeHost(root: string, alias: string, profile: 'release' | 'installed', candidate: string, cli: string, mode: 'available' | 'unconfigured') {
@@ -94,9 +112,7 @@ async function makeHost(root: string, alias: string, profile: 'release' | 'insta
   await symlink(process.execPath, join(bin, 'node'));
   // npm's absolute script is used for preparation; only node and strict fixture tools are exposed to the daemon.
   const npm = await realpath(join(dirname(process.execPath), 'npm')); await symlink(npm, join(bin, 'npm'));
-  const data = await fixture(profile, root); // existing pinned source data, no engine execution
-  const registry = join(root, `${alias}-reads.jsonl`), calls = join(root, `${alias}-calls.jsonl`), state = join(root, `${alias}-state.json`);
-  await writeFile(registry, ''); await writeFile(calls, '');
+  const { data, registry, calls, state, setState } = await prepareTelemetry(root, alias, profile);
   const standin = await readFile(new URL('./fixtures/tool.mjs', import.meta.url), 'utf8');
   for (const name of ['gh', 'systemctl', 'journalctl']) { const path = join(bin, name); await writeFile(path, `#!${process.execPath}\n${standin}`); await chmod(path, 0o700); }
   const port = await reservePort();
@@ -108,18 +124,6 @@ async function makeHost(root: string, alias: string, profile: 'release' | 'insta
   if (mode === 'unconfigured') delete env.PASEO_ORBI_CONFIG;
   for (const path of [env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_CACHE_HOME]) await mkdir(path!, { recursive: true });
   await writeFile(join(home, 'config.json'), JSON.stringify({ version: 1, daemon: { listen: env.PASEO_LISTEN, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false }, browserTools: { enabled: false }, usage: { enabled: false }, enableTerminalAgentHooks: false }, agents: { resumeOnStartup: false, metadataGeneration: { providers: [] } }, features: { webUi: { enabled: true }, dictation: { enabled: false }, voiceMode: { enabled: false } }, pluginsEnabled: true }));
-  const records = JSON.parse(await readFile(new URL('../fixtures/runs/records.json', import.meta.url), 'utf8'));
-  const guidance = JSON.parse(await readFile(new URL('../fixtures/blockers/guidance.json', import.meta.url), 'utf8'));
-  const scene = join(data.repoDir, '.worktrees/orbi-Example-project-issue-42-84360d31');
-  await mkdir(join(scene, '.orbi'), { recursive: true }); await mkdir(join(scene, '.pi-session'));
-  await writeFile(join(scene, '.orbi/run-state.json'), JSON.stringify({ repo: 'Example/project', issue: 42, run_id: '84360d31', branch: 'orbi/Example-project-issue-42', created_at: new Date().toISOString() }));
-  await writeFile(join(scene, '.pi-session/one.jsonl'), [records.session, records.message].map(r => JSON.stringify(r)).join('\n') + '\n');
-  const setState = async (scenario: string) => {
-    await writeFile(state, JSON.stringify({ scenario, alias, records, guidance }));
-    await mkdir(join(data.repoDir, '.orbi'), { recursive: true });
-    await writeFile(join(data.repoDir, '.orbi/health.json'), scenario === 'unavailable' || scenario === 'partial' ? '{}' : JSON.stringify({ runs: [], last_pickup_ts: Date.now() / 1000, alerted: [] }));
-  };
-  await setState('available');
   await port.release();
   if (!(await portClosed(port.port))) throw new Error('Occupied/unowned port; refusing launch');
   const startup = { deadline: Date.now() + 60000 };
@@ -136,12 +140,6 @@ async function makeHost(root: string, alias: string, profile: 'release' | 'insta
   };
   const handle = { alias, profile, home, state, cli, candidate, startup, port: port.port, url: `http://127.0.0.1:${port.port}`, host, data, env, registry, calls, initial, setState, cliCall,
     log: () => sanitize(log, [root, data.root]),
-    async configure(kind: 'available' | 'unconfigured' | 'invalid' | 'rejected') {
-      if (kind === 'unconfigured') await rm(data.authorization, { force: true });
-      else if (kind === 'invalid') await writeFile(data.authorization, '{}');
-      else await data.save(kind === 'rejected' ? [{ ...data.entry, adapter: 'unknown-source-profile' }] : [data.entry]);
-      await cliCall('reload', 'paseo-orbi');
-    },
   };
   return handle;
   } catch (error) { await port.release().catch(() => undefined); throw error; }
@@ -149,10 +147,11 @@ async function makeHost(root: string, alias: string, profile: 'release' | 'insta
 export function requireListenerOwnership(occupied: boolean, owned: boolean) {
   if (occupied && !owned) throw new Error('Occupied/unowned port; refusing host commands');
 }
-async function assertListenerOwned(host: { initial: Identity; port: number }) {
+export async function assertListenerOwned(host: { initial: Identity; port: number }) {
   const tcp = (await readFile('/proc/net/tcp', 'utf8')).trim().split('\n').slice(1).map(line => line.trim().split(/\s+/));
   const listeners = tcp.filter(row => row[1] === `0100007F:${host.port.toString(16).toUpperCase().padStart(4, '0')}` && row[3] === '0A');
   const table = await processTable(), owned = [host.initial], inodes = new Set<string>();
+  requireListenerOwnership(true, table.some(p => same(p, host.initial)));
   for (let changed = true; changed;) { changed = false; for (const p of table) if (!owned.some(q => same(p, q)) && owned.some(q => q.pid === p.ppid && table.some(t => same(t, q)))) { owned.push(p); changed = true; } }
   for (const p of owned) {
     try { for (const fd of await readdir(`/proc/${p.pid}/fd`)) { try { inodes.add(await readlink(`/proc/${p.pid}/fd/${fd}`)); } catch { /* closed fd */ } } } catch { /* exited process */ }
@@ -255,7 +254,7 @@ export default async function globalSetup() {
   const running = await start();
   const lease = join(running.root, 'lease.json');
   await writeFile(lease, JSON.stringify({ root: running.root, input: running.input, hosts: running.hosts.map(h => ({
-    alias: h.alias, profile: h.profile, home: h.home, state: h.state, cli: h.cli, candidate: h.candidate, port: h.port, url: h.url, host: h.host, env: h.env,
+    initial: h.initial, alias: h.alias, profile: h.profile, home: h.home, state: h.state, cli: h.cli, candidate: h.candidate, port: h.port, url: h.url, host: h.host, env: h.env,
     registry: h.registry, calls: h.calls, data: { authorization: h.data.authorization, entry: h.data.entry },
   })) }));
   process.env.PASEO_E2E_LEASE = lease;

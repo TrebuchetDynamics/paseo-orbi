@@ -1,18 +1,21 @@
 import { test as base, expect, type Page, type WebSocketRoute } from '@playwright/test';
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { command, environment, sanitize } from '../harness';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { command, environment, sanitize, assertListenerOwned, type Identity } from '../harness';
 import { provenance, pngSize, sha256 } from '../evidence.mjs';
 
-type LeaseHost = { alias: string; profile: string; port: number; url: string; host: string; home: string; state: string; calls: string; env: NodeJS.ProcessEnv; cli: string; candidate: string; data: { authorization: string; entry: unknown } };
+type LeaseHost = { initial: Identity; alias: string; profile: string; port: number; url: string; host: string; home: string; state: string; calls: string; env: NodeJS.ProcessEnv; cli: string; candidate: string; data: { authorization: string; entry: unknown } };
 type Lease = { root: string; input: { output: string; sha: string }; hosts: LeaseHost[] };
 export async function state(host: LeaseHost, scenario: string) {
   const previous = JSON.parse(await readFile(host.state, 'utf8'));
   await writeFile(host.state, JSON.stringify({ ...previous, scenario }));
   const entry = host.data.entry as { repoDir: string };
-  await writeFile(join(entry.repoDir, '.orbi/health.json'), ['partial', 'unavailable', 'stale'].includes(scenario) ? '{}' : JSON.stringify({ runs: [], last_pickup_ts: Date.now() / 1000, alerted: [] }));
+  await writeFile(join(entry.repoDir, '.orbi/health.json'), ['partial', 'unavailable', 'stale'].includes(scenario) ? '{}' : JSON.stringify({ runs: scenario === 'empty' ? [] : [{ repo: 'Example/project', issue: 42, run_id: '84360d31', outcome: 'pr_opened', fingerprint: 'synthetic', ts: Date.now() / 1000 }], last_pickup_ts: Date.now() / 1000, alerted: [] }));
 }
-export const cli = (host: LeaseHost, ...args: string[]) => command(process.execPath, [host.cli, '--host', host.host, 'plugin', ...args], host.env, host.candidate, 10000);
+export const cli = async (host: LeaseHost, ...args: string[]) => {
+  await assertListenerOwned(host);
+  return command(process.execPath, [host.cli, '--host', host.host, 'plugin', ...args], host.env, host.candidate, 10000);
+};
 export async function configure(host: LeaseHost, kind: string) {
   // Missing path is represented by a nonexistent authorization path only via removing generated data.
   const { rm } = await import('node:fs/promises');
@@ -30,7 +33,12 @@ export const test = base.extend<{ lease: Lease; errors: string[]; network: { blo
   browser: async ({ playwright, browserName }, use) => {
     const lease: Lease = JSON.parse(await readFile(process.env.PASEO_E2E_LEASE!, 'utf8'));
     const type = playwright[browserName];
-    const browser = await type.launch({ executablePath: type.executablePath(), env: environment(lease.root, join(lease.root, 'host-a-bin'), join(lease.root, 'browser-home')) as Record<string, string> });
+    const env = environment(lease.root, join(lease.root, 'host-a-bin'), join(lease.root, 'browser-home'));
+    // WebKit's pinned pw_run.sh needs system utilities; these are browser-only,
+    // never added to the daemon's strict telemetry PATH. HOME/caches stay owned.
+    env.PATH = `${dirname(process.execPath)}:/usr/bin:/bin`;
+    for (const path of [env.HOME, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_CACHE_HOME]) await mkdir(path!, { recursive: true });
+    const browser = await type.launch({ executablePath: type.executablePath(), env: env as Record<string, string> });
     try { await use(browser); } finally { await browser.close(); }
   },
   context: async ({ browser, lease, network }, use) => {
@@ -86,10 +94,16 @@ export async function assertState(page: Page, view: string, scenario: string) {
     await expect(page.getByText(scenario === 'unconfigured' ? /Unconfigured: ask the operator/ : /unsupported_source_profile/).first()).toBeVisible(); return;
   }
   const status = scenario === 'stale' ? 'stale' : scenario === 'unavailable' ? 'unavailable' : scenario === 'partial' ? 'partial' : 'available';
-  await expect(page.getByLabel(`Observation status: ${status}`, { exact: true }).last()).toBeVisible({ timeout: 65000 });
-  await expect(page.getByText(/Observed: .*Last success:/).last()).toBeVisible();
+  // Index 0 is the authorization catalog, index 1 the actual view data.
+  // Partial Issues intentionally selects detail (index 2); journal details may
+  // legitimately be partial while their successful Runs list remains available.
+  const index = view === 'issues' && scenario === 'partial' ? 2 : 1;
+  const observation = page.getByLabel(/^Observation status: /).nth(index);
+  await expect(observation).toHaveAttribute('aria-label', `Observation status: ${status}`, { timeout: 65000 });
+  await expect(observation).toBeVisible();
+  await expect(page.getByText(/Observed: .*Last success:/).nth(index)).toBeVisible();
   if (scenario === 'empty') await expect(page.getByText(view === 'fleet' ? 'No recorded runs in the validated health history.' : view === 'issues' ? 'No issues on this observed page.' : view === 'runs' ? 'No attributed runs in this observed scope.' : 'No blockers in the complete observed scope.', { exact: true })).toBeVisible();
-  if (scenario === 'available') await expect(page.getByText(view === 'fleet' ? /Configured capacity: 2/ : view === 'runs' ? /run 84360d31/ : /host-a synthetic issue 42/).first()).toBeVisible();
+  if (scenario === 'available') await expect(page.getByText(view === 'fleet' ? /Configured capacity: 2/ : view === 'runs' ? /run 84360d31/ : new RegExp(`host-a synthetic issue ${view === 'blockers' ? 43 : 42}`)).first()).toBeVisible();
 }
 export async function capture(page: Page, lease: Lease, browserVersion: string, c: { id: string; view: string; theme: string; scenario: string; viewport: { width: number; height: number }; supplemental?: boolean }) {
   await assertState(page, c.view, c.scenario);
