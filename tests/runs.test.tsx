@@ -118,8 +118,13 @@ it('bounded_private_event_projection', async () => {
   expect((await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' })).data?.summary.sessions[0]).toMatchObject({ sessionId: 'session-new', kind: 'read' });
   await writeFile(path, message); // no complete session identity
   expect((await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' })).data?.summary.sessions[0]).toMatchObject({ sessionId: null, state: 'unavailable', at: null, kind: null });
-  await writeFile(path, header + '{bad}\n' + message);
-  expect((await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' })).data?.summary.sessions[0]).toMatchObject({ state: 'unavailable', at: null, kind: null });
+  const malformedRecords = ['{bad}', '42', '[]', '{}',
+    ...[[], {}, { role: 42 }, { role: 'assistant', content: [null] }, { role: 'assistant', content: [{ type: 'toolCall' }] }]
+      .map(message => JSON.stringify({ type: 'message', message }))];
+  for (const malformed of malformedRecords) {
+    await writeFile(path, header + malformed + '\n' + message);
+    expect((await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' })).data?.summary.sessions[0]).toMatchObject({ state: 'unavailable', at: null, kind: null, problems: expect.arrayContaining([{ source: 'filesystem', code: 'invalid_response' }]) });
+  }
   await writeFile(path, header + JSON.stringify({ type: 'message', prompt: 'x'.repeat(70000) }) + '\n' + message);
   expect((await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' })).data?.summary.sessions[0]?.problems.length).toBeGreaterThan(0);
   const scope = { repo, issue: 42, runId: '22222222', unit: 'orbi-demo@1.service', retained: true };
@@ -252,6 +257,22 @@ it('checks_and_selection_lifecycle', async () => {
   expect(visible()).toContain('stale_head'); expect(visible()).toContain('head.sha');
   await act(async () => { await vi.advanceTimersByTimeAsync(30001); });
   expect(host.readRuns.mock.calls.length).toBeGreaterThan(1); expect(host.readRun).toHaveBeenCalledTimes(1);
+  // Detail does not silently refresh when the app/host resumes after 30s.
+  await act(async () => { for (const listener of host.listeners) listener('background'); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(31000); });
+  await act(async () => { for (const listener of host.listeners) listener('active'); });
+  await settle(); await settle();
+  expect(host.readRun).toHaveBeenCalledTimes(1);
+  host.hosts[0].status = 'offline';
+  await act(async () => renderer.update(<QueryClientProvider client={client}><Shell {...screenProps} /></QueryClientProvider>));
+  await act(async () => { await vi.advanceTimersByTimeAsync(31000); });
+  host.hosts[0].status = 'online';
+  await act(async () => renderer.update(<QueryClientProvider client={client}><Shell {...screenProps} /></QueryClientProvider>));
+  await settle(); await settle();
+  expect(host.readRun).toHaveBeenCalledTimes(1);
+  await press('Show active scope');
+  await press('Inspect run 42 22222222');
+  expect(host.readRun).toHaveBeenCalledTimes(2); // explicit reselection reloads cached detail
   for (const state of ['pending', 'missing', 'failed', 'inaccessible']) {
     host.readRun.mockResolvedValue(observation(pr(state)));
     await act(async () => { renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[1].props.onPress(); });

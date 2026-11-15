@@ -61,15 +61,18 @@ export class RunsReader {
         if (Buffer.byteLength(line) > 65536) { malformed = true; activity.problems.push({ source: 'filesystem', code: 'read_limit' }); continue; }
         try {
           const record = JSON.parse(line);
+          if (!record || typeof record !== 'object' || Array.isArray(record) || typeof record.type !== 'string') { malformed = true; continue; }
           if (record.type === 'session' && record.id !== raw.id) { malformed = true; continue; }
           if (record.type !== 'message') continue;
-          if (!record.message || typeof record.message !== 'object') { malformed = true; continue; }
+          if (!record.message || typeof record.message !== 'object' || Array.isArray(record.message) || typeof record.message.role !== 'string') { malformed = true; continue; }
           if (record.message.role !== 'assistant') continue;
           if (!Array.isArray(record.message.content)) { malformed = true; continue; }
           let kind: SessionActivity['kind'] = null;
           for (const item of record.message.content) {
+            if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.type !== 'string') { malformed = true; continue; }
             if (item?.type === 'text' || item?.type === 'thinking') kind = 'analysis';
             if (item?.type === 'toolCall') {
+              if (typeof item.name !== 'string' || !item.name) { malformed = true; continue; }
               const kinds: Record<string, SessionActivity['kind']> = { read: 'read', edit: 'edit', write: 'edit', bash: 'command', codemode: 'command' };
               if (Object.hasOwn(kinds, item.name)) kind = kinds[item.name];
             }

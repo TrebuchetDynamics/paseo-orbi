@@ -24,7 +24,10 @@ export function useObservationQuery<T>(options: {
   const key = ['paseo-orbi', options.hostId, options.deploymentId, options.selector] as const;
   const enabled = options.connected && options.foreground;
   const query = useQuery({
-    queryKey: key, enabled, retry: false, staleTime: 30000, gcTime: 60000,
+    // Detail evidence is selection/manual-only: becoming enabled again must not
+    // silently reload it. A fresh mount is an explicit selection, even if cached.
+    queryKey: key, enabled, retry: false, staleTime: options.poll === false ? Infinity : 30000, gcTime: 60000,
+    refetchOnMount: options.poll === false ? 'always' : true,
     refetchInterval: enabled && options.poll !== false ? 30000 : false, refetchIntervalInBackground: false,
     refetchOnWindowFocus: false, refetchOnReconnect: false,
     queryFn: async ({ signal }): Promise<Observation<T>> => {
