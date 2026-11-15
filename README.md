@@ -1,8 +1,8 @@
 # paseo-orbi
 
-A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for observing explicitly authorized local [Orbi](https://github.com/orbi-build/orbi) deployments.
+A read-only [Paseo](https://github.com/getpaseo/paseo) plugin for observing explicitly authorized local [Orbi](https://github.com/orbi-build/orbi) deployments.
 
-**Status:** Issues browsing and trusted report reading are implemented. Fleet reads deployment timers, services and recorded health. Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers explains trusted failures, waits and stat-only evidence without executing recovery. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Fixture-backed browser checks cover Fleet, Issues, Runs and Blockers; live installation and native mobile qualification remain unperformed.
+**Status:** Issues browsing and trusted report reading are implemented. Fleet reads deployment timers, services and recorded health. Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers explains trusted failures, waits and stat-only evidence without executing recovery. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Assembled offline checks cover Fleet, Issues, Runs and Blockers through their real registrations, schemas and adapters. The tracked Git artifact is checked with isolated production-only preparation. This is installation readiness, not deployment; live installation and physical-client qualification remain unperformed.
 
 ## Responsibilities
 
@@ -10,7 +10,7 @@ A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for obs
 - **Orbi** owns execution, recovery, code review, and PR delivery.
 - **Paseo** observes that work. This plugin is not another scheduler or orchestrator. Reported recovery actions and retry safety never grant permission; recovery stays Orbi/operator-owned.
 
-## Planned v0.1
+## v0.1 views
 
 | View | Purpose / status |
 | --- | --- |
@@ -25,7 +25,7 @@ Version 0.1 is strictly read-only: no timer control, execution-state mutation, m
 
 Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4** (`>=0.15.4 <0.16.0`). Issues uses the daemon user's existing authenticated GitHub CLI. Fleet uses existing user systemd units and does not invoke GitHub; Issues never invokes systemd. No provider/model/auth changes are required or performed.
 
-An operator supplies an existing JSON file via the daemon environment's absolute `PASEO_ORBI_CONFIG`. It is read once at plugin startup; changes require an explicitly authorized plugin reload. The plugin does not write configuration or discover repositories.
+An operator supplies an existing JSON file via the daemon environment's absolute `PASEO_ORBI_CONFIG`. That variable must be visible to the running daemon/plugin subprocess at startup: exporting it in a later CLI shell does not change an already running daemon's environment. Arrange it through the daemon's existing operator-managed launch environment; this task does not alter that launcher or activate services. Authorization, TOML, source compatibility and retention settings are read once at plugin startup; changes require an explicitly authorized plugin reload. **Refresh does not reload configuration.** The plugin does not write configuration or discover repositories. All paths and logins below are placeholders.
 
 ```json
 {
@@ -76,6 +76,14 @@ The RPC returns only IDs, labels, repository names, adapter names, status and al
 
 Internal process ports allow only fixed `systemctl show`, bounded `journalctl`, and GitHub.com `gh api --method GET` forms. Shell is off, stdin ignored, two children maximum, 10 seconds and 1 MiB combined output per child; timeout and disposal kill each operation's isolated Linux process group (including helpers holding output pipes), then reap the direct child. Internal raw output is not a public RPC. The GitHub reader validates and projects it before transport; future collectors must do the same. Caches are memory-only. Client observations poll mounted foreground/connected surfaces every 30 seconds, coalesce refreshes, retain failed data as stale, mark it stale after 60 seconds without success, and guard cancelled host/deployment generations.
 
+## Data flow and permissions
+
+The operator authorization grants narrow read capabilities inside this plugin; it is **not an OS sandbox**. Server and preparation code run with the daemon user's filesystem/process/network access, and client code runs in connected Paseo apps. Trust the code, dependency and future updates before consenting to installation.
+
+Local authorization/TOML/source, health/run/session records, fixed systemd properties and bounded journal data are projected on the daemon. Only validated fields travel over Paseo RPC to the selected host's clients; observations/cursors are memory-only. GitHub.com receives fixed read-only API requests via the daemon user's existing `gh` authentication. That identity needs repository metadata, issues/comments/dependencies, PR and checks read access for the selected repositories; no new token or write permission is requested. Private-repository access must already be authorized. Authentication repair is external, not a plugin action.
+
+Preparation downloads only the locked runtime TOML parser (`smol-toml` 1.9.1) from npm, with project/dependency lifecycle scripts disabled. Runtime observation downloads/installs no software and sends no prompts or tool results to agent providers. There is no plugin-owned persistent cache, telemetry service or raw-log transport. Read-only means no runtime/config/GitHub mutation by this implementation, not a promise that trusted plugin code lacks the user's underlying privileges.
+
 ## Issues and GitHub authentication
 
 Open **Issues**, select an available repository in the catalog, then browse pages or select an issue to inspect its reports and native blockers. Rejected deployments remain visible with their diagnostics, never selectable. Each repository is read separately on the selected host. The typed `issues.list({deploymentId,page})` and `issues.get({deploymentId,issue})` RPCs expose validated projections only: no bodies, comments, credentials, activity targets or check output.
@@ -99,7 +107,7 @@ A selected run's formal merged comment must carry one unquoted details block wit
 - `not_found` on dependencies: unknown/unavailable, not an empty blocker set. Check repository access/API availability outside the plugin.
 - `network_failed`, bounded process/read failures, `invalid_response`, `deadline`, or `incomplete`: retain previous complete evidence stale and retry after repair/the polling interval. Do not broaden authorization or infer an empty queue.
 
-Offline fixture tests exercise the registered RPC, real reader and React Native screen path, including auth failure/repair, pagination, stale retention and forbidden canaries. A separate Playwright fixture preview exercised the actual screen components with React Native Web, registered RPCs and a bounded fake-gh executable at desktop/tablet/mobile widths (light/dark), including auth failure and repair/Refresh, with no browser errors or horizontal overflow. Neither is live GitHub or installed Paseo qualification; those remain the final integration issue's responsibility. No installation, credential change or GitHub mutation is part of this feature.
+Offline fixture tests exercise the registered RPC, real reader and React Native screen path, including auth failure/repair, pagination, stale retention and forbidden canaries. A separate Playwright fixture preview exercised the actual screen components with React Native Web, registered RPCs and a bounded fake-gh executable at desktop/tablet/mobile widths (light/dark), including auth failure and repair/Refresh, with no browser errors or horizontal overflow. Neither is live GitHub or installed Paseo qualification; those remain separately authorized live checks, not part of offline qualification. No installation, credential change or GitHub mutation is part of this feature.
 
 ## Runs and log privacy
 
@@ -160,15 +168,26 @@ Shared observations declare descriptive loading/status accessibility labels and 
 
 ### Authorized installation (not performed here)
 
-Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's `pluginsEnabled` switch, typecheck the tested revision, and use the official direct-Git flow:
+Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's root `pluginsEnabled` switch. If absent/false, obtain separate explicit consent before enabling it; do not assume plugin installation grants that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git) with the exact offline-tested candidate commit:
 
 ```sh
-paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref <tested-commit-sha>
+paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref 875c69a101a102a8f14b064f0664069b5e603f4f
 paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-Require `running` on the intended host; open Fleet and exercise its read-only success, partial-failure and refresh states, plus shell configuration errors. An initial Git ref does not pin later updates. Git preparation runs `npm ci --omit=dev --ignore-scripts`; host libraries are not bundled. No registry submission, npm publication, service activation, daemon restart or runtime installation is part of this delivery.
+Commit `875c69a101a102a8f14b064f0664069b5e603f4f` is the offline-qualified Git candidate (Node 22.19.0; 97 tests, typecheck, boundary guard, pack inspection and isolated locked production preparation passed). This installation pin was added in a documentation-only follow-up; runtime/package/lock contents are unchanged. The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An initial `--ref` does not pin later ordinary updates (which follow default HEAD); inspect and authorize updates separately. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
+
+### Live qualification not run
+
+- Separately authorized installation of that exact revision on a test daemon.
+- Inspection of `pluginsEnabled` and explicit consent if it is absent/false.
+- Confirmation of `running` status and safe logs on the intended host.
+- Selected-host real RPC success and failure for all four views, including configuration errors and repair/Refresh.
+- Wide/compact and light/dark physical clients (desktop and native mobile), including accessibility behavior.
+- Authorized reload cleanup of registrations, timers, reads and process groups.
+
+No daemon/plugin installation or reload, live Orbi issue, credentials change, service activation, human-review approval, registry submission, npm publication, release/tag or branch-protection change was performed. Historical fixture previews are not physical-client screenshots or live approvals.
 
 ## Development
 
@@ -176,21 +195,26 @@ On Node 22.19.0:
 
 ```sh
 npm ci --ignore-scripts
+npm run typecheck
+npm test -- tests/integration.test.tsx
 npm test -- tests/foundation.test.ts
 npm test -- tests/issues.test.tsx
 npm test -- tests/fleet.test.tsx
 npm test -- tests/runs.test.tsx
 npm test -- tests/blockers.test.tsx
 npm run test:boundaries
-npm run typecheck
 npm test
 npm pack --dry-run --ignore-scripts
 ```
 
 CI runs the same checks with bounded command timeouts. Committed UI tests use mocked host/RN primitives, a real isolated QueryClient, and react-test-renderer in Node, not a live daemon. Fleet tests also exercise real ConfigRepository/ReadPorts against inert process and health fixtures, asserting exact argv/filesystem access. A separate Playwright check rendered the real Fleet component with React Native Web and fixture RPC transport, checked navigation, refresh failure, 60-second staleness and browser errors, and captured wide/compact light/dark screenshots. This does not qualify an installed Paseo host or live systemd data. The test host supplies React Native's minimal `window` global so QueryClient polling is not silently disabled as SSR; no DOM library is enabled. Vite is overridden to 7.3.8 because unconstrained newer optional devtools peers caused npm 10's dependency resolver to crash with the requested Vitest version. The requested direct dependency versions remain pinned and the lock is synchronized. The install audit reports four development-tree advisories (one low, two moderate, one high), including explicitly pinned Vitest/Zod; no development server is started by these checks. Do not run `npm audit fix --force` to change those pins implicitly.
 
-The npm pack listing must contain manifest, entries and runtime modules. npm excludes `package-lock.json` from packs; it must instead be committed for Git preparation. No npm publishing is supported by this bootstrap.
+`tests/integration.test.tsx::four_views_read_only_journey` composes actual server/client registrations, validation, feature adapters and QueryClient against both pinned source fixtures and two authorized repositories. It covers concurrent attributed runs, closed retained history, partial/stale sources, malformed metadata, deployment/host switching and teardown; compares filesystem content/metadata before/after (excluding atime); and rejects secret canaries on the RPC boundary. Changed fingerprints fail before telemetry. The boundary guard inspects transitive imports, fixed RPC names and bounded process/file capabilities, not just DOM syntax.
+
+Run typecheck **before** the integration/full tests. `artifact_contract` uses `git ls-files` and candidate worktree bytes (stage new files first), creates its own temporary candidate tree, and runs `npm ci --omit=dev --ignore-scripts` there with an isolated npm cache/config. It verifies the installed TOML parser and removes only its temporary tree in `finally`; it never strips dev dependencies from the development checkout. This preparation needs npm registry access; the four-view journey itself uses no live network/process services. CI runs typecheck before the full tests and records preparation output.
+
+The tracked Git artifact must include manifest, both entries, all imported client/server/shared modules, `server/compatibility.ts` fingerprint data, OVERVIEW, package manifest and synchronized lock. `npm pack --dry-run --ignore-scripts` is only a file-list inspection aid. npm intentionally excludes `package-lock.json` from packs; it must instead be committed for Git preparation. This is Git-only delivery: no shrinkwrap, npm publication or registry submission.
 
 ## Documentation
 
-[Paseo plugin reference and project cautions](docs/paseo-plugins.md). Separate feature and final-integration issues own telemetry collection and live desktop/mobile qualification.
+[Paseo plugin reference and project cautions](docs/paseo-plugins.md). Offline qualification does not replace the separately authorized live checks listed above. [Listing overview](OVERVIEW.md).

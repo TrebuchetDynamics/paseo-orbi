@@ -77,6 +77,52 @@ describe('package_and_registration boundaries', () => {
     expect(pkg.scripts).toEqual({ typecheck: 'tsc -p tsconfig.client.json && tsc -p tsconfig.server.json', test: 'vitest run', 'test:boundaries': 'vitest run tests/boundaries.test.ts' });
     for (const file of modules) expect(pkg.files.some((included: string) => included === file || file.startsWith(included + '/'))).toBe(true);
   });
+  it('limits transitive runtime capabilities to read-only named imports and fixed RPCs', () => {
+    const nodeImports: Record<string, string[]> = {
+      'node:fs': ['constants'], 'node:fs/promises': ['lstat', 'realpath', 'stat', 'open', 'opendir'],
+      'node:path': ['dirname', 'resolve', 'isAbsolute', 'normalize', 'relative', 'sep'],
+      'node:child_process': ['spawn'], 'node:crypto': ['createHash'],
+    };
+    const rpcNames: string[] = [];
+    for (const file of modules) {
+      const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
+      function visit(node: ts.Node) {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !node.importClause?.isTypeOnly) {
+          const name = node.moduleSpecifier.text;
+          if (name.startsWith('node:') || ['@getpaseo/plugin/server', '@getpaseo/plugin/client', '@getpaseo/plugin'].includes(name)) {
+            expect(node.importClause?.name, `${file}: no default capability import`).toBeUndefined();
+            const bindings = node.importClause?.namedBindings;
+            expect(bindings && ts.isNamedImports(bindings), `${file}: no namespace capability import`).toBe(true);
+            const allowed = name.startsWith('node:') ? nodeImports[name] : name === '@getpaseo/plugin/client' ? ['useRpc', 'useHosts'] : name === '@getpaseo/plugin' ? ['defineRpc'] : [];
+            expect(allowed, `${file}: bounded node module`).toBeDefined();
+            if (bindings && ts.isNamedImports(bindings)) for (const binding of bindings.elements.filter(b => !b.isTypeOnly)) expect(allowed).toContain((binding.propertyName ?? binding.name).text);
+          }
+        }
+        if (ts.isCallExpression(node)) {
+          expect(node.expression.kind, `${file}: no dynamic import`).not.toBe(ts.SyntaxKind.ImportKeyword);
+          expect(node.expression.getText(source), `${file}: no dynamic capability loader`).not.toMatch(/^(require|eval|Function)$/);
+          if (node.expression.getText(source) === 'defineRpc') {
+            const arg = node.arguments[0]; expect(ts.isObjectLiteralExpression(arg)).toBe(true);
+            if (ts.isObjectLiteralExpression(arg)) {
+              const name = arg.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(source) === 'name');
+              expect(name && ts.isPropertyAssignment(name) && ts.isStringLiteral(name.initializer)).toBe(true);
+              if (name && ts.isPropertyAssignment(name) && ts.isStringLiteral(name.initializer)) rpcNames.push(name.initializer.text);
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      }
+      visit(source);
+    }
+    expect(rpcNames.sort()).toEqual(['blockers.list', 'blockers.read', 'deployments.list', 'fleet.read', 'issues.get', 'issues.list', 'runs.list', 'runs.read']);
+    const port = read('server/read-ports.ts');
+    expect([...port.matchAll(/command = '([^']+)'/g)].map(m => m[1]).sort()).toEqual(['gh', 'journalctl', 'systemctl']);
+    expect(port).toContain("'--method', 'GET'");
+    expect(port).toContain('constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK');
+    expect(port).toContain('this.children.size >= 2');
+    expect(port).toContain('length > 1024 * 1024');
+    expect(port).toContain('timeoutMs > 10000');
+  });
   it('has no write, Orbi execution, Git, raw path RPC, or unconstrained command capability', () => {
     for (const file of ['index.server.ts', ...files('server')]) {
       const source = read(file);
