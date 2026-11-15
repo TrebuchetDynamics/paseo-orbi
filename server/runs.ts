@@ -16,6 +16,8 @@ const problem = (error: unknown, source: Problem['source'] = 'filesystem'): Prob
 const active = (issue: IssueSummary) => ['Implementing', 'Reviewing'].includes(issue.state) && issue.githubState === 'open';
 const State = z.object({ repo: z.string(), issue: z.number().int().positive(), run_id: RunId, branch: z.string(), created_at: z.iso.datetime(), pushed_head: z.string().regex(/^[0-9a-f]{40}$/).optional(), reviewed_head: z.string().regex(/^[0-9a-f]{40}$/).optional() });
 const iso = (value: unknown) => typeof value === 'string' && z.iso.datetime().safeParse(value).success ? value : null;
+const activityKinds: Record<string, SessionActivity['kind']> = { read: 'read', edit: 'edit', write: 'edit', bash: 'command', codemode: 'command' };
+const toolKind = (name: unknown): SessionActivity['kind'] => typeof name === 'string' && Object.hasOwn(activityKinds, name) ? activityKinds[name] : null;
 const emptyActivity = (): SessionActivity => ({ sessionId: null, state: 'unavailable', at: null, kind: null, problems: [] });
 type SessionState = { identity: string; size: number; mtime: number; offset: number; activity: SessionActivity; header: string };
 
@@ -65,16 +67,17 @@ export class RunsReader {
           if (record.type === 'session' && record.id !== raw.id) { malformed = true; continue; }
           if (record.type !== 'message') continue;
           if (!record.message || typeof record.message !== 'object' || Array.isArray(record.message) || typeof record.message.role !== 'string') { malformed = true; continue; }
-          if (record.message.role !== 'assistant') continue;
+          if (record.message.role !== 'assistant' && record.message.role !== 'toolResult') continue;
           if (!Array.isArray(record.message.content)) { malformed = true; continue; }
-          let kind: SessionActivity['kind'] = null;
-          for (const item of record.message.content) {
+          // Tool completion is activity too; only its whitelisted name and the
+          // outer record timestamp are projected, never content or error output.
+          let kind: SessionActivity['kind'] = record.message.role === 'toolResult' ? toolKind(record.message.toolName) : null;
+          for (const item of record.message.role === 'assistant' ? record.message.content : []) {
             if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.type !== 'string') { malformed = true; continue; }
             if (item?.type === 'text' || item?.type === 'thinking') kind = 'analysis';
             if (item?.type === 'toolCall') {
               if (typeof item.name !== 'string' || !item.name) { malformed = true; continue; }
-              const kinds: Record<string, SessionActivity['kind']> = { read: 'read', edit: 'edit', write: 'edit', bash: 'command', codemode: 'command' };
-              if (Object.hasOwn(kinds, item.name)) kind = kinds[item.name];
+              kind = toolKind(item.name);
             }
           }
           if (kind) {

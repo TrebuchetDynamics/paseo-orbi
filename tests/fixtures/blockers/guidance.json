@@ -1,0 +1,24 @@
+{
+  "reasons": {
+    "github_transient": "GitHub transient failure reported",
+    "tests_failed": "Tests failed (legacy reported reason)",
+    "review_budget_exhausted": "Review budget exhausted",
+    "human_decision_required": "human decision or external precondition",
+    "credential_missing": "Missing or rejected credential reported",
+    "provider_quota": "Provider quota exhausted",
+    "base_branch_missing": "Configured base branch is missing",
+    "base_ci_red": "Repair belongs to the base",
+    "checks_permission_missing": "installation owner approves permissions externally",
+    "unclassified": "Unclassified failure"
+  },
+  "actions": {
+    "requeue": "only Orbi/operator may decide",
+    "fix_ticket": "operator assesses and repairs code/ticket externally",
+    "decide": "human decides the next step externally",
+    "check_credentials": "operator checks/repairs credentials externally",
+    "wait_quota": "wait for the provider quota window externally"
+  },
+  "failure": {"schema":1,"outcome":"blocked","reason_code":"base_ci_red","action_code":"fix_ticket","retry_safe":false},
+  "scene": {"schema":1,"run_id":"12345678","base_branch":"main","base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pr_url":"https://github.com/Example/project/pull/42","external":"","review_round":0},
+  "base": {"schema":1,"state":"resuming","base_branch":"main","base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pr":42,"failing_checks":["DIAGNOSTIC_CANARY"]}
+}

@@ -2,13 +2,13 @@
 
 A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for observing explicitly authorized local [Orbi](https://github.com/orbi-build/orbi) deployments.
 
-**Status:** Issues browsing and trusted report reading are implemented. Fleet reads deployment timers, services and recorded health. Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers remains a **feature not implemented** screen. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Fixture-backed browser checks cover Fleet, Issues and Runs; live installation and native mobile qualification remain unperformed.
+**Status:** Issues browsing and trusted report reading are implemented. Fleet reads deployment timers, services and recorded health. Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers explains trusted failures, waits and stat-only evidence without executing recovery. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Fixture-backed browser checks cover Fleet, Issues, Runs and Blockers; live installation and native mobile qualification remain unperformed.
 
 ## Responsibilities
 
 - **Kit** plans work and creates GitHub Issues.
 - **Orbi** owns execution, recovery, code review, and PR delivery.
-- **Paseo** observes that work. This plugin is not another scheduler or orchestrator.
+- **Paseo** observes that work. This plugin is not another scheduler or orchestrator. Reported recovery actions and retry safety never grant permission; recovery stays Orbi/operator-owned.
 
 ## Planned v0.1
 
@@ -17,7 +17,7 @@ A read-only [Paseo](https://github.com/getpaseo/paseo) plugin foundation for obs
 | Fleet | Implemented: deployments, timers/services, recorded health, configured capacity; active work links to Issues, counts unknown |
 | Issues | Implemented: repository-selected lifecycle pages, source evidence, on-demand reports and dependency uncertainty |
 | Runs | Implemented: attributed run/session identity, safe activity, branch/SHA evidence, on-demand events and PR head checks |
-| Blockers | Failures, preserved worktrees, evidence, and recovery guidance |
+| Blockers | Implemented: trusted reported failures, manual/fix/merge waits, base-CI states and metadata-only evidence; no recovery controls |
 
 Version 0.1 is strictly read-only: no timer control, execution-state mutation, merging, Orbi CLI, Git commands, or arbitrary shell/path RPCs. No raw logs, prompts, reasoning, or interactive Pi attachment. External Pi sessions are not Paseo-managed sessions. Reading their projected activity does not establish interactive attachment, live steering, token streaming, or that a process is still alive. Future feature work may share entry files and must reconcile edits there.
 
@@ -117,6 +117,29 @@ For `auth_denied`/`rate_limited`, follow [GitHub failure and repair](#github-fai
 
 Offline tests compare fixture tree/content/metadata before/after observation (excluding atime), assert canary suppression, exact process argv, head-check states and teardown. A Playwright preview exercised the real registered Runs component and typed RPCs with bounded inert gh/journal/file fixtures at desktop/tablet/mobile widths, including auth failure → external repair → Refresh, without browser errors or horizontal overflow. Screenshots are run artifacts. This is **not** live-log-format, installed Paseo or native-mobile qualification; no real agent turn/Orbi process was started.
 
+## Blockers and recovery limits
+
+Open **Orbi → Blockers**, select an available deployment, then **Inspect artifact metadata** on an issue. Rejected catalog entries retain their safe diagnostics and never grant reads. `blockers.list({deploymentId,page})` returns an `Observation<BlockerPage>`; `blockers.read({deploymentId,issue})` returns an `Observation<BlockerDetails>`. Selectors are positive integers, with no path or command input. Runs is not a prerequisite.
+
+The shared GitHub reader establishes complete open membership before classifying candidates with `ai-blocked`, `ai-needs-detail`, `ai-fix-needed` or `ai-awaiting-merge`. Pages contain up to 20 candidates; only that page's reports are read, not unrelated/historical comments. Manual attention, automatic fix/review pending, and maintainer merge wait are separate, not all terminal failures. Detail shows current GitHub state/labels and their update time, selected run, report status, repository/issue/comment attribution and source links. Closed/merged GitHub facts make retained failure reports historical. Conflicting labels remain visible.
+
+Only the selected run's trusted formal failure schema 1 supplies outcome (`blocked` / `fix_needed`), the closed reason/action enums, and strict boolean `retry_safe`. Explanations are plugin-owned, including legacy `tests_failed`. Missing, invalid, unsupported or unknown metadata never falls back to free-text diagnostics. **Reported retry safety is metadata, never permission to retry.** Base-CI `waiting`, `resuming`, `merged` and `stale` remain separate reported states; resuming is not delivery success, and reported merged does not independently verify delivery success. Source: [pinned failure vocabulary](https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/src/orbi/failure.py#L45).
+
+For a complete, valid, exact-run scene with nonconflicting repository PR identity, the server derives the pinned `gitops.worktree_path` name under the authorized repository's `.worktrees`. It does not use a supplied scene path, enumerate directories, scan alternate roots, or search renamed worktrees. Only the worktree directory and `.orbi/run-state.json`, `.orbi/test.log`, `.orbi/plan.md`, `.orbi/verify.md` are metadata candidates. The port performs bounded `lstat`/canonical-path checks, rejects symlinks/nonregular artifacts, and exposes only a fixed relative name, presence status, byte size and modification time. Sizes are stat sizes, not recursive worktree totals. No artifact is opened or read; even run-state contents are not inspected as proof of identity. Missing, unreadable, invalid, present and unattributed evidence remain distinct. No absolute scene paths, artifact contents, raw failure diagnostics, prompts, tokens or downloads cross the RPC boundary. A missing/cleaned scene never removes a GitHub blocker or triggers recreation/cleanup.
+
+Retention settings are inert startup observations, not promises:
+
+| Profile | Supported settings/defaults | Limit |
+| --- | --- | --- |
+| `orbi-0.7.41-release` | `worktree_retain_hours = 72` (finite positive number); `keep_failed_worktrees` unsupported and ignored | Official v0.7.41 may delete terminally failed worktrees |
+| `orbi-0.7.41-1a8b2f96` | `worktree_retain_hours = 72`; `keep_failed_worktrees = true` (strict boolean) | Installed pinned build adds failed-worktree retention behavior, not a presence guarantee |
+
+Invalid supported values reject that deployment as `invalid_config`; repair configuration externally and authorize a reload. **72 hours does not imply automatic reclamation of an open blocked scene.** Only observed presence is reported. Source: [release cleanup](https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/src/orbi/runner.py#L1121) and [installed retention profile](https://github.com/orbi-build/orbi/tree/1a8b2f9603f6258cb105293f238a8d3f775f3393).
+
+Partial GitHub failures preserve visible candidates and mark incomplete reports. An initial incomplete scope is unavailable, never “no blockers”; only complete empty membership permits that message. Prior successful observations retain their timestamp and become stale on failure. Refresh and foreground polling share Issues' cache/backoff rules. `auth_denied`: ask the operator to repair the daemon user's existing `gh` authentication/permissions outside the plugin, then Refresh. `rate_limited`: wait for the shared GitHub reset gate. `network_failed` / `incomplete`: repair access externally and Refresh; never infer successful delivery or no blockers. Host/deployment/page/issue changes ignore late callbacks.
+
+There is **no recovery execution interface**: no retry/requeue, pause, approval, merge, service control, credential validation/reset, worktree modification, or execution of comments/prose. Orbi and the operator own every recovery decision. Tests use synthetic trusted/untrusted metadata and filesystem stats on both profiles, including cleaned/unreadable/mismatched/escaping scenes. A Playwright fixture preview exercised the registered screen/RPC, real shared GitHub reader and bounded fake-gh GET process at desktop/tablet/mobile widths in light/dark, including auth failure → external fixture repair → Refresh and complete-empty scope, with no browser errors or horizontal overflow. Screenshots are excluded run artifacts. This is not live failed-delivery, installed Paseo, native-device or live-recovery qualification; no live recovery was run.
+
 ## Fleet
 
 Open **Orbi → Fleet** on the intended host. Every catalog entry has a card, including rejected entries with safe diagnostics and repair guidance. Only available entries call `fleet.read({deploymentId})`; the server resolves that ID against startup authorization. No paths or command strings come from the client.
@@ -153,6 +176,7 @@ npm test -- tests/foundation.test.ts
 npm test -- tests/issues.test.tsx
 npm test -- tests/fleet.test.tsx
 npm test -- tests/runs.test.tsx
+npm test -- tests/blockers.test.tsx
 npm run test:boundaries
 npm run typecheck
 npm test

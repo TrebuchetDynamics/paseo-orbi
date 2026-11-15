@@ -351,7 +351,7 @@ describe('package_and_registration', () => {
     const client = queryClient();
     for (const screen of screens) {
       const renderer = await render(client, React.createElement(screen.Component, props));
-      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'runs' ? 'select a repository to browse' : 'feature not implemented');
+      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'runs' || screen.id === 'blockers' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);

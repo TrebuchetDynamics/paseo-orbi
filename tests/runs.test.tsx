@@ -303,3 +303,23 @@ it('checks_and_selection_lifecycle', async () => {
   expect(host.listeners.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
   host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
 });
+
+it('projects complete tool-result activity, including incremental reads, without exposing output', async () => {
+  const f = await membershipFixture();
+  const input = { deploymentId: 'demo', issue: 42, runId: '22222222' };
+  await f.reader.read(input);
+  const path = join(f.tree(), '.pi-session/one.jsonl');
+  const completedAt = '2026-10-15T06:19:00Z';
+  const result = { type: 'message', timestamp: completedAt, message: { role: 'toolResult', toolName: 'bash', content: [{ type: 'text', text: 'TOOL_OUTPUT_SECRET_CANARY' }], isError: true } };
+  await writeFile(path, await readFile(path, 'utf8') + JSON.stringify(result) + '\n');
+  const detail = await f.reader.read(input);
+  expect(detail.data?.summary.sessions[0]).toMatchObject({ sessionId: 'session-42', at: completedAt, kind: 'command', state: 'available' });
+  expect(JSON.stringify(detail)).not.toContain('TOOL_OUTPUT_SECRET_CANARY');
+});
+
+it('omits journal timestamps outside the RPC timestamp range instead of breaking detail serialization', () => {
+  const line = JSON.stringify({ ...records.journal, __REALTIME_TIMESTAMP: '999999999999999999' });
+  const projected = projectEvents(line, { repo, issue: 42, runId: '22222222', unit: 'orbi-demo@1.service', retained: false });
+  expect(projected.events).toEqual([]);
+  expect(projected.problems).toContainEqual({ source: 'journal', code: 'invalid_response' });
+});

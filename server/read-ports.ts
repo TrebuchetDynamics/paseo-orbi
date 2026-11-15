@@ -3,6 +3,7 @@ import { lstat, realpath, stat, open, opendir } from 'node:fs/promises';
 import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { ConfigRepository } from './config';
+import { artifactNames, type ArtifactMetadata } from '../shared/blockers';
 
 export class ReadError extends Error {
   constructor(public readonly code: 'unsafe_path' | 'read_failed' | 'read_limit' | 'disposed' | 'process_failed' | 'process_timeout' | 'process_limit') { super(code); }
@@ -171,6 +172,42 @@ export class ReadPorts {
     const result = await boundedFile(deployment.repoDir, resolve(deployment.repoDir, '.orbi/health.json'), true, this.lifetime.signal);
     this.assertActive();
     return result as { size: number; mtimeMs: number };
+  }
+  // Stat-only evidence. No scene path comes from a comment, client or directory scan.
+  async statArtifact(id: string, issue: number, runId: string, name: ArtifactMetadata['name']): Promise<ArtifactMetadata> {
+    this.assertActive();
+    const deployment = this.repository.resolve(id);
+    if (!Number.isSafeInteger(issue) || issue < 1 || !/^[0-9a-f]{8}$/.test(runId) || !artifactNames.includes(name)) throw new ReadError('unsafe_path');
+    const empty = (status: ArtifactMetadata['status']): ArtifactMetadata => ({ name, status, size: null, modifiedAt: null });
+    // Pinned gitops.worktree_path: exact repo slug, issue and selected formal run.
+    const scene = `orbi-${deployment.repo.replace('/', '-')}-issue-${issue}-${runId}`;
+    const parts = ['.worktrees', scene, ...(name === 'worktree' ? [] : name.split('/'))];
+    try {
+      return await boundedOperation(async lifetime => {
+        if (!absolutePath(deployment.repoDir) || await realpath(deployment.repoDir) !== deployment.repoDir) return empty('invalid');
+        let path = deployment.repoDir;
+        for (let i = 0; i < parts.length; i++) {
+          if (lifetime.expired) throw new ReadError('read_limit');
+          path = resolve(path, parts[i]);
+          const info = await lstat(path);
+          if (lifetime.expired) throw new ReadError('read_limit');
+          const directory = i < parts.length - 1 || name === 'worktree';
+          if (info.isSymbolicLink() || (directory ? !info.isDirectory() : !info.isFile())) return empty('invalid');
+          if (await realpath(path) !== path) return empty('invalid');
+          if (i === parts.length - 1) {
+            // Recheck identity after canonicalization to reject observed replacements.
+            const after = await lstat(path);
+            if (after.dev !== info.dev || after.ino !== info.ino || after.isSymbolicLink()) return empty('invalid');
+            return { name, status: 'present', size: info.size, modifiedAt: info.mtime.toISOString() };
+          }
+        }
+        return empty('invalid');
+      }, this.lifetime.signal);
+    } catch (error) {
+      if (error instanceof ReadError && error.code === 'disposed') throw error;
+      const code = (error as { code?: string }).code;
+      return empty(code === 'ENOENT' ? 'missing' : code === 'ENOTDIR' ? 'invalid' : 'unreadable');
+    }
   }
   private assertActive() { if (this.disposed) throw new ReadError('disposed'); }
   async process(id: string, operation: ProcessOperation, timeoutMs = 10000): Promise<string> {

@@ -1,4 +1,4 @@
-import type { RunEvent } from '../shared/runs';
+import { RunEvent } from '../shared/runs';
 import type { Problem } from '../shared/common';
 
 // A bounded journal window is partial evidence, never an assertion of continuity.
@@ -34,7 +34,7 @@ export function projectEvents(text: string, scope: { unit: string; repo: string;
       if (fields.has(lifecycle ? 'run_id' : 'run') || fields.get(key) !== scope.runId || fields.get('issue') !== (lifecycle ? `${scope.repo}#${scope.issue}` : String(scope.issue))) { omit(); continue; }
       const millis = Number(BigInt(record.__REALTIME_TIMESTAMP) / 1000n);
       const at = new Date(millis).toISOString();
-      const event: RunEvent = { at, event: message[2] as RunEvent['event'], runId: scope.runId, issue: scope.issue };
+      const event = RunEvent.parse({ at, event: message[2], runId: scope.runId, issue: scope.issue });
       const size = Buffer.byteLength(JSON.stringify(event)) + 1;
       if (events.length === 200 || bytes + size > 65536) { problems.push({ source: 'journal', code: 'read_limit' }); break; }
       events.push(event); bytes += size;
