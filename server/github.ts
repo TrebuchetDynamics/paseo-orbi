@@ -9,7 +9,7 @@ const positive = z.number().int().positive();
 const RawIssue = z.object({ number: positive, title: z.string().max(1024), state: z.enum(['open', 'closed']), updated_at: z.iso.datetime(), labels: z.array(z.object({ name: z.string().max(100) })), pull_request: z.unknown().optional() });
 const sha = z.string().regex(/^[0-9a-f]{40}$/);
 const Pull = z.object({ number: positive, html_url: z.string(), merged_at: z.iso.datetime().nullable(), state: z.enum(['open', 'closed']), head: z.object({ sha }), base: z.object({ repo: z.object({ full_name: z.string() }) }) });
-const Check = z.object({ id: positive, name: z.string().max(1024), status: z.enum(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']), conclusion: z.enum(['success', 'failure', 'neutral', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']).nullable() });
+const Check = z.object({ head_sha: sha.optional(), html_url: z.string().nullable().optional(), id: positive, name: z.string().max(1024), status: z.enum(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']), conclusion: z.enum(['success', 'failure', 'neutral', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']).nullable() });
 export type PullRequestEvidence = { number: number; url: string; head: string; state: 'open' | 'closed'; mergedAt: string | null; checks: CompleteCollection<z.infer<typeof Check>> };
 class GitHubError extends Error { constructor(readonly code: Problem['code']) { super(code); } }
 const problem = (code: Problem['code']): Problem => ({ source: 'github', code });
@@ -144,7 +144,15 @@ export class GitHubReader {
       const url = `https://github.com/${repo}/pull/${prNumber}`;
       if (pr.number !== prNumber || pr.base.repo.full_name !== repo || pr.html_url !== url) throw new GitHubError('invalid_response');
       const checks = await this.collect(id, `${key}:${pr.head.sha}:checks`, page => ({ kind: 'gh-api-get', resource: 'checks', sha: pr.head.sha, page }), value => {
-        const parsed = z.object({ check_runs: z.array(Check) }).parse(value); return { count: parsed.check_runs.length, records: parsed.check_runs };
+        const parsed = z.object({ check_runs: z.array(Check) }).parse(value);
+        const records = parsed.check_runs.map(check => {
+          // Check URLs are evidence links, never request destinations.
+          const prefix = `https://github.com/${repo}/`;
+          const url = check.html_url;
+          const safe = url?.startsWith(prefix) && /^(?:runs\/[0-9]+|actions\/runs\/[0-9]+(?:\/job\/[0-9]+)?)$/.test(url.slice(prefix.length));
+          return { ...check, html_url: safe ? url : null };
+        });
+        return { count: records.length, records };
       });
       return { number: prNumber, url, state: pr.state, head: pr.head.sha, mergedAt: pr.merged_at, checks };
     });

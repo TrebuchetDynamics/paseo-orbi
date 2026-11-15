@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, realpath, stat, open } from 'node:fs/promises';
+import { lstat, realpath, stat, open, opendir } from 'node:fs/promises';
 import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { ConfigRepository } from './config';
@@ -15,7 +15,7 @@ export function absolutePath(path: string): boolean {
 }
 
 // Internal only: callers select finite approved files; no client path reaches this function.
-async function checkedFile(root: string, path: string, metadataOnly: boolean, lifetime: { expired: boolean; close: () => Promise<void> }) {
+async function checkedFile(root: string, path: string, metadataOnly: boolean, lifetime: { expired: boolean; close: () => Promise<void> }, range?: { start: number; length: number }) {
   if (!absolutePath(root) || !absolutePath(path)) throw new ReadError('unsafe_path');
   const rel = relative(root, path);
   if (rel.startsWith('..' + sep) || rel === '..' || isAbsolute(rel)) throw new ReadError('unsafe_path');
@@ -37,21 +37,23 @@ async function checkedFile(root: string, path: string, metadataOnly: boolean, li
       if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || await realpath(path) !== path) throw new ReadError('unsafe_path');
       const after = await lstat(path);
       if (after.dev !== opened.dev || after.ino !== opened.ino) throw new ReadError('unsafe_path');
-      if (metadataOnly) return { size: opened.size, mtimeMs: opened.mtimeMs };
-      if (opened.size > FILE_LIMIT) throw new ReadError('read_limit');
-      const bytes = Buffer.alloc(FILE_LIMIT + 1);
+      const metadata = { size: opened.size, mtimeMs: opened.mtimeMs, identity: `${opened.dev}:${opened.ino}` };
+      if (metadataOnly) return metadata;
+      if (!range && opened.size > FILE_LIMIT) throw new ReadError('read_limit');
+      const limit = range?.length ?? FILE_LIMIT;
+      const bytes = Buffer.alloc(limit + (range ? 0 : 1));
       let count = 0;
-      while (count <= FILE_LIMIT) {
+      while (count < bytes.length) {
         if (lifetime.expired) throw new ReadError('read_limit');
-        const chunk = await handle.read(bytes, count, bytes.length - count, count);
+        const chunk = await handle.read(bytes, count, bytes.length - count, (range?.start ?? 0) + count);
         if (!chunk.bytesRead) break;
         count += chunk.bytesRead;
       }
-      if (count > FILE_LIMIT) throw new ReadError('read_limit');
+      if (count > limit) throw new ReadError('read_limit');
       const final = await handle.stat();
       if (final.size !== opened.size || final.mtimeMs !== opened.mtimeMs || final.ctimeMs !== opened.ctimeMs) throw new ReadError('read_failed');
       if (lifetime.expired) throw new ReadError('read_limit');
-      return bytes.subarray(0, count);
+      return range ? { ...metadata, bytes: bytes.subarray(0, count) } : bytes.subarray(0, count);
     } finally { await handle.close(); }
   } catch (error) { throw error instanceof ReadError ? error : new ReadError('read_failed'); }
 }
@@ -112,6 +114,57 @@ export class ReadPorts {
     this.assertActive();
     return result;
   }
+  // Only these attributed selectors can reach worktree files. No path/cursor RPC.
+  private tree(id: string, issue: number, runId: string) {
+    this.assertActive();
+    const deployment = this.repository.resolve(id);
+    if (!Number.isSafeInteger(issue) || issue < 1 || !/^[0-9a-f]{8}$/.test(runId)) throw new ReadError('unsafe_path');
+    return { root: deployment.repoDir, path: resolve(deployment.repoDir, '.worktrees', `orbi-${deployment.repo.replace('/', '-')}-issue-${issue}-${runId}`) };
+  }
+  private async names(root: string, path: string, match: (name: string, directory: boolean) => boolean, limit: number) {
+    return boundedOperation(async lifetime => {
+      if (!absolutePath(path) || !path.startsWith(root + sep) || await realpath(root) !== root || await realpath(path) !== path) throw new ReadError('unsafe_path');
+      const directory = await opendir(path);
+      lifetime.close = () => directory.close();
+      const names: string[] = [];
+      try {
+        for await (const entry of directory) {
+          if (lifetime.expired) throw new ReadError('read_limit');
+          if (match(entry.name, entry.isDirectory()) && !entry.isSymbolicLink()) {
+            names.push(entry.name);
+            // Do not return an arbitrary filename/mtime-selected subset.
+            if (names.length > limit) throw new ReadError('read_limit');
+          }
+        }
+        return names.sort();
+      } finally { await directory.close().catch(() => undefined); }
+    }, this.lifetime.signal).catch(error => { throw error instanceof ReadError ? error : new ReadError('read_failed'); });
+  }
+  async worktrees(id: string, issue?: number) {
+    this.assertActive();
+    const deployment = this.repository.resolve(id);
+    if (issue !== undefined && (!Number.isSafeInteger(issue) || issue < 1)) throw new ReadError('unsafe_path');
+    const prefix = `orbi-${deployment.repo.replace('/', '-')}-issue-`;
+    const parse = (name: string) => name.startsWith(prefix) ? name.slice(prefix.length).match(/^([1-9][0-9]*)-([0-9a-f]{8})$/) : null;
+    const names = await this.names(deployment.repoDir, resolve(deployment.repoDir, '.worktrees'), (name, directory) => {
+      const value = parse(name);
+      return directory && !!value && Number.isSafeInteger(Number(value[1])) && (issue === undefined || Number(value[1]) === issue);
+    }, 200);
+    return names.map(name => { const match = parse(name)!; return { issue: Number(match[1]), runId: match[2] }; });
+  }
+  async runState(id: string, issue: number, runId: string) {
+    const tree = this.tree(id, issue, runId);
+    return readBytes(tree.root, resolve(tree.path, '.orbi/run-state.json'), this.lifetime.signal);
+  }
+  async sessions(id: string, issue: number, runId: string) {
+    const tree = this.tree(id, issue, runId);
+    return this.names(tree.root, resolve(tree.path, '.pi-session'), (name, directory) => !directory && /^[A-Za-z0-9_.-]{1,200}\.jsonl$/.test(name), 16);
+  }
+  async sessionRange(id: string, issue: number, runId: string, name: string, start: number, length: number) {
+    const tree = this.tree(id, issue, runId);
+    if (!/^[A-Za-z0-9_.-]{1,200}\.jsonl$/.test(name) || !Number.isSafeInteger(start) || start < 0 || !Number.isInteger(length) || length < 1 || length > FILE_LIMIT) throw new ReadError('unsafe_path');
+    return await boundedOperation(lifetime => checkedFile(tree.root, resolve(tree.path, '.pi-session', name), false, lifetime, { start, length }), this.lifetime.signal) as { bytes: Buffer; size: number; identity: string; mtimeMs: number };
+  }
   async stat(id: string, selector: 'health') {
     this.assertActive();
     const deployment = this.repository.resolve(id);
@@ -170,7 +223,7 @@ export class ReadPorts {
         command = 'systemctl';
         args = ['--user', 'show', `${prefix}@${operation.slot}.${operation.unit}`, '--property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic', '--no-pager'];
       } else {
-        command = 'journalctl'; args = [`--user-unit=${prefix}@${operation.slot}.service`, '--output=json', '--lines=100', '--no-pager'];
+        command = 'journalctl'; args = ['--user', '-u', `${prefix}@${operation.slot}.service`, '--no-pager', '--since', '-1 hour', '-n', '200', '-o', 'json'];
       }
     } else if (operation.kind === 'gh-api-get') {
       if (!Number.isInteger(operation.page) || operation.page < 1 || operation.page > 10) throw new ReadError('unsafe_path');
