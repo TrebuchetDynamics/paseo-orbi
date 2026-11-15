@@ -57,7 +57,7 @@ it('bounded startup wait and detached simulated read child cleanup use explicit 
 function lifecycleHost(installation: InstallationHost['installation'] = 'never-attempted') {
   return { alias: 'host-a', host: 'tcp://127.0.0.1:1234', candidate: '/owned/candidate', startup: { deadline: 60000 }, installation, cliCall: vi.fn(async (..._args: string[]) => '[]') };
 }
-const notReady = () => Object.assign(new Error('command failed'), { stderr: 'Error: Cannot connect to daemon at tcp://127.0.0.1:1234: Unexpected server response: 503\n' });
+const notReady = () => Object.assign(new Error('command failed'), { stderr: JSON.stringify({ error: { code: 'DAEMON_UNREACHABLE', message: 'Cannot connect to daemon at tcp://127.0.0.1:1234: Unexpected server response: 503', details: 'Check the selected endpoint and credentials. SSH transport does not install or start the daemon.' } }) + '\n' });
 it('waits_for_rpc_ready_before_install', async () => {
   // HTTP health has already passed: only an unfiltered RPC list proves readiness.
   const host = lifecycleHost(); let now = 59800;
@@ -73,7 +73,7 @@ it('RPC readiness shares the startup deadline and never retries refusal or a mut
   expect(host.cliCall.mock.calls.every(args => args.join(' ') === 'ls --json')).toBe(true);
   expect(host.cliCall.mock.calls.length).toBeLessThanOrEqual(3); expect(now).toBe(60000);
   expect(host.installation).toBe('never-attempted');
-  for (const failure of [new Error('ECONNREFUSED'), Object.assign(new Error('failed'), { stderr: 'Error: permission denied' })]) {
+  for (const failure of [new Error('ECONNREFUSED'), Object.assign(new Error('failed'), { stderr: 'Error: permission denied' }), ...[{ code: 'AUTH_FAILED', message: 'Cannot connect to daemon at tcp://127.0.0.1:1234: Unexpected server response: 503' }, { code: 'DAEMON_UNREACHABLE', message: 'Cannot connect to daemon at tcp://127.0.0.1:9999: Unexpected server response: 503' }].map(error => Object.assign(new Error('failed'), { stderr: JSON.stringify({ error }) }))]) {
     const refused = lifecycleHost(); refused.cliCall.mockRejectedValue(failure);
     await expect(installWhenRpcReady(refused, async () => {}, () => 0)).rejects.toBe(failure); expect(refused.cliCall).toHaveBeenCalledTimes(1);
   }
@@ -94,7 +94,7 @@ it('isolated_runtime_exposes_only_required_ps', async () => {
   expect(before.PATH).not.toMatch(/(?:^|:)(?:\/usr\/bin|\/bin)(?:$|:)/);
   link.mockClear(); access.mockRejectedValue(new Error('ENOENT'));
   await expect(exposePs('/owned/bin', { access, symlink: link })).rejects.toThrow(/prerequisite.*\/usr\/bin\/ps/i);
-  expect(link).not.toHaveBeenCalled(); // failure before any bin/daemon effects
+  expect(link).not.toHaveBeenCalled(); // missing prerequisite creates no ps link; no daemon is launched by this seam
 });
 function cleanupSeams() {
   return { snapshot: vi.fn(async () => [] as Identity[]), stop: vi.fn(async (_owned: Identity[]) => {}), verify: vi.fn(async (_owned: Identity[]) => {}), log: vi.fn(async (_host: InstallationHost) => {}) };

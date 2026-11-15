@@ -115,7 +115,9 @@ export async function installWhenRpcReady(host: InstallationHost & { candidate: 
     catch (error) {
       // Pinned CLI's pre-ready WebSocket upgrade rejection, not arbitrary 503s/refusals.
       const stderr = (error as { stderr?: string })?.stderr ?? '';
-      if (stderr.split('\n').includes(`Error: Cannot connect to daemon at ${host.host}: Unexpected server response: 503`)) return false;
+      let response: { code?: string; message?: string } | undefined;
+      try { response = JSON.parse(stderr).error; } catch { /* non-JSON failures are not startup readiness */ }
+      if (response?.code === 'DAEMON_UNREACHABLE' && response.message === `Cannot connect to daemon at ${host.host}: Unexpected server response: 503`) return false;
       throw error;
     }
   }, remaining, sleep, now);
