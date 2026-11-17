@@ -1,8 +1,8 @@
 # Orbi observations in Paseo
 
-paseo-orbi adds four read-only screens to the selected Paseo host:
+The single **Orbi** sidebar entry opens **Overview**, with internal **Overview · Issues · Runs · Blockers** navigation on the selected Paseo host. Existing four screen IDs and deployment links remain supported:
 
-- Fleet: configured deployments, user timers/services, recorded health and capacity. Occupancy and active delivery counts remain unknown.
+- Overview (Fleet): configured deployments, user timers/services, recorded health and capacity. Occupancy and active delivery counts remain unknown.
 - Issues: repository lifecycle pages, source labels, trusted structured reports and on-demand dependency evidence.
 - Runs: attributed run/session metadata, limited activity kinds, scoped lifecycle events and observed PR-head checks. Retained issue history is separate from active membership.
 - Blockers: reported failure/wait guidance, source attribution and stat-only artifact presence, size and modification time. Recovery remains Orbi/operator-owned.
@@ -10,6 +10,8 @@ paseo-orbi adds four read-only screens to the selected Paseo host:
 ## Setup and compatibility
 
 The operator supplies an existing authorization JSON file through the daemon's startup environment variable `PASEO_ORBI_CONFIG`. It selects exact repositories, canonical local roots, TOML configuration, trusted report publisher logins and a supported source profile. Authorization and configuration changes require an explicitly authorized plugin reload; Refresh only rereads observations. See the [README](README.md#setup) for the exact JSON/TOML example and operator procedure.
+
+Unconfigured or globally invalid catalogs use one shared setup/repair panel on every route, with at most one catalog Refresh and no feature reads. Refresh cannot configure authorization or reload startup configuration. Configured-empty means no configured deployments; rejected entries retain diagnostics without granting reads. Catalog transport freshness is not a deployment-health badge. Offline observations never fall through to another host.
 
 The baseline is Linux, Node 22.19.0 and Paseo daemon/app 0.15.4 (manifest range `>=0.15.4 <0.16.0`). Existing user systemd/journal access and the daemon user's authenticated GitHub CLI with repository read permissions are required. No provider credentials are configured by the plugin. The two supported Orbi profiles are `orbi-0.7.41-release` at `fbafd09fe49a20299e96565f100633bca61ae2af` and `orbi-0.7.41-1a8b2f96` at `1a8b2f9603f6258cb105293f238a8d3f775f3393`. A finite source fingerprint gate rejects changed/unknown subsets before telemetry; it does not authenticate the whole engine.
 

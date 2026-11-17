@@ -14,7 +14,7 @@ A read-only [Paseo](https://github.com/getpaseo/paseo) plugin for observing expl
 
 | View | Purpose / status |
 | --- | --- |
-| Fleet | Implemented: deployments, timers/services, recorded health, configured capacity; active work links to Issues, counts unknown |
+| Overview (Fleet) | Implemented: deployments, timers/services, recorded health, configured capacity; active work links to Issues, counts unknown |
 | Issues | Implemented: repository-selected lifecycle pages, source evidence, on-demand reports and dependency uncertainty |
 | Runs | Implemented: attributed run/session identity, safe activity, branch/SHA evidence, on-demand events and PR head checks |
 | Blockers | Implemented: trusted reported failures, manual/fix/merge waits, base-CI states and metadata-only evidence; no recovery controls |
@@ -84,9 +84,17 @@ Local authorization/TOML/source, health/run/session records, fixed systemd prope
 
 Preparation downloads only the locked runtime TOML parser (`smol-toml` 1.9.1) from npm, with project/dependency lifecycle scripts disabled. Runtime observation downloads/installs no software and sends no prompts or tool results to agent providers. There is no plugin-owned persistent cache, telemetry service or raw-log transport. Read-only means no runtime/config/GitHub mutation by this implementation, not a promise that trusted plugin code lacks the user's underlying privileges.
 
+## Navigation and shared setup
+
+Open the single **Orbi** sidebar entry on the intended host; it opens **Overview** (the existing `fleet` route, with host title Fleet). Inside configured Orbi, use **Overview · Issues · Runs · Blockers**. The compact navigation wraps, marks the current view selected, and keeps an authorized deployment selection when switching views. Existing `fleet`, `issues`, `runs`, `blockers` links and `deploymentId` parameters remain supported. Fleet's active-work link still opens Issues for that deployment.
+
+One shared selected-host catalog owns setup and Refresh. Unconfigured or globally invalid catalogs show the same operator setup/repair panel on every deep link, without feature tabs, selectors, telemetry requests or feature success badges. Provide an authorized JSON file through startup `PASEO_ORBI_CONFIG`, repair invalid authorization if needed, and explicitly reload the plugin with operator authorization. Catalog Refresh only rereads the startup snapshot; it cannot configure authorization or reload. A configured empty catalog says **No configured deployments**; rejected entries keep safe diagnostics and cannot be selected. Catalog transport freshness is separate from configuration state or deployment health. Offline/source failures show unavailable or correctly scoped stale catalog data, never another host's data.
+
+The consolidated navigation/setup flow has offline component/integration evidence. Installed desktop/mobile screenshots and real-client behavior remain the explicit live checks owned by #12/#13; historical fixture previews below do not qualify this changed composition.
+
 ## Issues and GitHub authentication
 
-Open **Issues**, select an available repository in the catalog, then browse pages or select an issue to inspect its reports and native blockers. Rejected deployments remain visible with their diagnostics, never selectable. Each repository is read separately on the selected host. The typed `issues.list({deploymentId,page})` and `issues.get({deploymentId,issue})` RPCs expose validated projections only: no bodies, comments, credentials, activity targets or check output.
+Open **Orbi → Issues**, select an available repository in the catalog, then browse pages or select an issue to inspect its reports and native blockers. Rejected deployments remain visible with their diagnostics, never selectable. Each repository is read separately on the selected host. The typed `issues.list({deploymentId,page})` and `issues.get({deploymentId,issue})` RPCs expose validated projections only: no bodies, comments, credentials, activity targets or check output.
 
 Use the separate **Open on GitHub** link to deliberately open an issue or an available attributed PR. Links accept only the exact canonical GitHub destination for the currently selected catalog repository and issue/PR number; invalid, foreign or conflicting identity stays noninteractive text. Opening does not inspect an issue, change pages, make an extra RPC or mutate GitHub. Source, reported/verified and stale badges keep their meaning; retained stale evidence is navigable only for its still-selected repository. Paseo's `ExternalLink` uses the system browser on Electron, a new `noopener,noreferrer` tab on web, and the OS URL handler on native. A resolved opener does **not** prove the page opened or loaded, and popup blocking cannot reliably be detected. A rejected opener shows only “Could not open GitHub. Try again using the link.” Retry explicitly after checking the platform's browser/URL handler. Selection changes replace/remove mounted links and clear their error feedback; the SDK cannot revoke a retained old callback or cancel an already-dispatched open. Offline fixtures verify validation and opener invocation, not a real browser/OS launch; actual opening remains unrun pending the #12/#13 browser/native qualification gates.
 
@@ -152,7 +160,7 @@ There is **no recovery execution interface**: no retry/requeue, pause, approval,
 
 ## Fleet
 
-Open **Orbi → Fleet** on the intended host. Every catalog entry has a card, including rejected entries with safe diagnostics and repair guidance. Only available entries call `fleet.read({deploymentId})`; the server resolves that ID against startup authorization. No paths or command strings come from the client.
+Open **Orbi → Overview** (Fleet) on the intended host. Every catalog entry has a card, including rejected entries with safe diagnostics and repair guidance. Only available entries call `fleet.read({deploymentId})`; the server resolves that ID against startup authorization. No paths or command strings come from the client.
 
 Each card reports repository/profile identity, configured capacity (1..5), **Occupancy: unknown**, and **Active deliveries: unknown**. Neither active labels nor leftover PID/lock files establish occupancy. Capacity is not a machine-wide promise. **View active work in Issues** opens Issues with that deployment filter.
 

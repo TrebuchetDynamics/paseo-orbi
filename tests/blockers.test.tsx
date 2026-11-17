@@ -280,7 +280,7 @@ it('partial_stale_and_layout', async () => {
   expect(JSON.stringify(renderer.toJSON())).toContain('Artifact metadata only');
   expect(JSON.stringify(renderer.toJSON())).toContain('missing');
   expect(JSON.stringify(renderer.toJSON())).not.toMatch(/CANARY|\/tmp\//);
-  const allowed = /^(Refresh|Inspect blocker \d+|Previous blockers page|Next blockers page|Select .+|Open (Fleet|Issues|Runs|Blockers))$/;
+  const allowed = /^(Refresh|Inspect blocker \d+|Previous blockers page|Next blockers page|Select .+|Open (Overview|Issues|Runs|Blockers))$/;
   for (const button of renderer.root.findAll(node => node.type === ('Pressable' as any))) expect(button.props.accessibilityLabel).toMatch(allowed);
   for (const compact of [true, false]) for (const foreground of ['#eee', '#111']) {
     await screen.update({ ...props, layout: { ...props.layout, compact }, theme: { colors: { ...theme.colors, foreground } } as any });
@@ -288,16 +288,16 @@ it('partial_stale_and_layout', async () => {
     expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(compact ? 16 : 24);
   }
   f.advance(); f.deny(true);
-  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
   let visible = JSON.stringify(renderer.toJSON());
   expect(visible).toContain('stale'); expect(visible).toContain('auth_denied'); expect(visible).toContain(stamp);
   expect(visible).toContain('Synthetic blocker'); expect(visible).not.toContain('No blockers in');
   expect(visible).toContain("daemon user's existing gh authentication");
   f.advance(); f.deny(false);
-  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
   expect(JSON.stringify(renderer.toJSON())).not.toContain('github: auth_denied');
   host.readBlockers.mockResolvedValue({ ...available({ repo, page: 1, hasNextPage: false, complete: true, records: [{ ...safeBlocker(), reports: { ...safeBlocker().reports, complete: false } }] }), state: 'partial', lastSuccessfulAt: null, problems: [{ source: 'github', code: 'incomplete' }] });
-  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
   expect(JSON.stringify(renderer.toJSON())).toContain('partial');
   expect(JSON.stringify(renderer.toJSON())).toContain('current run not established');
   // A complete empty scope is distinguishable from an initial failure on another selection.
@@ -305,7 +305,7 @@ it('partial_stale_and_layout', async () => {
   await screen.update({ ...props, params: { deploymentId: 'other' } });
   visible = JSON.stringify(renderer.toJSON()); expect(visible).toContain('unavailable'); expect(visible).not.toContain('No blockers in');
   host.readBlockers.mockResolvedValue(available({ repo: 'Example/other', page: 1, hasNextPage: false, complete: true, records: [] }));
-  await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+  await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
   expect(JSON.stringify(renderer.toJSON())).toContain('No blockers in the complete observed scope');
 });
 
@@ -328,7 +328,7 @@ it('ignores_late_issue_deployment_and_host_callbacks', async () => {
   let lateHost!: (value: unknown) => void;
   host.readBlockers.mockImplementationOnce(() => new Promise(resolve => { lateHost = resolve; }));
   await screen.update({ ...props, params: { deploymentId: 'demo' } });
-  await act(async () => { screen.renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress(); }); await screen.settle();
+  await act(async () => { screen.renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); }); await screen.settle();
   host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
   cleanups.push(() => host.hosts.pop());
   host.readBlockers.mockResolvedValue(available({ repo: 'Host B evidence', page: 1, hasNextPage: false, complete: true, records: [] }));

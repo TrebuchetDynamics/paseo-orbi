@@ -1,9 +1,9 @@
 import type { PluginClientContext, PluginScreenProps } from '@getpaseo/plugin/client';
-import { useHosts, useRpc } from '@getpaseo/plugin/client';
-import { Pressable, ScrollView, Text, View } from 'react-native';
-import { deploymentsList, type DeploymentCatalog, type Observation } from '../shared/common';
+import { useRpc } from '@getpaseo/plugin/client';
+import { Pressable, Text, View } from 'react-native';
+import { type DeploymentCatalog } from '../shared/common';
 import { fleetRead, type FleetSnapshot } from '../shared/fleet';
-import { ObservationView, useForeground, useObservationQuery } from './observation';
+import { ObservationView, useObservationQuery } from './observation';
 
 type Props = PluginScreenProps & { openScreen: PluginClientContext['openScreen'] };
 function DeploymentCard({ entry, connected, foreground, ...props }: Props & {
@@ -39,35 +39,15 @@ function DeploymentCard({ entry, connected, foreground, ...props }: Props & {
     <Pressable accessibilityRole="button" accessibilityLabel={`Active work for ${entry.label}`} onPress={() => props.openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })}><Text style={text}>View active work in Issues</Text></Pressable>
   </View>;
 }
-export function Fleet(props: Props) {
-  const list = useRpc(deploymentsList);
-  const hosts = useHosts();
-  const foreground = useForeground();
-  const connected = hosts.some(host => host.serverId === props.host.id && host.status === 'online');
-  const query = useObservationQuery<DeploymentCatalog>({
-    hostId: props.host.id, deploymentId: 'catalog', selector: 'deployments.list', foreground, connected,
-    read: async (): Promise<Observation<DeploymentCatalog>> => {
-      const catalog = await list({});
-      const now = new Date().toISOString();
-      return { state: 'available', observedAt: now, lastSuccessfulAt: now, data: catalog, problems: catalog.problems };
-    },
-  });
+// The Shell is the sole catalog/foreground/connectivity owner for every route.
+export function Fleet({ entries, connected, foreground, ...props }: Props & {
+  entries: DeploymentCatalog['entries']; connected: boolean; foreground: boolean;
+}) {
   const text = { color: props.theme.colors.foreground };
-  return <ScrollView style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }} contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 12 }}>
+  return <View style={{ gap: 12 }}>
     <Text style={text}>Fleet — read-only</Text>
     <Text style={text}>Configured capacity is not live occupancy or a machine-wide capacity promise.</Text>
-    {!connected && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
-    <ObservationView {...query} theme={props.theme}>{catalog => <View style={{ gap: 12 }}>
-      {catalog.state === 'unconfigured' && <Text style={text}>Unconfigured: ask the operator to set PASEO_ORBI_CONFIG to an authorized JSON file and reload this plugin.</Text>}
-      {catalog.state === 'invalid' && <Text style={text}>Invalid configuration: ask the operator to repair the authorization file and reload this plugin.</Text>}
-      {catalog.state === 'configured' && catalog.entries.length === 0 && <Text style={text}>No configured deployments.</Text>}
-      {catalog.entries.map(entry => entry.status === 'available'
-        ? <DeploymentCard key={`${props.host.id}:${entry.id}`} {...props} entry={entry} connected={connected} foreground={foreground} />
-        : <View key={entry.id} style={{ padding: props.layout.compact ? 12 : 16 }}>
-          <Text style={text}>{entry.label} ({entry.repo}): {entry.status}</Text>
-          {entry.problems.map((p, i) => <Text key={i} style={text}>{p.source}: {p.code}</Text>)}
-          <Text style={text}>Ask the operator to repair the authorized configuration/source profile and reload this plugin.</Text>
-        </View>)}
-    </View>}</ObservationView>
-  </ScrollView>;
+    {entries.filter(entry => entry.status === 'available').map(entry =>
+      <DeploymentCard key={`${props.host.id}:${entry.id}:${entry.repo}`} {...props} entry={entry} connected={connected} foreground={foreground} />)}
+  </View>;
 }

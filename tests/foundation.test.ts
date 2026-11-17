@@ -350,7 +350,7 @@ describe('package_and_registration', () => {
     expect(screens.map(s => s.id)).toEqual(['fleet', 'issues', 'runs', 'blockers']);
     const client = queryClient();
     for (const screen of screens) {
-      const renderer = await render(client, React.createElement(screen.Component, props));
+      const renderer = await render(client, React.createElement(screen.Component, { ...props, params: { deploymentId: 'demo' } }));
       expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'runs' || screen.id === 'blockers' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
@@ -365,33 +365,108 @@ describe('package_and_registration', () => {
         await act(async () => selectors[0].props.onPress());
         expect(openScreen).toHaveBeenCalledWith({ screenId: screen.id, params: { deploymentId: 'demo' } });
       }
+      const navigation = renderer.root.findByProps({ testID: 'orbi-navigation' });
+      expect(navigation.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
+      const tabs = navigation.findAllByType('Pressable' as any);
+      expect(tabs.map(tab => tab.props.accessibilityLabel)).toEqual(['Open Overview', 'Open Issues', 'Open Runs', 'Open Blockers']);
+      for (const [index, tab] of tabs.entries()) {
+        expect(tab.props.accessibilityRole).toBe('button'); // RN web supplies Enter/Space activation for onPress.
+        expect(tab.props.accessibilityState).toEqual({ selected: screens[index].id === screen.id });
+        await act(async () => tab.props.onPress());
+        expect(openScreen).toHaveBeenLastCalledWith({ screenId: screens[index].id, params: { deploymentId: 'demo' } });
+      }
+      expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Open '))).toHaveLength(4);
+      expect(JSON.stringify(renderer.toJSON())).not.toContain('Read-only. Open Fleet');
       expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(16);
-      const light = { ...props, theme: { colors: { foreground: '#222', foregroundMuted: '#555', surface0: '#fff' } }, layout: { compact: false, platform: 'web' } } as PluginScreenProps;
+      const light = { ...props, params: { deploymentId: 'rejected' }, theme: { colors: { ...props.theme.colors, foreground: '#222', foregroundMuted: '#555', surface0: '#fff' } }, layout: { compact: false, platform: 'web' } } as PluginScreenProps;
       await act(async () => renderer.update(tree(client, React.createElement(screen.Component, light))));
       expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(24);
       for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#222');
+      await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Open Overview' }).props.onPress());
+      expect(openScreen).toHaveBeenLastCalledWith({ screenId: 'fleet', params: {} });
     }
     const renderer = await render(client, React.createElement(sidebar[0].Component, { ...props, currentScreen: null, openScreen, openPopover: vi.fn() }));
     const rows = renderer.root.findAll(node => node.type === ('SidebarRow' as any));
-    expect(rows).toHaveLength(4); rows[2].props.onPress(); expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs' });
+    expect(rows).toHaveLength(1); expect(rows[0].props.label).toBe('Orbi');
+    rows[0].props.onPress(); expect(openScreen).toHaveBeenCalledWith({ screenId: 'fleet' });
+    for (const screen of screens) {
+      await act(async () => renderer.update(tree(client, React.createElement(sidebar[0].Component, { ...props, currentScreen: { screenId: screen.id, params: {} }, openScreen, openPopover: vi.fn() }))));
+      expect(renderer.root.findByType('SidebarRow' as any).props.active).toBe(true);
+    }
     cleanup(); expect(remove).toHaveBeenCalledTimes(5);
   });
-  it('renders actual unconfigured catalog repair and foreground/offline host state', async () => {
-    vi.useFakeTimers(); host.readCatalog.mockReset(); host.readCatalog.mockResolvedValue(await rpc());
-    const { Shell } = await import('../client/shell');
-    const renderer = await render(queryClient(), React.createElement(Shell, { ...props, route: 'fleet', openScreen: vi.fn() }));
-    expect(JSON.stringify(renderer.toJSON())).toContain('PASEO_ORBI_CONFIG');
-    await act(async () => { for (const listener of host.listeners) listener('background'); });
-    const calls = host.readCatalog.mock.calls.length;
-    await act(async () => { await vi.advanceTimersByTimeAsync(90000); });
-    expect(host.readCatalog).toHaveBeenCalledTimes(calls);
-    expect(JSON.stringify(renderer.toJSON())).toContain('stale');
-    await act(async () => renderer.unmount()); expect(host.listeners.size).toBe(0);
+  it('gates every deep link with the shared real-schema setup/catalog states and foreground/offline repair', async () => {
+    vi.useFakeTimers();
+    const screens: PluginScreenContribution[] = [];
+    const stop = contributeClient({ addScreen: (s: PluginScreenContribution) => { screens.push(s); return vi.fn(); }, addSidebarHeaderItem: () => vi.fn(), openScreen: vi.fn() } as unknown as PluginClientContext);
+    cleanups.push(stop);
+    const features = [host.readFleet, host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker];
+    for (const read of features) read.mockClear();
     const f = await setup(); await writeFile(f.authorization, '{SECRET_CANARY');
-    host.readCatalog.mockResolvedValue(await rpc(f.authorization));
-    const invalid = await render(queryClient(), React.createElement(Shell, { ...props, route: 'issues', openScreen: vi.fn() }));
-    expect(JSON.stringify(invalid.toJSON())).toContain('Invalid configuration');
-    expect(JSON.stringify(invalid.toJSON())).not.toContain('SECRET_CANARY');
+    const invalid = await rpc(f.authorization), unconfigured = await rpc();
+    await f.save([]); const empty = await rpc(f.authorization);
+    await f.save([{ ...f.entry, repo: 'Other/repo' }]); const rejected = await rpc(f.authorization);
+    const catalogs = [unconfigured, invalid, empty, rejected];
+    for (const catalog of catalogs) for (const screen of screens) {
+      host.readCatalog.mockReset().mockResolvedValue(catalog);
+      const client = queryClient();
+      const renderer = await render(client, React.createElement(screen.Component, { ...props, params: { deploymentId: 'demo' } }));
+      const json = () => JSON.stringify(renderer.toJSON());
+      expect(renderer.root.findAllByProps({ testID: 'orbi-catalog' })).toHaveLength(1);
+      const setup = catalog.state !== 'configured';
+      expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(setup ? 1 : 0);
+      expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(setup ? 0 : 1);
+      if (setup) {
+        expect(json()).toContain('PASEO_ORBI_CONFIG'); expect(json()).toContain('explicitly reload');
+        expect(json()).toContain('does not configure authorization or reload');
+        expect(json()).not.toMatch(/select a repository|Fleet — read-only/);
+      } else expect(json()).toContain(catalog.entries.length ? 'config_mismatch' : 'No configured deployments.');
+      expect(json()).not.toMatch(/Observation status:|Last success:|Observed:|SECRET_CANARY/);
+      expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
+      expect(host.readCatalog).toHaveBeenCalledTimes(1);
+      const button = () => renderer.root.findByProps({ accessibilityLabel: 'Refresh' });
+      expect(button().props).toMatchObject({ disabled: false, accessibilityState: { disabled: false, busy: false } });
+      let finish!: (value: DeploymentCatalog) => void;
+      host.readCatalog.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      let pending!: Promise<unknown>;
+      await act(async () => { pending = button().props.onPress(); }); await settle();
+      expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: true } });
+      await act(async () => { finish(catalog); await pending; }); await settle();
+      await act(async () => { for (const listener of host.listeners) listener('background'); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60001); }); await settle();
+      expect(json()).toContain('Catalog transport: stale');
+      expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
+      expect(host.readCatalog).toHaveBeenCalledTimes(2);
+      await act(async () => renderer.unmount());
+    }
+    for (const read of features) expect(read).not.toHaveBeenCalled();
+    // Missing selected-host source data is unavailable, never another host's cached catalog.
+    let fail!: (error: Error) => void;
+    host.readCatalog.mockReset().mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const client = queryClient();
+    const Screen = screens[1].Component;
+    const renderer = await render(client, React.createElement(Screen, props));
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: loading');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.accessibilityState).toEqual({ disabled: true, busy: true });
+    expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(0);
+    for (const read of features) expect(read).not.toHaveBeenCalled();
+    await act(async () => { fail(new Error('SECRET_CANARY')); }); await settle();
+    expect(JSON.stringify(renderer.toJSON())).toContain('refresh_failed');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: unavailable');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
+    host.readCatalog.mockResolvedValue(unconfigured);
+    await act(async () => { await renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle();
+    host.readCatalog.mockRejectedValue(new Error('SECRET_CANARY'));
+    await act(async () => { await renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Orbi setup');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: stale');
+    const calls = host.readCatalog.mock.calls.length;
+    await act(async () => renderer.update(tree(client, React.createElement(Screen, { ...props, host: { id: 'host-b', label: 'Host B' } })))); await settle();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Selected host is offline');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('Orbi setup');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.disabled).toBe(true);
+    expect(host.readCatalog).toHaveBeenCalledTimes(calls);
+    await act(async () => renderer.unmount()); expect(host.listeners.size).toBe(0);
   });
 });
 

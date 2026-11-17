@@ -25,6 +25,7 @@ import { fingerprint, profiles, type SourceProfile } from '../server/compatibili
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  host.hosts.splice(1);
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers();
 });
 const response = (data: unknown, status = 200) => `HTTP/2.0 ${status} Status\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}`;
@@ -63,7 +64,7 @@ it('four_views_read_only_journey', async () => {
     if (op.kind === 'systemctl-show') return 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=static\nResult=success\nExecMainStatus=0\nEnvironment=ENV_SECRET_CANARY\n';
     if (op.kind === 'journalctl') return JSON.stringify({ ...records.journal, MESSAGE: records.journal.MESSAGE.replace('Example/project', repo) }) + '\n';
     const issue = (n: number) => ({ number: n, title: `Issue ${n}`, state: n === 99 ? 'closed' : 'open', updated_at: stamp, labels: [{ name: n === 4 ? 'ai-blocked' : 'ai-in-progress' }], body: 'BODY_SECRET_CANARY' });
-    if (op.resource === 'issues') return response([42, 420, 4, ...(op.state === 'open' ? [] : [99])].map(issue));
+    if (op.resource === 'issues') return response([42, 420, 4, ...(op.state === 'open' ? [] : [99, ...(op.page === 1 ? Array.from({ length: 96 }, (_, i) => 1000 + i) : [])])].map(issue));
     if (op.resource === 'issue') return response(issue(op.issue));
     if (op.resource === 'comments') {
       const run = op.issue === 42 ? '22222222' : op.issue === 420 ? '33333333' : op.issue === 4 ? '12345678' : '11111111';
@@ -118,11 +119,52 @@ it('four_views_read_only_journey', async () => {
   await act(async () => renderer.update(tree('issues'))); await settle();
   expect(text()).toContain('Issue 42');
   await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed'); expect(text()).toContain('Reported run: 22222222; reports complete');
+  // Same deployment ID on another online host must remount local selection,
+  // while a cancelled old-host detail cannot publish late into either generation.
+  expect(host.readCatalog).toHaveBeenCalledTimes(2); // initial + the 30-second poll, no second owner on Issues
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.disabled).toBe(false);
+  await press('Next page'); expect(text()).toContain('Page 2.');
+  await press('Inspect issue 42');
+  const oldDetail = query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:42']);
+  const result = await handlers.get('issues.get')!({ deploymentId: 'demo', issue: 42 });
+  let finishDetail!: (value: unknown) => void;
+  host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
+  let pending!: Promise<unknown>;
+  await act(async () => { pending = renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' }).at(-1)!.props.onPress(); }); await settle();
+  host.hosts.push({ serverId: 'host-b', label: 'Host A', status: 'online' });
+  const otherHost = { ...props, host: { id: 'host-b', label: 'Host A' } } as PluginScreenProps;
+  await act(async () => renderer.update(tree('issues', otherHost))); await settle();
+  expect(text()).toContain('Page 1.'); expect(text()).not.toContain('Page 2.'); expect(text()).not.toContain('Dependencies: no open blockers observed');
+  expect(host.readCatalog).toHaveBeenCalledTimes(3);
+  await act(async () => { finishDetail(result); await pending; }); await settle();
+  expect(text()).not.toContain('Dependencies: no open blockers observed');
+  expect(query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:42'])).toEqual(oldDetail);
+  expect(query.getQueryData(['paseo-orbi', 'host-b', 'demo', 'issues.get:42'])).toBeUndefined();
+  await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed');
+  await act(async () => renderer.update(tree('issues', { ...otherHost, params: { deploymentId: 'second' } }))); await settle();
+  expect(text()).not.toContain('Dependencies: no open blockers observed');
+  await act(async () => renderer.update(tree('issues', otherHost))); await settle();
+  await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed');
+  // Revalidated repository identity resets local detail even when host/deployment IDs match.
+  const catalogKey = ['paseo-orbi', 'host-b', 'catalog', 'deployments.list'];
+  const catalogObservation = query.getQueryData<any>(catalogKey);
+  await act(async () => { query.setQueryData(catalogKey, { ...catalogObservation, data: { ...catalogObservation.data,
+    entries: catalogObservation.data.entries.map((entry: any) => entry.id === 'demo' ? { ...entry, repo: 'Other/repository' } : entry) } }); }); await settle();
+  expect(text()).not.toContain('Dependencies: no open blockers observed');
+  await act(async () => renderer.update(tree('issues', { ...props, params: { deploymentId: 'second' } }))); await settle();
+  expect(text()).not.toContain('Dependencies: no open blockers observed');
+  host.hosts.splice(1);
   await act(async () => renderer.update(tree('runs'))); await settle();
   expect(text()).toContain('22222222'); expect(text()).toContain('33333333'); expect(text()).not.toContain('11111111');
   await press('Inspect run 42 22222222'); expect(text()).toContain('session-42'); expect(text()).toContain('unit tests');
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Issue number for history' }).props.onChangeText('99'));
   await press('Inspect issue history'); expect(text()).toContain('11111111'); expect(text()).toContain('history');
+  const detailCalls = host.readRun.mock.calls.length;
+  await act(async () => renderer.update(tree('runs', { ...props, params: { deploymentId: 'second' } }))); await settle();
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Issue number for history' }).props.value).toBe('');
+  expect(text()).not.toContain('Detail evidence — loaded only on selection');
+  expect(text()).not.toContain('Issue #99 history');
+  expect(host.readRun).toHaveBeenCalledTimes(detailCalls);
   await act(async () => renderer.update(tree('blockers'))); await settle();
   await press('Inspect blocker 4'); expect(text()).toContain('test.log: present'); expect(text()).toContain('complete report read');
   // Selected deployment changes use the other supported profile, never shared data.
