@@ -85,6 +85,7 @@ describe('package_and_registration boundaries', () => {
     expect(server.exclude).toContain('tests/e2e/**');
     expect(server.include).toContain('tests/**/*.ts');
     expect(browser.extends).toBeUndefined(); expect(browser.compilerOptions.lib).toEqual(['ES2023', 'DOM']);
+    expect(read('vitest.config.ts')).toContain("include: ['tests/**/*.test.{ts,tsx}']"); // Rooted selection never scans .orbi/ or nested .worktrees/.
     expect(read('vitest.config.ts')).toContain("exclude: [...configDefaults.exclude, 'tests/e2e/**']");
     const runtime = json('tests/e2e/runtime/package.json'), lock = json('tests/e2e/runtime/package-lock.json');
     expect(runtime.dependencies).toEqual({ '@getpaseo/cli': '0.15.4' }); expect(runtime.engines.node).toBe('22.19.0');

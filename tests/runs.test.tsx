@@ -275,13 +275,13 @@ it('checks_and_selection_lifecycle', async () => {
   expect(host.readRun).toHaveBeenCalledTimes(2); // explicit reselection reloads cached detail
   for (const state of ['pending', 'missing', 'failed', 'inaccessible']) {
     host.readRun.mockResolvedValue(observation(pr(state)));
-    await act(async () => { renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[1].props.onPress(); });
+    await act(async () => { renderer.root.findByProps({ testID: 'orbi-runs' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress(); });
     await settle(); await settle(); expect(visible()).toContain(state); expect(visible()).not.toContain('Head checks: passed');
   }
   // A late response for a deselected issue cannot revive its detail.
   let resolveOld!: (value: unknown) => void;
   host.readRun.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
-  await act(async () => { renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[1].props.onPress(); });
+  await act(async () => { renderer.root.findByProps({ testID: 'orbi-runs' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress(); });
   await settle();
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Issue number for history' }).props.onChangeText('420'));
   host.readRuns.mockResolvedValue(observation([{ ...row, issue: 420, runId: '33333333', membership: 'history' }]));
@@ -293,7 +293,7 @@ it('checks_and_selection_lifecycle', async () => {
   await press('Inspect run 420 33333333');
   let resolveHost!: (value: unknown) => void;
   host.readRun.mockImplementationOnce(() => new Promise(resolve => { resolveHost = resolve; }));
-  await act(async () => { renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[1].props.onPress(); }); await settle();
+  await act(async () => { renderer.root.findByProps({ testID: 'orbi-runs' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress(); }); await settle();
   await act(async () => renderer.update(<QueryClientProvider client={client}><Shell {...screenProps} host={{ ...screenProps.host, id: 'host-b' }} /></QueryClientProvider>));
   await settle(); await settle();
   await act(async () => resolveHost(observation(pr('passed')))); await settle();

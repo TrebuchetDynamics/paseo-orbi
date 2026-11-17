@@ -578,7 +578,7 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("daemon user's existing gh authentication");
     expect(JSON.stringify(renderer.toJSON())).toContain('incomplete — current run not established');
     f.advance(); denyComments = false;
-    await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[1].props.onPress()); await settle(); await settle();
+    await act(async () => renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress()); await settle(); await settle();
     expect(JSON.stringify(renderer.toJSON())).not.toContain('auth_denied\"');
     expect(JSON.stringify(renderer.toJSON())).toContain(run);
     expect((await f.reader.readIssueReports('demo', 4)).problems).toEqual([]);
@@ -593,7 +593,7 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("daemon user's existing gh authentication");
     expect(JSON.stringify(renderer.toJSON())).not.toContain('No issues on this observed page');
     f.advance(); f.process.mockResolvedValue(response([rest.issue]));
-    await act(async () => renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === 'Refresh')[0].props.onPress()); await settle(); await settle();
+    await act(async () => renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('Browse issue evidence');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' })).toBeDefined();
   });

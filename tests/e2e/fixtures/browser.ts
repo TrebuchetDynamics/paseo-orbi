@@ -70,14 +70,21 @@ export async function menu(page: Page) {
 }
 export async function navigate(page: Page, view: string) {
   await menu(page);
-  await page.getByRole('button', { name: view[0].toUpperCase() + view.slice(1), exact: true }).click();
-  await expect(page.getByTestId('plugin-surface-title')).toHaveText(view[0].toUpperCase() + view.slice(1));
+  await page.getByRole('button', { name: 'Orbi', exact: true }).click();
+  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Fleet');
+  if (view !== 'fleet') {
+    const destination = page.getByTestId('orbi-navigation').getByRole('button', { name: `Open ${view[0].toUpperCase() + view.slice(1)}`, exact: true });
+    // RN Pressable keyboard activation must reach the same route owner as a click.
+    await destination.focus(); await page.keyboard.press('Enter');
+    await expect(page.getByTestId('plugin-surface-title')).toHaveText(view[0].toUpperCase() + view.slice(1));
+    await expect(destination).toHaveAttribute('aria-selected', 'true');
+  }
 }
 export async function select(page: Page, view: string) {
-  if (view !== 'fleet') await page.getByRole('button', { name: 'Select Demo', exact: true }).click();
+  if (view !== 'fleet') await page.getByTestId(`orbi-${view}`).getByRole('button', { name: 'Select Demo', exact: true }).click();
 }
-export async function refresh(page: Page) {
-  const controls = page.getByRole('button', { name: 'Refresh', exact: true });
+export async function refresh(page: Page, view: string) {
+  const controls = page.getByTestId(`orbi-${view}`).getByRole('button', { name: 'Refresh', exact: true });
   for (let i = 0; i < await controls.count(); i++) { const control = controls.nth(i); if (await control.isEnabled()) await control.click(); }
 }
 export async function theme(page: Page, url: string, mode: string) {
@@ -94,14 +101,15 @@ export async function assertState(page: Page, view: string, scenario: string) {
     await expect(page.getByText(scenario === 'unconfigured' ? /Unconfigured: ask the operator/ : /unsupported_source_profile/).first()).toBeVisible(); return;
   }
   const status = scenario === 'stale' ? 'stale' : scenario === 'unavailable' ? 'unavailable' : scenario === 'partial' ? 'partial' : 'available';
-  // Index 0 is the authorization catalog, index 1 the actual view data.
-  // Partial Issues intentionally selects detail (index 2); journal details may
-  // legitimately be partial while their successful Runs list remains available.
-  const index = view === 'issues' && scenario === 'partial' ? 2 : 1;
-  const observation = page.getByLabel(/^Observation status: /).nth(index);
+  // Scope to the actual feature, never a catalog-relative observation index.
+  // Partial Issues selects its detail; Runs list remains independent of journal detail.
+  const feature = page.getByTestId(`orbi-${view}`);
+  const observations = feature.getByLabel(/^Observation status: /);
+  const observation = view === 'issues' && scenario === 'partial' ? observations.last() : observations.first();
   await expect(observation).toHaveAttribute('aria-label', `Observation status: ${status}`, { timeout: 65000 });
   await expect(observation).toBeVisible();
-  await expect(page.getByText(/Observed: .*Last success:/).nth(index)).toBeVisible();
+  const stamps = feature.getByText(/Observed: .*Last success:/);
+  await expect(view === 'issues' && scenario === 'partial' ? stamps.last() : stamps.first()).toBeVisible();
   if (scenario === 'empty') await expect(page.getByText(view === 'fleet' ? 'No recorded runs in the validated health history.' : view === 'issues' ? 'No issues on this observed page.' : view === 'runs' ? 'No attributed runs in this observed scope.' : 'No blockers in the complete observed scope.', { exact: true })).toBeVisible();
   if (scenario === 'available') await expect(page.getByText(view === 'fleet' ? /Configured capacity: 2/ : view === 'runs' ? /run 84360d31/ : new RegExp(`host-a synthetic issue ${view === 'blockers' ? 43 : 42}`)).first()).toBeVisible();
 }

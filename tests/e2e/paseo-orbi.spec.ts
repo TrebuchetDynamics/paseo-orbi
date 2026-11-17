@@ -12,7 +12,7 @@ for (const view of views) {
     await control.focus(); await page.keyboard.press('Enter');
     await expect(page.getByText(view === 'fleet' ? /Page 1\./ : view === 'issues' ? /Dependencies: no open blockers observed/ : view === 'runs' ? /Detail evidence — loaded only on selection/ : /Artifact metadata only/).first()).toBeVisible();
     await page.setViewportSize({ width: 375, height: 667 });
-    const end = page.getByRole('button', { name: 'Refresh', exact: true }).last();
+    const end = page.getByTestId(`orbi-${view === 'fleet' ? 'issues' : view}`).getByRole('button', { name: 'Refresh', exact: true }).last();
     await end.scrollIntoViewIfNeeded(); await expect(end).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
     expect(await page.getByRole('button', { name: /^(Retry|Requeue|Merge|Approve|Restart|Stop service)$/i }).count()).toBe(0);
@@ -22,12 +22,12 @@ for (const view of views) {
     await state(host, scenario === 'stale' ? 'available' : scenario); await configure(host, 'available');
     await page.goto(host.url); await navigate(page, view); await select(page, view);
     if (scenario === 'partial' && view === 'issues') await page.getByRole('button', { name: 'Inspect issue 42', exact: true }).click();
-    if (scenario === 'stale') { await assertState(page, view, 'available'); await state(host, 'stale'); await page.waitForTimeout(30100); await refresh(page); }
+    if (scenario === 'stale') { await assertState(page, view, 'available'); await state(host, 'stale'); await page.waitForTimeout(30100); await refresh(page, view); }
     await assertState(page, view, scenario);
     if (scenario !== 'empty') {
       await expect(page.getByText(view === 'fleet' ? /Ask the operator to check/ : /auth_denied: ask the operator/).first()).toBeVisible();
       await state(host, 'available'); // only fixture writer repairs; the observer never mutates
-      await page.waitForTimeout(30100); await refresh(page);
+      await page.waitForTimeout(30100); await refresh(page, view);
       await assertState(page, view, 'available');
     }
   });
@@ -50,8 +50,8 @@ test('refresh coalesces, polls at 30 seconds and selection-only detail ages at 6
   await page.waitForTimeout(31000);
   expect(Date.now() - start).toBeGreaterThanOrEqual(30000); expect(await count()).toBeGreaterThan(before);
   await state(host, 'late');
-  // The outer catalog Refresh is last; exercise the Fleet telemetry request itself.
-  const control = page.getByRole('button', { name: 'Refresh', exact: true }).first();
+  // Exercise Fleet telemetry, not the shared catalog read.
+  const control = page.getByTestId('orbi-fleet').getByRole('button', { name: 'Refresh', exact: true }).first();
   await control.click(); await expect(control).toBeDisabled();
   // Disabled UI does not issue a second request; every unit is read once per refresh.
   const during = await count(); await page.waitForTimeout(200);
@@ -60,11 +60,11 @@ test('refresh coalesces, polls at 30 seconds and selection-only detail ages at 6
   await state(host, 'available'); await navigate(page, 'runs'); await select(page, 'runs');
   await page.getByRole('button', { name: 'Inspect run 42 84360d31', exact: true }).click();
   await expect(page.getByText(/Detail evidence — loaded only on selection/)).toBeVisible();
-  const detailStamp = await page.getByText(/Observed: .*Last success:/).last().innerText(), agingStart = Date.now();
+  const detailStamp = await page.getByTestId('orbi-runs').getByText(/Observed: .*Last success:/).last().innerText(), agingStart = Date.now();
   await page.waitForTimeout(60100);
   expect(Date.now() - agingStart).toBeGreaterThanOrEqual(60000);
-  await expect(page.getByLabel('Observation status: stale', { exact: true }).last()).toBeVisible();
-  expect(await page.getByText(/Observed: .*Last success:/).last().innerText()).toBe(detailStamp);
+  await expect(page.getByTestId('orbi-runs').getByLabel('Observation status: stale', { exact: true }).last()).toBeVisible();
+  expect(await page.getByTestId('orbi-runs').getByText(/Observed: .*Last success:/).last().innerText()).toBe(detailStamp);
 });
 test('two hosts with identical labels/IDs: selected detail/page, late result, no fallback and disconnect/reconnect', async ({ page, lease, network }) => {
   const [a, b] = lease.hosts;
@@ -115,11 +115,11 @@ test('two hosts with identical labels/IDs: selected detail/page, late result, no
   for (const socket of network.sockets) if (Number(new URL(socket.url()).port) === b.port) await socket.close();
   await expect(page.getByText(/Selected host is offline|Plugin host is offline/).first()).toBeVisible({ timeout: 30000 });
   await page.waitForTimeout(1000);
-  await expect(page.getByRole('button', { name: 'Refresh', exact: true }).last()).toBeDisabled();
+  await expect(page.getByTestId('orbi-issues').getByRole('button', { name: 'Refresh', exact: true }).last()).toBeDisabled();
   expect((await readFile(a.calls, 'utf8')).length).toBe(beforeA);
   network.blocked.delete(b.port);
   await expect(page.getByText(/Selected host is offline|Plugin host is offline/)).toHaveCount(0, { timeout: 30000 });
-  await refresh(page); await expect(page.getByText(/host-b synthetic issue 42/).first()).toBeVisible();
+  await refresh(page, 'issues'); await expect(page.getByText(/host-b synthetic issue 42/).first()).toBeVisible();
   // Removal/disposal is performed by global teardown on each explicit owned host.
   expect(JSON.parse(await cli(b, 'ls', 'paseo-orbi', '--json'))[0].status).toBe('running');
 });

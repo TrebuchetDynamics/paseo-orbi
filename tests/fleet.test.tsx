@@ -102,7 +102,7 @@ import React from 'react';
 import { create, act, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PluginScreenProps } from '@getpaseo/plugin/client';
-import { Fleet } from '../client/fleet';
+import { Shell } from '../client/shell';
 import contribute from '../index.server';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import { deploymentsList } from '../shared/common';
@@ -125,7 +125,7 @@ it('stale_compact_and_theme', async () => {
   host.readFleet.mockReset().mockImplementation(input => readFleet(repository, ports, input));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => client.clear());
   const openScreen = vi.fn();
-  const tree = (p = props) => <QueryClientProvider client={client}><Fleet {...p} openScreen={openScreen} /></QueryClientProvider>;
+  const tree = (p = props) => <QueryClientProvider client={client}><Shell {...p} route="fleet" openScreen={openScreen} /></QueryClientProvider>;
   let renderer!: ReactTestRenderer;
   await act(async () => { renderer = create(tree()); }); cleanups.push(async () => { await act(async () => renderer.unmount()); });
   await settle(); await settle();
@@ -135,6 +135,9 @@ it('stale_compact_and_theme', async () => {
   expect(text()).toContain('Configured capacity: 2; Occupancy: unknown');
   expect(text()).toContain('Reported outcome: failed'); expect(text()).toContain('Active: inactive');
   expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId).sort()).toEqual(['demo', 'inaccessible']);
+  expect(host.readCatalog).toHaveBeenCalledTimes(1);
+  expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(1);
+  expect(host.listeners.size).toBe(1);
   expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(16);
   expect(renderer.root.findAllByType('Text' as any).every(node => node.props.style.color === '#eee')).toBe(true);
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Active work for Demo' }).props.onPress());
@@ -143,7 +146,7 @@ it('stale_compact_and_theme', async () => {
   // rejection. This real failure path must retain the last successful snapshot too.
   ports.process.mockRejectedValue(new ReadError('process_failed'));
   ports.read.mockRejectedValue(new ReadError('read_failed'));
-  await act(async () => { await renderer.root.findAll(node => node.props.accessibilityLabel === 'Refresh')[0].props.onPress(); }); await settle();
+  await act(async () => { await renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); }); await settle();
   expect(text()).toContain('stale');
   expect(text()).toContain('Reported outcome: failed');
   expect(text()).toContain('Active: inactive');
@@ -151,7 +154,7 @@ it('stale_compact_and_theme', async () => {
   expect(text()).toContain('filesystem: read_failed');
   expect(text()).toContain('Last success: 2026-11-14T23:00:00.000Z');
   host.readFleet.mockRejectedValue(new Error('SECRET raw error'));
-  const refreshes = renderer.root.findAll(node => node.props.accessibilityLabel === 'Refresh');
+  const refreshes = renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' });
   await act(async () => { await refreshes[0].props.onPress(); }); await settle();
   expect(text()).toContain('stale'); expect(text()).toContain('refresh_failed');
   expect(text()).toContain('Last success: 2026-11-14T23:00:00.000Z');
