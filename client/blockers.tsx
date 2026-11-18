@@ -4,7 +4,7 @@ import { useRpc, type PluginScreenProps } from '@getpaseo/plugin/client';
 import { attentionText, blockersList, blockersRead, failureGuidance, waitGuidance, type Blocker, type BlockerPage, type BlockerDetails } from '../shared/blockers';
 import { ObservationView, useObservationQuery } from './observation';
 
-type Props = { deploymentId: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme'] };
+type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme'] };
 export function BlockerEvidence({ data, theme }: { data: Blocker | BlockerDetails; theme: Props['theme'] }) {
   const text = { color: theme.colors.foreground };
   const reports = data.reports;
@@ -36,8 +36,8 @@ export function Blockers(props: Props) {
   const [page, setPage] = useState(1);
   const [selected, select] = useState<number | null>(null);
   const read = useRpc(blockersList), inspect = useRpc(blockersRead);
-  const query = useObservationQuery<BlockerPage>({ ...props, selector: `blockers.list:${page}`, read: () => read({ deploymentId: props.deploymentId, page }) });
-  const detail = useObservationQuery<BlockerDetails>({ ...props, connected: props.connected && selected !== null, selector: `blockers.read:${selected ?? 'none'}`, read: () => inspect({ deploymentId: props.deploymentId, issue: selected! }) });
+  const query = useObservationQuery<BlockerPage>({ ...props, selector: `blockers.list:${props.repo}:${page}`, read: () => read({ deploymentId: props.deploymentId, page }) });
+  const detail = useObservationQuery<BlockerDetails>({ ...props, connected: props.connected && selected !== null, selector: `blockers.read:${props.repo}:${selected ?? 'none'}`, read: () => inspect({ deploymentId: props.deploymentId, issue: selected! }) });
   const text = { color: props.theme.colors.foreground };
   return <View style={{ gap: 12 }}>
     <Text style={text}>Recovery stays Orbi/operator-owned. Guidance and reported retry safety never authorize recovery. This screen only reads evidence.</Text>

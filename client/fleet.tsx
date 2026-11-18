@@ -11,7 +11,7 @@ function DeploymentCard({ entry, connected, foreground, ...props }: Props & {
 }) {
   const read = useRpc(fleetRead);
   const query = useObservationQuery<FleetSnapshot>({
-    hostId: props.host.id, deploymentId: entry.id, selector: 'fleet.read', connected, foreground,
+    hostId: props.host.id, deploymentId: entry.id, selector: `fleet.read:${entry.repo}`, connected, foreground,
     read: () => read({ deploymentId: entry.id }),
   });
   const text = { color: props.theme.colors.foreground };

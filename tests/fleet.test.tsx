@@ -174,3 +174,48 @@ it('registers fleet.read at the actual server entry with startup authorization',
   expect(handlers.has(deploymentsList)).toBe(true); expect(handlers.has(fleetRead)).toBe(true);
   await expect(handlers.get(fleetRead)!({ deploymentId: 'unauthorized' })).rejects.toThrow('deployment_unavailable');
 });
+
+it('repository_change_scopes_fresh_capacity_health_and_failed_refresh', async () => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+  const catalog = (repo: string) => ({ state: 'configured', problems: [], entries: [
+    { id: 'demo', label: 'Demo', repo, status: 'available', problems: [] },
+  ] });
+  const observation = (repo: string, capacity: number, outcome: string) => fleetRead.output.parse({
+    state: 'available', observedAt: new Date().toISOString(), lastSuccessfulAt: new Date().toISOString(), problems: [],
+    data: { deploymentId: 'demo', repo, profile: 'orbi-0.7.41-release', configuredCapacity: capacity, occupancy: null, units: [],
+      health: { lastPickupAt: null, recentRuns: [{ repo, issue: 3, runId: '12345678', outcome, at: new Date().toISOString() }] } },
+  });
+  const a = observation('Example/project', 2, 'A_HEALTH'), b = observation('Reassigned/project', 5, 'B_HEALTH');
+  host.readCatalog.mockReset().mockResolvedValue(catalog('Example/project'));
+  host.readFleet.mockReset().mockResolvedValue(a);
+  const client = new QueryClient();
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...props} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
+  await settle(); await settle();
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  const setCatalog = async (repo: string) => {
+    await act(async () => { client.setQueryData(['paseo-orbi', 'host-a', 'catalog', 'deployments.list'], {
+      state: 'available', observedAt: new Date().toISOString(), lastSuccessfulAt: new Date().toISOString(), problems: [], data: catalog(repo),
+    }); }); await settle(); await settle();
+  };
+  expect(text()).toContain('Configured capacity: 2'); expect(text()).toContain('A_HEALTH');
+  let reject!: (error: Error) => void;
+  host.readFleet.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  await setCatalog('Reassigned/project');
+  expect(host.readFleet).toHaveBeenCalledTimes(2);
+  expect(host.readFleet).toHaveBeenLastCalledWith(fleetRead.input.parse({ deploymentId: 'demo' }));
+  expect(text()).toContain('Loading'); expect(text()).not.toContain('Configured capacity: 2'); expect(text()).not.toContain('A_HEALTH');
+  await act(async () => reject(new Error('transport unavailable'))); await settle();
+  expect(text()).toContain('unavailable'); expect(text()).toContain('filesystem: refresh_failed'); expect(text()).not.toContain('A_HEALTH');
+  const refresh = async () => { await act(async () => { await renderer.root.findByProps({ testID: 'orbi-fleet' }).findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle(); };
+  host.readFleet.mockResolvedValue(b); await refresh();
+  expect(text()).toContain('Configured capacity: 5'); expect(text()).toContain('B_HEALTH');
+  host.readFleet.mockRejectedValue(new Error('transport unavailable')); await refresh();
+  expect(text()).toContain('stale'); expect(text()).toContain('B_HEALTH'); expect(text()).not.toContain('A_HEALTH');
+  // Returning to the same fresh identity must still reuse its cache, not clear it.
+  const calls = host.readFleet.mock.calls.length;
+  await setCatalog('Example/project');
+  expect(text()).toContain('A_HEALTH'); expect(text()).not.toContain('B_HEALTH');
+  expect(host.readFleet).toHaveBeenCalledTimes(calls);
+});

@@ -14,6 +14,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 import serverEntry from '../index.server';
 import clientEntry from '../index.client';
+import { issuesList, issuesGet } from '../shared/issues';
 import { ReadError, ReadPorts } from '../server/read-ports';
 import { fixture } from './helpers/fixtures';
 import records from './fixtures/runs/records.json';
@@ -125,7 +126,9 @@ it('four_views_read_only_journey', async () => {
   expect(renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.disabled).toBe(false);
   await press('Next page'); expect(text()).toContain('Page 2.');
   await press('Inspect issue 42');
-  const oldDetail = query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:42']);
+  const oldDetail = query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:Example/project:42']);
+  expect(oldDetail).toMatchObject({ data: { issue: { number: 42 }, reports: { selectedRunId: '22222222' } } });
+  expect(text()).toContain('Dependencies: no open blockers observed');
   const result = await handlers.get('issues.get')!({ deploymentId: 'demo', issue: 42 });
   let finishDetail!: (value: unknown) => void;
   host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
@@ -138,19 +141,43 @@ it('four_views_read_only_journey', async () => {
   expect(host.readCatalog).toHaveBeenCalledTimes(3);
   await act(async () => { finishDetail(result); await pending; }); await settle();
   expect(text()).not.toContain('Dependencies: no open blockers observed');
-  expect(query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:42'])).toEqual(oldDetail);
-  expect(query.getQueryData(['paseo-orbi', 'host-b', 'demo', 'issues.get:42'])).toBeUndefined();
+  expect(query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:Example/project:42'])).toEqual(oldDetail);
+  expect(query.getQueryData(['paseo-orbi', 'host-b', 'demo', 'issues.get:Example/project:42'])).toBeUndefined();
   await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed');
   await act(async () => renderer.update(tree('issues', { ...otherHost, params: { deploymentId: 'second' } }))); await settle();
   expect(text()).not.toContain('Dependencies: no open blockers observed');
   await act(async () => renderer.update(tree('issues', otherHost))); await settle();
   await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed');
-  // Revalidated repository identity resets local detail even when host/deployment IDs match.
+  // Catalog reassignment is a client seam, not a server startup reconfiguration.
+  // Supply distinguishable B data at the typed transport seam with B pending.
+  const aPage = query.getQueryData<any>(['paseo-orbi', 'host-b', 'demo', 'issues.list:Example/project:1']);
+  const bPage = issuesList.output.parse(JSON.parse(JSON.stringify(aPage).replaceAll('Example/project', 'Reassigned/project')));
+  bPage.data!.records.forEach(issue => { issue.title = `Reassigned issue ${issue.number}`; });
+  const bDetail = issuesGet.output.parse(JSON.parse(JSON.stringify(result).replaceAll('Example/project', 'Reassigned/project')));
+  bDetail.data!.issue.title = 'Reassigned issue 42'; bDetail.data!.reports.selectedRunId = 'bbbbbbbb';
+  let finishRepositoryList!: (value: unknown) => void, finishRepositoryDetail!: (value: unknown) => void;
+  host.readIssues.mockImplementationOnce(() => new Promise(resolve => { finishRepositoryList = resolve; }));
+  host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishRepositoryDetail = resolve; }));
+  const listCalls = host.readIssues.mock.calls.length, issueCalls = host.readIssue.mock.calls.length;
   const catalogKey = ['paseo-orbi', 'host-b', 'catalog', 'deployments.list'];
   const catalogObservation = query.getQueryData<any>(catalogKey);
   await act(async () => { query.setQueryData(catalogKey, { ...catalogObservation, data: { ...catalogObservation.data,
-    entries: catalogObservation.data.entries.map((entry: any) => entry.id === 'demo' ? { ...entry, repo: 'Other/repository' } : entry) } }); }); await settle();
+    entries: catalogObservation.data.entries.map((entry: any) => entry.id === 'demo' ? { ...entry, repo: 'Reassigned/project' } : entry) } }); }); await settle();
   expect(text()).not.toContain('Dependencies: no open blockers observed');
+  expect(text()).not.toContain('Issue 42'); expect(text()).not.toContain('Reported run: 22222222');
+  expect(text()).toContain('Loading');
+  expect(renderer.root.findAll(node => node.type === ('ExternalLink' as any))).toHaveLength(0);
+  expect(host.readIssues).toHaveBeenCalledTimes(listCalls + 1);
+  expect(host.readIssues).toHaveBeenLastCalledWith(issuesList.input.parse({ deploymentId: 'demo', page: 1 }));
+  await act(async () => finishRepositoryList(bPage)); await settle();
+  expect(text()).toContain('Reassigned issue 42');
+  await press('Inspect issue 42');
+  expect(host.readIssue).toHaveBeenCalledTimes(issueCalls + 1);
+  expect(host.readIssue).toHaveBeenLastCalledWith(issuesGet.input.parse({ deploymentId: 'demo', issue: 42 }));
+  expect(text()).not.toContain('Reported run: 22222222');
+  await act(async () => finishRepositoryDetail(bDetail)); await settle();
+  expect(text()).toContain('Reported run: bbbbbbbb');
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Open Reassigned/project issue 42 on GitHub' })).toBeDefined();
   await act(async () => renderer.update(tree('issues', { ...props, params: { deploymentId: 'second' } }))); await settle();
   expect(text()).not.toContain('Dependencies: no open blockers observed');
   host.hosts.splice(1);
