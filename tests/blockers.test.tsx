@@ -354,3 +354,46 @@ it('paginates_only_candidate_states_without_scanning_unrelated_comments', async 
   expect(second.records.map(r => r.issue.number)).toEqual([21]); expect(second.hasNextPage).toBe(false);
   expect(f.process.mock.calls.filter(([, op]) => op.kind === 'gh-api-get' && op.resource === 'comments').map(([, op]) => 'issue' in op ? op.issue : 0)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
 });
+
+it('repository_change_separates_pending_blocker_rows_details_and_sources', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  const detail = (selectedRepo: string, title: string, runId: string) => BlockerDetails.parse({
+    ...JSON.parse(JSON.stringify(safeBlocker()).replaceAll(repo, selectedRepo)),
+    issue: { ...issue(), title, url: `https://github.com/${selectedRepo}/issues/4` },
+    reports: { ...JSON.parse(JSON.stringify(safeBlocker().reports).replaceAll(repo, selectedRepo)), selectedRunId: runId },
+    artifacts: [], retention: { profile: 'orbi-0.7.41-release', worktreeRetainHours: 72, keepFailedWorktrees: null },
+  });
+  const a = detail(repo, 'A_BLOCKER_TITLE', 'aaaaaaaa'), b = detail('Reassigned/project', 'B_BLOCKER_TITLE', 'bbbbbbbb');
+  const page = (selectedRepo: string, data: BlockerDetails) => blockersList.output.parse(available({ repo: selectedRepo, page: 1, hasNextPage: false, complete: true,
+    records: [{ issue: data.issue, attention: data.attention, reports: data.reports }] }));
+  host.readBlockers.mockReset().mockResolvedValue(page(repo, a)); host.readBlocker.mockReset().mockResolvedValue(blockersRead.output.parse(available(a)));
+  const screen = await renderScreen();
+  const { renderer, settle } = screen;
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 4' }).props.onPress()); await settle(); await settle();
+  expect(text()).toContain('A_BLOCKER_TITLE'); expect(text()).toContain('Reported run: aaaaaaaa'); expect(text()).toContain('Artifact metadata only');
+  let finishList!: (value: unknown) => void, finishDetail!: (value: unknown) => void;
+  host.readBlockers.mockImplementationOnce(() => new Promise(resolve => { finishList = resolve; }));
+  host.readBlocker.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
+  // Refresh the actual host-level catalog while retaining QueryClient and selection IDs.
+  host.readCatalog.mockResolvedValue({ state: 'configured', problems: [], entries: [
+    { id: 'demo', label: 'Demo', repo: 'Reassigned/project', status: 'available', problems: [] },
+  ] });
+  await act(async () => { await renderer.root.findByProps({ testID: 'orbi-catalog' }).findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle(); await settle();
+  expect(host.readBlockers).toHaveBeenCalledTimes(2);
+  expect(host.readBlockers).toHaveBeenLastCalledWith(blockersList.input.parse({ deploymentId: 'demo', page: 1 }));
+  expect(text()).toContain('Loading'); expect(text()).not.toContain('A_BLOCKER_TITLE'); expect(text()).not.toContain('aaaaaaaa');
+  expect(text()).not.toContain(`https://github.com/${repo}/issues/4`); expect(text()).not.toContain('Artifact metadata only');
+  await act(async () => finishList(page('Reassigned/project', b))); await settle(); await settle();
+  expect(text()).toContain('B_BLOCKER_TITLE'); expect(text()).toContain('https://github.com/Reassigned/project/issues/4#issuecomment-1');
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 4' }).props.onPress()); await settle();
+  expect(host.readBlocker).toHaveBeenCalledTimes(2);
+  expect(host.readBlocker).toHaveBeenLastCalledWith(blockersRead.input.parse({ deploymentId: 'demo', issue: 4 }));
+  expect(text()).not.toContain('Artifact metadata only'); expect(text()).not.toContain('aaaaaaaa');
+  await act(async () => finishDetail(blockersRead.output.parse(available(b)))); await settle(); await settle();
+  expect(text()).toContain('Artifact metadata only'); expect(text()).toContain('Reported run: bbbbbbbb'); expect(text()).not.toContain('A_BLOCKER_TITLE');
+  host.readBlockers.mockRejectedValue(new Error('transport unavailable')); host.readBlocker.mockRejectedValue(new Error('transport unavailable'));
+  await act(async () => { for (const refresh of renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })) await refresh.props.onPress(); }); await settle();
+  expect(text()).toContain('stale'); expect(text()).toContain('refresh_failed'); expect(text()).toContain('B_BLOCKER_TITLE');
+  expect(text()).toContain('Artifact metadata only'); expect(text()).not.toContain('A_BLOCKER_TITLE'); expect(text()).not.toContain(`https://github.com/${repo}/issues/4`);
+});

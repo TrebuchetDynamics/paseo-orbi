@@ -69,7 +69,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
           {selected && (route === 'issues'
             ? <Issues key={featureKey} deploymentId={selected.id} repo={selected.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
             : route === 'runs' ? <Runs key={featureKey} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
-            : route === 'blockers' ? <Blockers key={featureKey} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
+            : route === 'blockers' ? <Blockers key={featureKey} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
             : null)}
         </>}
       </View>

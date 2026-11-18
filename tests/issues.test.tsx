@@ -434,12 +434,12 @@ describe('Issues user journey', () => {
     expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 1 });
     await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
 
-    const listKey = (hostId = 'host-a', id = 'demo') => ['paseo-orbi', hostId, id, 'issues.list:1'];
-    const detailKey = ['paseo-orbi', 'host-a', 'demo', 'issues.get:4'];
+    const listKey = (hostId = 'host-a', id = 'demo', selectedRepo = repo) => ['paseo-orbi', hostId, id, `issues.list:${selectedRepo}:1`];
+    const detailKey = ['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:4`];
     const page = issuesList.output.parse(client.getQueryData(listKey()));
     const detail = issuesGet.output.parse(client.getQueryData(detailKey));
     const setPage = async (url: string, hostId = 'host-a', selectedRepo = repo, id = 'demo') => {
-      await act(async () => { client.setQueryData(listKey(hostId, id), issuesList.output.parse({ ...page, data: { ...page.data!, repo: selectedRepo, records: [{ ...page.data!.records[0], url }] } })); });
+      await act(async () => { client.setQueryData(listKey(hostId, id, selectedRepo), issuesList.output.parse({ ...page, data: { ...page.data!, repo: selectedRepo, records: [{ ...page.data!.records[0], url }] } })); });
       await settle();
     };
     // Both issue URLs and available PR identities must be exact canonical destinations.
@@ -465,7 +465,7 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain('stale');
     expect(host.openExternalUrl).toHaveBeenCalledTimes(2);
     await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 1' }).props.onPress()); await settle(); await settle();
-    const currentDetailKey = ['paseo-orbi', 'host-a', 'demo', 'issues.get:1'];
+    const currentDetailKey = ['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:1`];
     for (const url of invalidUrls('pull', 42)) {
       await act(async () => { client.setQueryData(currentDetailKey, issuesGet.output.parse({ ...detail, data: { ...detail.data!, reports: { ...detail.data!.reports, prIdentity: { status: 'available', number: 42, url, source: 'scene', runId: run } } } })); });
       await settle();
@@ -497,10 +497,13 @@ describe('Issues user journey', () => {
     };
     const oldControl = link('issue', 1);
     await setCatalog('Other/project');
-    expect(links()).toHaveLength(0); // retained old evidence cannot navigate a different selected repo
+    await setPage(`https://github.com/${repo}/issues/1`, 'host-a', 'Other/project');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Inspect issue 1');
+    expect(links()).toHaveLength(0); // foreign evidence cannot navigate a different selected repo
     expect(JSON.stringify(renderer.toJSON())).not.toContain(safeMessage);
     for (const invalidRepo of ['owner/..', 'owner/.', 'owner/name/extra', 'owner%2fname/repo', 'owner/repo\n', '/repo', 'owner/', '-owner/repo', 'é/repo']) {
-      await setCatalog(invalidRepo); await setPage(`https://github.com/${invalidRepo}/issues/1`);
+      await setCatalog(invalidRepo); await setPage(`https://github.com/${invalidRepo}/issues/1`, 'host-a', invalidRepo);
+      expect(JSON.stringify(renderer.toJSON())).toContain('Inspect issue 1');
       expect(links()).toHaveLength(0);
     }
     await setCatalog(repo, 'invalid_config');
@@ -517,6 +520,7 @@ describe('Issues user journey', () => {
     await rerender({ ...screenProps, host: { ...screenProps.host, id: 'host-b' } });
     expect(links()).toHaveLength(0);
     await setPage('https://github.com/Other/project/issues/1', 'host-b', 'Other/project');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Inspect issue 1');
     const newControl = link('issue', 1, 'Other/project');
     expect(newControl).toBeDefined(); expect(newControl).not.toBe(oldControl);
     expect(JSON.stringify(renderer.toJSON())).not.toContain(safeMessage);
@@ -597,4 +601,65 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain('Browse issue evidence');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' })).toBeDefined();
   });
+});
+
+it('repository_change_separates_pending_lists_details_and_late_reads', async () => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+  const f = fakeReader();
+  f.process.mockImplementation(async (_id, op) => {
+    if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+    if (op.resource === 'issues') return response([rest.issue]);
+    if (op.resource === 'issue') return response(rest.issue);
+    if (op.resource === 'comments') return response([comment(1, `${marker()}\n${block('progress', reports.progress)}`)]);
+    return response([]);
+  });
+  const aPage = issuesList.output.parse(await f.reader.listIssues('demo', 1));
+  const aDetail = issuesGet.output.parse(await f.reader.getIssue('demo', 4));
+  aPage.data!.records[0].title = 'A_ISSUE_TITLE'; aDetail.data!.issue.title = 'A_ISSUE_TITLE';
+  aDetail.data!.reports.selectedRunId = 'aaaaaaaa';
+  const bPage = issuesList.output.parse({ ...aPage, data: { ...aPage.data!, repo: 'Reassigned/project', records: [
+    { ...aPage.data!.records[0], title: 'B_ISSUE_TITLE', url: 'https://github.com/Reassigned/project/issues/4' },
+  ] } });
+  const bIdentity = JSON.parse(JSON.stringify(aDetail).replaceAll(repo, 'Reassigned/project'));
+  const bDetail = issuesGet.output.parse({ ...bIdentity, data: { ...bIdentity.data, issue: bPage.data!.records[0],
+    reports: { ...bIdentity.data.reports, selectedRunId: 'bbbbbbbb' } } });
+  const catalog = (repo: string) => ({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+  host.readCatalog.mockResolvedValue(catalog(repo)); host.readIssues.mockReset().mockResolvedValue(aPage); host.readIssue.mockReset().mockResolvedValue(aDetail);
+  const { renderer, settle, client } = await renderIssues();
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); await settle(); };
+  await press('Inspect issue 4');
+  expect(text()).toContain('A_ISSUE_TITLE'); expect(text()).toContain('Reported run: aaaaaaaa');
+  let finishA!: (value: unknown) => void;
+  host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishA = resolve; }));
+  await act(async () => { renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress(); }); await settle();
+  let finishList!: (value: unknown) => void, rejectDetail!: (error: Error) => void;
+  host.readIssues.mockImplementationOnce(() => new Promise(resolve => { finishList = resolve; }));
+  host.readIssue.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectDetail = reject; }));
+  await act(async () => { client.setQueryData(['paseo-orbi', 'host-a', 'catalog', 'deployments.list'], {
+    state: 'available', observedAt: new Date().toISOString(), lastSuccessfulAt: new Date().toISOString(), problems: [], data: catalog('Reassigned/project'),
+  }); }); await settle(); await settle();
+  expect(host.readIssues).toHaveBeenCalledTimes(2);
+  expect(host.readIssues).toHaveBeenLastCalledWith(issuesList.input.parse({ deploymentId: 'demo', page: 1 }));
+  expect(text()).toContain('Loading'); expect(text()).not.toContain('A_ISSUE_TITLE'); expect(text()).not.toContain('aaaaaaaa');
+  expect(renderer.root.findAll(node => node.type === ('ExternalLink' as any))).toHaveLength(0);
+  await act(async () => finishList(bPage)); await settle(); await settle();
+  expect(text()).toContain('B_ISSUE_TITLE');
+  await press('Inspect issue 4');
+  // B must start even while A's same-issue transport is still pending.
+  expect(host.readIssue).toHaveBeenCalledTimes(3);
+  expect(host.readIssue).toHaveBeenLastCalledWith(issuesGet.input.parse({ deploymentId: 'demo', issue: 4 }));
+  expect(text()).not.toContain('aaaaaaaa');
+  await act(async () => finishA({ ...aDetail, data: { ...aDetail.data!, reports: { ...aDetail.data!.reports, selectedRunId: 'deadbeef' } } })); await settle();
+  expect(text()).not.toContain('deadbeef'); expect(text()).not.toContain('A_ISSUE_TITLE');
+  expect(client.getQueryData(['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:4`])).toEqual(aDetail);
+  await act(async () => rejectDetail(new Error('transport unavailable'))); await settle();
+  expect(text()).toContain('unavailable'); expect(text()).toContain('refresh_failed'); expect(text()).not.toContain('aaaaaaaa');
+  const refreshDetail = async () => { await act(async () => { await renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress(); }); await settle(); };
+  host.readIssue.mockResolvedValue(bDetail); await refreshDetail();
+  expect(text()).toContain('Reported run: bbbbbbbb');
+  expect(text()).not.toContain(`https://github.com/${repo}/`);
+  host.readIssue.mockRejectedValue(new Error('transport unavailable')); await refreshDetail();
+  expect(text()).toContain('stale'); expect(text()).toContain('Reported run: bbbbbbbb'); expect(text()).not.toContain('aaaaaaaa');
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Open Reassigned/project issue 4 on GitHub' })).toBeDefined();
 });

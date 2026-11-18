@@ -33,8 +33,8 @@ export function Issues(props: Props) {
   const [selected, select] = useState<number | null>(null);
   const read = useRpc(issuesList);
   const readDetail = useRpc(issuesGet);
-  const query = useObservationQuery<IssuePage>({ ...props, selector: `issues.list:${page}`, read: () => read({ deploymentId: props.deploymentId, page }) });
-  const detail = useObservationQuery<IssueDetail>({ ...props, connected: props.connected && selected !== null, selector: `issues.get:${selected ?? 'none'}`,
+  const query = useObservationQuery<IssuePage>({ ...props, selector: `issues.list:${props.repo}:${page}`, read: () => read({ deploymentId: props.deploymentId, page }) });
+  const detail = useObservationQuery<IssueDetail>({ ...props, connected: props.connected && selected !== null, selector: `issues.get:${props.repo}:${selected ?? 'none'}`,
     read: () => readDetail({ deploymentId: props.deploymentId, issue: selected! }) });
   const text = { color: props.theme.colors.foreground };
   return <View>
