@@ -604,6 +604,93 @@ describe('Issues user journey', () => {
   });
 });
 
+it('looks_up_an_issue_number_without_changing_browse_rows_or_page_limit', async () => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+  const catalog = { state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] };
+  const record = (number: number, title: string) => ({ number, title, url: `https://github.com/${repo}/issues/${number}`,
+    githubState: 'open' as const, updatedAt: '2026-10-15T06:20:00Z', labels: ['ai-blocked'], ...classifyIssue('open', ['ai-blocked']) });
+  const pageFor = (page: number) => issuesList.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+    data: { repo, page, hasNextPage: true, dependencyStatus: 'unknown', records: [record(page, `PAGE_${page}_TITLE`)] } });
+  const detailFor = (number: number, title: string) => issuesGet.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+    data: { issue: record(number, title),
+      reports: selectReports(repo, number, [comment(1, `${marker()}\n${block('progress', reports.progress)}`)], ['runner'], true),
+      dependencies: { complete: true, observedAt: '2026-11-14T23:00:00Z', records: [], problems: [] }, mergeEvidence: 'unknown' } });
+  host.readCatalog.mockResolvedValue(catalog);
+  host.readIssues.mockReset().mockImplementation(async input => pageFor(input.page));
+  host.readIssue.mockReset();
+  host.readIssue.mockImplementation(async input => input.issue === 999 ? Promise.reject(new Error('NETWORK_SECRET')) : detailFor(input.issue, `DETAIL_${input.issue}_TITLE`));
+  const { renderer, settle } = await renderIssues();
+  const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); await settle(); };
+  const input = () => renderer.root.findByProps({ accessibilityLabel: 'Issue number to inspect' });
+  const inspect = () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue by number' });
+  const setInput = async (value: string) => { await act(async () => input().props.onChangeText(value)); await settle(); };
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  const pageRows = () => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && /^Inspect issue \d+$/.test(node.props.accessibilityLabel)).map(node => node.props.accessibilityLabel);
+  for (let index = 0; index < 9; index++) await press('Next page');
+  expect(text()).toContain('Safety page limit reached; historical scope is incomplete.');
+  expect(pageRows()).toEqual(['Inspect issue 10']);
+  // Invalid numbers disable the control and never issue a read, even if activated.
+  for (const value of ['', '0', '007', '-1', '4.5', 'abc', String(Number.MAX_SAFE_INTEGER + 1)]) {
+    await setInput(value);
+    expect(inspect().props.disabled).toBe(true);
+    const before = host.readIssue.mock.calls.length;
+    await act(async () => inspect().props.onPress()); await settle();
+    expect(host.readIssue).toHaveBeenCalledTimes(before);
+  }
+  await setInput('10');
+  expect(inspect().props.disabled).toBe(false);
+  await press('Inspect issue 10');
+  const rowDetail = text();
+  expect(rowDetail).toContain('Example/project#10');
+  // A listed issue renders the same detail through the lookup as through its row.
+  await setInput('11');
+  await press('Inspect issue by number');
+  expect(host.readIssue).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 11 });
+  expect(text()).toContain('Issue #11 — detail read by number; not a browse-page membership claim.');
+  expect(text()).toContain('Example/project#11');
+  expect(pageRows()).toEqual(['Inspect issue 10']);
+  expect(text()).toContain('Safety page limit reached; historical scope is incomplete.');
+  // A failed lookup keeps the unavailable observation and its problem code, never stale evidence.
+  await setInput('999');
+  await press('Inspect issue by number');
+  expect(host.readIssue).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 999 });
+  expect(text()).toContain('refresh_failed');
+  expect(text()).not.toContain('Example/project#11');
+  expect(text()).not.toContain('NETWORK_SECRET');
+  expect(pageRows()).toEqual(['Inspect issue 10']);
+  expect(text()).toContain('Safety page limit reached; historical scope is incomplete.');
+  await setInput('10');
+  await press('Inspect issue by number');
+  expect(text()).toBe(rowDetail);
+});
+
+it('ignores a late detail response for a previous issue number', async () => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+  const catalog = { state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] };
+  const record = (number: number, title: string) => ({ number, title, url: `https://github.com/${repo}/issues/${number}`,
+    githubState: 'open' as const, updatedAt: '2026-10-15T06:20:00Z', labels: ['ai-blocked'], ...classifyIssue('open', ['ai-blocked']) });
+  const detailFor = (number: number, title: string) => issuesGet.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+    data: { issue: record(number, title),
+      reports: selectReports(repo, number, [comment(1, `${marker()}\n${block('progress', reports.progress)}`)], ['runner'], true),
+      dependencies: { complete: true, observedAt: '2026-11-14T23:00:00Z', records: [], problems: [] }, mergeEvidence: 'unknown' } });
+  host.readCatalog.mockResolvedValue(catalog);
+  host.readIssues.mockReset().mockResolvedValue(issuesList.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+    data: { repo, page: 1, hasNextPage: false, dependencyStatus: 'unknown', records: [record(4, 'ROW_FOUR_TITLE')] } }));
+  host.readIssue.mockReset();
+  let finishFour!: (value: unknown) => void;
+  host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishFour = resolve; })).mockResolvedValueOnce(detailFor(5, 'DETAIL_FIVE_TITLE'));
+  const { renderer, settle } = await renderIssues();
+  const setInput = async (value: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Issue number to inspect' }).props.onChangeText(value)); await settle(); };
+  const inspect = async () => { await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue by number' }).props.onPress()); await settle(); await settle(); };
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  await setInput('4'); await inspect();
+  await setInput('5'); await inspect();
+  expect(text()).toContain('Example/project#5');
+  await act(async () => finishFour(detailFor(4, 'LATE_FOUR_TITLE'))); await settle(); await settle();
+  expect(text()).toContain('Example/project#5');
+  expect(text()).not.toContain('Example/project#4');
+});
+
 it('repository_change_separates_pending_lists_details_and_late_reads', async () => {
   vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
   const f = fakeReader();
