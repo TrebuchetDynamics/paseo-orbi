@@ -9,7 +9,7 @@ const positive = z.number().int().positive();
 const RawIssue = z.object({ number: positive, title: z.string().max(1024), state: z.enum(['open', 'closed']), updated_at: z.iso.datetime(), labels: z.array(z.object({ name: z.string().max(100) })), pull_request: z.unknown().optional() });
 const sha = z.string().regex(/^[0-9a-f]{40}$/);
 const Pull = z.object({ number: positive, html_url: z.string(), merged_at: z.iso.datetime().nullable(), state: z.enum(['open', 'closed']), head: z.object({ sha }), base: z.object({ repo: z.object({ full_name: z.string() }) }) });
-const Check = z.object({ head_sha: sha.optional(), html_url: z.string().nullable().optional(), id: positive, name: z.string().max(1024), status: z.enum(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']), conclusion: z.enum(['success', 'failure', 'neutral', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']).nullable() });
+const Check = z.object({ head_sha: sha.optional(), html_url: z.string().nullable().optional(), id: positive, name: z.string().max(1024), status: z.enum(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']), conclusion: z.enum(['success', 'failure', 'neutral', 'notice', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']).nullable() });
 export type PullRequestEvidence = { number: number; url: string; head: string; state: 'open' | 'closed'; mergedAt: string | null; checks: CompleteCollection<z.infer<typeof Check>> };
 class GitHubError extends Error { constructor(readonly code: Problem['code']) { super(code); } }
 const problem = (code: Problem['code']): Problem => ({ source: 'github', code });
