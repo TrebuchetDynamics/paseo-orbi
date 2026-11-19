@@ -190,6 +190,17 @@ it('looks up only trusted exact-repo PR identity and qualifies only checks for t
   ] as const) {
     f.setChecks([check]); expect((await f.reader.read(input)).data?.pr?.checksState).toBe(state);
   }
+  // The documented notice conclusion must not reject the page as inaccessible.
+  f.setChecks([{ ...records.check, conclusion: 'notice' }]);
+  const notice = await f.reader.read(input);
+  expect(notice.data?.pr?.checksState).not.toBe('inaccessible');
+  expect(notice.data?.pr?.checks).toEqual([{ name: 'unit tests', status: 'completed', conclusion: 'notice', url: records.check.html_url }]);
+  expect(notice.problems).not.toContainEqual({ source: 'github', code: 'invalid_response' });
+  // Strict wire validation: an undocumented conclusion is still rejected.
+  f.setChecks([{ ...records.check, conclusion: 'undocumented' }]);
+  const undocumented = await f.reader.read(input);
+  expect(undocumented.data?.pr?.checksState).toBe('inaccessible');
+  expect(undocumented.problems).toContainEqual({ source: 'github', code: 'invalid_response' });
   f.setChecks([]); expect((await f.reader.read(input)).data?.pr?.checksState).toBe('missing');
   f.setChecks([{ ...records.check, html_url: 'https://evil.invalid/SECRET' }]);
   expect((await f.reader.read(input)).data?.pr?.checks[0].url).toBeNull();
