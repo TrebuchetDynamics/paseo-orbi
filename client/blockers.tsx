@@ -5,6 +5,28 @@ import { attentionText, blockersList, blockersRead, failureGuidance, waitGuidanc
 import { ObservationView, useObservationQuery } from './observation';
 
 type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme']; openScreen: PluginClientContext['openScreen'] };
+type AttentionClass = Exclude<Blocker['attention'], 'not_candidate'>;
+// Manual attention first. The observed page order stays the tie-break inside a class.
+const attentionOrder: readonly AttentionClass[] = ['manual_attention', 'automatic_fix_pending', 'maintainer_merge_wait', 'github_terminal'];
+const attentionLabel: Record<AttentionClass, string> = { manual_attention: 'Manual attention', automatic_fix_pending: 'Automatic fix pending', maintainer_merge_wait: 'Maintainer merge wait', github_terminal: 'GitHub terminal' };
+function attentionRank(attention: Blocker['attention']) {
+  const rank = attentionOrder.findIndex(entry => entry === attention);
+  return rank === -1 ? attentionOrder.length : rank;
+}
+function orderBlockers(records: readonly Blocker[]): Blocker[] {
+  return records.map((record, index) => ({ record, index }))
+    .sort((left, right) => attentionRank(left.record.attention) - attentionRank(right.record.attention) || left.index - right.index)
+    .map(({ record }) => record);
+}
+// Counts describe only the records this page already returned; they are never a repository total.
+function AttentionSummary({ records, complete, theme }: { records: readonly Blocker[]; complete: boolean; theme: Props['theme'] }) {
+  const text = { color: theme.colors.foreground };
+  const counts = attentionOrder.map(attention => ({ attention, count: records.filter(record => record.attention === attention).length }));
+  return <View style={{ gap: 4 }} accessibilityLabel="Attention on this observed blockers page, not a repository total">
+    <Text style={text}>{`Attention on this observed page (at most 20 candidates), not a repository total${complete ? '.' : '; incomplete / retained membership, so these counts describe only the records listed here.'}`}</Text>
+    {counts.map(({ attention, count }) => <Text key={attention} style={text} accessibilityLabel={`${attentionLabel[attention]}: ${count} of ${records.length} records on this observed page`}>{`${attentionLabel[attention]}: ${count}`}</Text>)}
+  </View>;
+}
 export function BlockerEvidence({ data, theme, deploymentId, openScreen }: { data: Blocker | BlockerDetails; theme: Props['theme']; deploymentId: string; openScreen: PluginClientContext['openScreen'] }) {
   const text = { color: theme.colors.foreground };
   const reports = data.reports;
@@ -56,7 +78,8 @@ export function Blockers(props: Props) {
     <ObservationView {...query} theme={props.theme}>{data => <View style={{ gap: 12 }}>
       <Text style={text}>{data.repo} — Blockers page {data.page}; scope {data.complete ? 'complete' : 'incomplete / retained membership'}</Text>
       {data.records.length === 0 && <Text style={text}>{data.complete ? data.page === 1 ? 'No blockers in the complete observed scope.' : 'No blockers on this page.' : 'Blocker membership unavailable; not an empty success.'}</Text>}
-      {data.records.map(blocker => <View key={blocker.issue.number}>
+      {data.records.length > 0 && <AttentionSummary records={data.records} complete={data.complete} theme={props.theme} />}
+      {orderBlockers(data.records).map(blocker => <View key={blocker.issue.number}>
         <BlockerEvidence data={blocker} theme={props.theme} deploymentId={props.deploymentId} openScreen={props.openScreen} />
         <Pressable accessibilityRole="button" accessibilityLabel={`Inspect blocker ${blocker.issue.number}`} onPress={() => select(blocker.issue.number)}><Text style={text}>Inspect artifact metadata</Text></Pressable>
       </View>)}
