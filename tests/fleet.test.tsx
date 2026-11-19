@@ -131,10 +131,16 @@ it('stale_compact_and_theme', async () => {
   await settle(); await settle();
   const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
   expect(text()).toContain('Demo (Example/project)'); expect(text()).toContain('Inaccessible (Other/repo)'); expect(text()).toContain('Rejected (Rejected/repo)');
-  expect(text()).toContain('process_failed'); expect(text()).toContain('Health unavailable');
+  // Overview loads rich detail for the selected deployment only, never every repository.
   expect(text()).toContain('Configured capacity: 2; Occupancy: unknown');
   expect(text()).toContain('Reported outcome: failed'); expect(text()).toContain('Active: inactive');
+  expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId)).toEqual(['demo']);
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Show details for Inaccessible' }).props.onPress()); await settle();
+  expect(text()).toContain('process_failed'); expect(text()).toContain('Health unavailable');
   expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId).sort()).toEqual(['demo', 'inaccessible']);
+  // One detail is expanded at a time; return to the selected deployment for the failure path.
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Hide details for Inaccessible' }).props.onPress()); await settle();
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Show details for Demo' }).props.onPress()); await settle();
   expect(host.readCatalog).toHaveBeenCalledTimes(1);
   expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(1);
   expect(host.listeners.size).toBe(1);

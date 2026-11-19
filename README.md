@@ -12,17 +12,17 @@ deliberately, so not every issue ends in a merge.
 
 ## Views
 
-- **Overview** — configured deployments, user timers/services, recorded health, configured capacity.
+- **Overview** — host-scoped user service families, configured deployments, one loaded detail with timers/services, recorded health, capacity.
 - **Issues** — lifecycle pages, trusted structured reports, on-demand dependency evidence.
-- **Runs** — attributed run/session identity, safe activity kinds, scoped events, observed PR-head checks.
-- **Blockers** — reported failures and waits, source attribution, artifact metadata only; no recovery controls.
+- **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks.
+- **Blockers** — reported failures and waits, source attribution, metadata only; no recovery controls.
 
 Version 0.1 is strictly read-only: no timer control, execution-state change,
 merge, Orbi CLI, Git or shell execution, and no raw logs, prompts or reasoning.
 Reported retry safety is never permission to retry; recovery stays
 Orbi/operator-owned. Only deployments already configured on that host are
-visible — the plugin does not discover Orbi installations. Offline checks cover
-all four views; live installation and installed-client qualification remain
+visible — the plugin does not discover repositories. Offline checks cover
+all four views; live installation and installed qualification remain
 unperformed.
 
 ## Setup
@@ -52,9 +52,9 @@ paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-That pin predates the current single **Orbi** sidebar entry: it lists Fleet,
-Issues, Runs and Blockers as separate sidebar rows, while current `main` opens
-one **Orbi** entry on Overview with in-app navigation. Either way, require
+That pin predates the current **Orbi** entry and host-first Overview: it lists
+Fleet, Issues, Runs and Blockers as separate sidebar rows, while current `main`
+opens one **Orbi** entry on Overview with in-app navigation. Either way, require
 `running` in `paseo plugin ls`, open the views the installed revision lists and
 select an authorized deployment. These commands are instructions, not observed
 results. An initial `--ref` does not pin later ordinary updates, which follow
@@ -62,18 +62,16 @@ default HEAD; inspect and authorize updates separately.
 
 ## Documentation
 
-- **Operators:** [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md) — authorization JSON/TOML, permissions, repair codes, observation limits.
+- **Operators:** [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md) — setup, permissions, repair codes, limits.
 - **Contributors:** [plugin development reference](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/paseo-plugins.md).
 - **Verification:** [installed qualification guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/testing/qualification.md).
 - [Listing overview](OVERVIEW.md).
 
 ## Moved sections
 
-Now in the operator guide:
-
 ### Fleet
 
-[Fleet](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#fleet)
+[Fleet behavior and repairs](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#fleet)
 
 ### Runs and log privacy
 

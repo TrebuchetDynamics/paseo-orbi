@@ -5,6 +5,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { deploymentsList, type DeploymentCatalog, type Observation } from '../shared/common';
 import { useForeground, useObservationQuery } from './observation';
 import { Fleet } from './fleet';
+import { HostServices, observedDeploymentIds, useHostServicesQuery } from './host-overview';
 import { Issues } from './issues';
 import { Runs } from './runs';
 import { Blockers } from './blockers';
@@ -30,10 +31,18 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       return { state: 'available', observedAt: now, lastSuccessfulAt: now, data: catalog, problems: catalog.problems };
     },
   });
+  // The host-scoped service check is Overview evidence only: no other route polls it
+  // and no repository or GitHub read depends on it.
+  const inventory = useHostServicesQuery({ hostId: props.host.id, connected: connected && route === 'fleet', foreground });
+  // null means this host check produced no host evidence (not enabled, denied,
+  // failed or not yet readable), so the deployment rows make no
+  // observed/not-observed claim at all.
+  const observedIds = observedDeploymentIds(inventory.observation?.data);
   const text = { color: props.theme.colors.foreground };
   const catalog = query.observation?.data;
   const selected = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
   const featureKey = `${props.host.id}:${selected?.id}:${selected?.repo}`;
+  const surfaceKey = `${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`;
   const transport = query.observation?.state === 'available' ? 'current' : query.observation?.state ?? (connected && foreground ? 'loading' : 'unavailable');
   return <ScrollView style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }} contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 12 }}>
     <View testID="orbi-catalog" style={{ gap: 8 }}>
@@ -52,6 +61,13 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       {!catalog && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}
       <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!query.canRefresh} accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }} style={{ opacity: query.canRefresh ? 1 : 0.5 }} onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
     </View>
+    {route === 'fleet' && <HostServices
+      key={surfaceKey} surfaceKey={surfaceKey}
+      hostId={props.host.id} hostLabel={props.host.label}
+      connected={connected} foreground={foreground}
+      theme={props.theme} compact={props.layout.compact}
+      entries={catalog?.entries ?? null} openScreen={openScreen} query={inventory}
+    />}
     {catalog?.state === 'configured' && <>
       <View testID="orbi-navigation" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {routes.map(next => <Pressable key={next} accessibilityRole="button" accessibilityLabel={`Open ${title(next)}`} accessibilityState={{ selected: route === next }} style={{ padding: 8, borderWidth: route === next ? 2 : 1, borderColor: props.theme.colors.foreground }} onPress={() => openScreen({ screenId: next, params: selected ? { deploymentId: selected.id } : {} })}><Text style={text}>{title(next)}</Text></Pressable>)}
@@ -63,7 +79,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         <Text style={text}>Ask the operator to repair the authorized configuration/source profile and reload this plugin.</Text>
       </View>)}
       <View testID={`orbi-${route}`} style={{ gap: 12 }}>
-        {route === 'fleet' ? <Fleet {...props} entries={catalog.entries} openScreen={openScreen} connected={connected} foreground={foreground} /> : <>
+        {route === 'fleet' ? <Fleet key={`${props.host.id}:${props.params.deploymentId ?? ''}`} {...props} entries={catalog.entries} observedIds={observedIds} openScreen={openScreen} connected={connected} foreground={foreground} /> : <>
           <Text style={text}>{title(route)} — select a repository to browse</Text>
           {catalog.entries.filter(entry => entry.status === 'available').map(entry => <Pressable key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })}><Text style={text}>{entry.label} ({entry.repo})</Text></Pressable>)}
           {selected && (route === 'issues'
