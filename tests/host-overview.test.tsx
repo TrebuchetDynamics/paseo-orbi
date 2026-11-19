@@ -248,6 +248,9 @@ describe('host_services_states', () => {
     expect(text(renderer)).toContain('Host service check: off');
     expect(text(renderer)).toContain('not enabled on this host');
     expect(text(renderer)).toContain('PASEO_ORBI_HOST_INVENTORY=1');
+    expect(text(renderer)).toContain('last successful check: never');
+    // Not enabled is not an observation: no deployment claims "not observed".
+    expect(text(renderer)).not.toContain('Not observed in this host service check');
     expect(host.readInventory).toHaveBeenCalledTimes(1);
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh host services' }).props.disabled).toBe(false);
   });
@@ -267,6 +270,8 @@ describe('host_services_states', () => {
     expect(text(partial)).toContain('installed: process_failed');
     expect(text(partial)).toContain('Ask the operator to check user systemd/DBus access on this host, then Refresh.');
     expect(text(partial)).not.toContain('No matching Orbi user units found');
+    // Partial host evidence is still evidence: it may be retained as a success.
+    expect(text(partial)).toContain('last successful check: ' + stamp);
   });
 
   it('reports denied or unavailable reads as unknown activity with a safe alert', async () => {
@@ -274,6 +279,16 @@ describe('host_services_states', () => {
     expect(text(unavailable)).toContain('Current activity on this host is unknown');
     expect(text(unavailable)).toContain('runtime: process_failed; installed: process_failed');
     expect(unavailable.root.findByProps({ testID: 'orbi-host-services' }).findByProps({ accessibilityRole: 'alert' }).props.children).toBe('runtime: process_failed; installed: process_failed');
+    // A denied check is never retained as this host's success, at any age.
+    expect(text(unavailable)).toContain('last successful check: never');
+    expect(text(unavailable)).not.toContain('last successful observation');
+    // ...and it never becomes per-deployment "not observed" evidence either.
+    expect(text(unavailable)).not.toContain('Not observed in this host service check');
+    expect(text(unavailable)).not.toContain('Observed in this host service check');
+    await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
+    expect(text(unavailable)).toContain('Current activity on this host is unknown');
+    expect(text(unavailable)).not.toContain("Showing this host's last successful observation");
+    expect(text(unavailable)).toContain('last successful check: never');
   });
 
   it('shows only this host last successful observation, distinctly labelled, after a failed refresh', async () => {

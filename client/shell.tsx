@@ -34,10 +34,10 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   // The host-scoped service check is Overview evidence only: no other route polls it
   // and no repository or GitHub read depends on it.
   const inventory = useHostServicesQuery({ hostId: props.host.id, connected: connected && route === 'fleet', foreground });
-  // null means this host check is not enabled (or not yet readable), so the
-  // deployment rows make no observed/not-observed claim at all.
-  const inventoryData = inventory.observation?.data;
-  const observedIds = inventoryData && inventoryData.state !== 'off' ? observedDeploymentIds(inventoryData) : null;
+  // null means this host check produced no host evidence (not enabled, denied,
+  // failed or not yet readable), so the deployment rows make no
+  // observed/not-observed claim at all.
+  const observedIds = observedDeploymentIds(inventory.observation?.data);
   const text = { color: props.theme.colors.foreground };
   const catalog = query.observation?.data;
   const selected = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');

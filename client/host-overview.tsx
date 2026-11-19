@@ -28,11 +28,14 @@ export function useHostServicesQuery(options: { hostId: string; connected: boole
     read: async (): Promise<Observation<ServiceInventory>> => {
       const data = await read({});
       const observedAt = data.observedAt ?? new Date().toISOString();
+      // Only a check that actually produced host evidence may be retained as a
+      // success. 'off' is a startup permission answer and 'unavailable' is a
+      // denied or failed read; neither may later read as this host's last
+      // successful observation.
+      const succeeded = data.state === 'complete' || data.state === 'partial';
       return {
         state: data.state === 'partial' ? 'partial' : data.state === 'unavailable' ? 'unavailable' : 'available',
-        observedAt,
-        // 'off' is a startup permission answer, not a successful check of this host.
-        lastSuccessfulAt: data.state === 'off' ? null : data.observedAt,
+        observedAt, lastSuccessfulAt: succeeded ? observedAt : null,
         data, problems: [],
       };
     },
@@ -65,9 +68,12 @@ function sortFamilies(groups: readonly InventoryGroup[]): InventoryGroup[] {
   return [...groups].sort((left, right) => familyRank(left) - familyRank(right) || (left.label < right.label ? -1 : left.label > right.label ? 1 : 0));
 }
 // Configured deployments that this host check actually observed through a
-// unique authorized association. Discovery alone never appears here.
-export function observedDeploymentIds(inventory: ServiceInventory | null | undefined): string[] {
-  return [...new Set((inventory?.groups ?? []).filter(group => group.association === 'matched' && group.deploymentId !== null).map(group => group.deploymentId!))];
+// unique authorized association. Discovery alone never appears here. A check
+// that produced no evidence ('off', denied/unavailable) returns null so a
+// deployment row never claims "not observed" from a check that failed.
+export function observedDeploymentIds(inventory: ServiceInventory | null | undefined): string[] | null {
+  if (!inventory || (inventory.state !== 'complete' && inventory.state !== 'partial')) return null;
+  return [...new Set(inventory.groups.filter(group => group.association === 'matched' && group.deploymentId !== null).map(group => group.deploymentId!))];
 }
 
 // A route change mounts a fresh Overview screen. One expanded family is retained
