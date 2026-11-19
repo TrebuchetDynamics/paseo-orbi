@@ -9,7 +9,7 @@ The single **Orbi** sidebar entry opens **Overview**, with internal **Overview Â
 
 ## Setup and compatibility
 
-The operator supplies an existing authorization JSON file through the daemon's startup environment variable `PASEO_ORBI_CONFIG`. It selects exact repositories, canonical local roots, TOML configuration, trusted report publisher logins and a supported source profile. Authorization and configuration changes require an explicitly authorized plugin reload; Refresh only rereads observations. See the [README](README.md#setup) for the exact JSON/TOML example and operator procedure.
+The operator supplies an existing authorization JSON file through the daemon's startup environment variable `PASEO_ORBI_CONFIG`. It selects exact repositories, canonical local roots, TOML configuration, trusted report publisher logins and a supported source profile. Authorization and configuration changes require an explicitly authorized plugin reload; Refresh only rereads observations. See the [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#setup) for the exact JSON/TOML example and operator procedure.
 
 Unconfigured or globally invalid catalogs use one shared setup/repair panel on every route, with at most one catalog Refresh and no feature reads. Refresh cannot configure authorization or reload startup configuration. Configured-empty means no configured deployments; rejected entries retain diagnostics without granting reads. Catalog transport freshness is not a deployment-health badge. Offline observations never fall through to another host.
 

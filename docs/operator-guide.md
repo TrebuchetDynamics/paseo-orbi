@@ -1,0 +1,236 @@
+# paseo-orbi operator guide
+
+Operational detail for [paseo-orbi](../README.md): authorization, data flow and permissions, repair codes, observation limits and installation preparation. Read the [README](../README.md) first for what the plugin is and how to start. Paseo plugin contracts live in [the development reference](paseo-plugins.md); the installed qualification harness lives in [testing/qualification.md](testing/qualification.md).
+
+## Status
+
+**Status:** Issues browsing and trusted report reading are implemented. Overview reads host-scoped user service families, then one selected deployment's timers, services and recorded health. Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers explains trusted failures, waits and stat-only evidence without executing recovery. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Assembled offline checks cover Fleet, Issues, Runs and Blockers through their real registrations, schemas and adapters. The tracked Git artifact is checked with isolated production-only preparation. This is installation readiness, not deployment; live installation and physical-client qualification remain unperformed.
+
+The plugin observes; it does not plan or execute work:
+
+- **Kit** plans work and creates GitHub Issues.
+- **Orbi** owns execution, recovery, code review, and PR delivery.
+- **Paseo** observes that work. This plugin is not another scheduler or orchestrator. Reported recovery actions and retry safety never grant permission; recovery stays Orbi/operator-owned.
+
+Version 0.1 is strictly read-only: no timer control, execution-state mutation, merging, Orbi CLI, Git commands, or arbitrary shell/path RPCs. No raw logs, prompts, reasoning, or interactive Pi attachment. External Pi sessions are not Paseo-managed sessions. Reading their projected activity does not establish interactive attachment, live steering, token streaming, or that a process is still alive. Future feature work may share entry files and must reconcile edits there.
+
+## Setup
+
+Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4** (`>=0.15.4 <0.16.0`). Issues uses the daemon user's existing authenticated GitHub CLI. Fleet uses existing user systemd units and does not invoke GitHub; Issues never invokes systemd. No provider/model/auth changes are required or performed.
+
+An operator supplies an existing JSON file via the daemon environment's absolute `PASEO_ORBI_CONFIG`. That variable must be visible to the running daemon/plugin subprocess at startup: exporting it in a later CLI shell does not change an already running daemon's environment. Arrange it through the daemon's existing operator-managed launch environment; the plugin does not alter that launcher or activate services. Authorization, TOML, source compatibility and retention settings are read once at plugin startup; changes require an explicitly authorized plugin reload. **Refresh does not reload configuration.** The plugin does not write configuration or discover repositories. All paths and logins below are placeholders.
+
+```json
+{
+  "schema": 1,
+  "deployments": [{
+    "id": "example",
+    "label": "Example deployment",
+    "repo": "owner/repository",
+    "configPath": "/srv/example/orbi.toml",
+    "engineSourcePath": "/srv/orbi-source",
+    "repoDir": "/srv/example/repo",
+    "deployHome": "/srv/example/home",
+    "trustedPublisherLogins": ["trusted-publisher"],
+    "adapter": "orbi-0.7.41-release"
+  }]
+}
+```
+
+The TOML is parsed as inert data, never imported or executed:
+
+```toml
+repo_dir = "/srv/example/repo"
+deploy_home = "/srv/example/home"
+source_repos = ["owner/repository"]
+unit_name = "example"
+max_concurrency = 2
+```
+
+Paths must be absolute in the JSON, canonical and free of symlink components or environment expansion. TOML paths resolve against its directory and must match those exact roots. One `source_repos` repository must match; capacity is 1..5. `unit_name` is optional (default Orbi units); when present, use letters, numbers, `_` or `-` (maximum 80 characters). IDs match `^[a-z][a-z0-9-]{0,63}$`; labels have 1..80 printable characters. At most 16 deployments; IDs and GitHub repositories are unique (repositories case-insensitively). No credentials belong in the authorization file. Unknown JSON fields are rejected.
+
+Only these source checkout subsets are supported:
+
+| Adapter | Upstream commit | Subset SHA-256 |
+| --- | --- | --- |
+| `orbi-0.7.41-release` | `fbafd09fe49a20299e96565f100633bca61ae2af` | `ff662193032fc0caf59e2742a3892c31af90a6d66726f38b2ac2256cb663140e` |
+| `orbi-0.7.41-1a8b2f96` | `1a8b2f9603f6258cb105293f238a8d3f775f3393` | `ae5bd552aef7e1689b7352d99794f6dc0a04e257cf3668cad08be9473b9d859d` |
+
+`server/compatibility.ts` enumerates the finite inspected files and manifest hashing algorithm. Both hashes were independently reproduced from those reachable upstream commits; compressed raw-file fixtures in `tests/helpers/` exercise the real reader. This is compatibility evidence for that subset, **not authentication of the engine**, and neither version strings nor Git metadata grant trust. The plugin never imports or executes engine source.
+
+### Failure and repair
+
+- Missing `PASEO_ORBI_CONFIG`: `unconfigured`, no entries; UI explains operator setup.
+- Malformed file, invalid identity, duplicate ID/repository, or over 16 entries: global `invalid`, no entries. Repair the operator-owned authorization and reload.
+- Mismatched TOML, missing/unsafe roots: entry-local `invalid_config` with a safe code. Correct the exact authorization/TOML; do not broaden access to make it pass.
+- Unknown/missing/modified source subset: entry-local `unsupported_source_profile`. Use a supported unmodified source checkout or wait for a separately qualified adapter, then reload. Other valid entries remain usable.
+
+The RPC returns only IDs, labels, repository names, adapter names, status and allowlisted problem codes. It never returns private roots, publisher logins, environment values or raw error prose. Invalid entries cannot resolve into read capabilities. No `.orbi/env`, provider, Git metadata or lock reads are permitted. Config, TOML, source and approved JSON reads are bounded to 256 KiB and a 10-second caller deadline, and reject nonregular files and symlinks, with opened-file identity checks to narrow check/use races. Startup directory checks use the same 10-second deadline. Disposal aborts initialization as well as pending port reads, clears their deadlines, and closes handles; a stuck kernel filesystem operation itself cannot be forcibly cancelled, so late completions are discarded and late-opened handles closed.
+
+Internal process ports allow only fixed `systemctl show`, bounded `journalctl`, and GitHub.com `gh api --method GET` forms. Shell is off, stdin ignored, two children maximum, 10 seconds and 1 MiB combined output per child; timeout and disposal kill each operation's isolated Linux process group (including helpers holding output pipes), then reap the direct child. Internal raw output is not a public RPC. The GitHub reader validates and projects it before transport; future collectors must do the same. Caches are memory-only. Client observations poll mounted foreground/connected surfaces every 30 seconds, coalesce refreshes, retain failed data as stale, mark it stale after 60 seconds without success, and guard cancelled host/deployment generations.
+
+## Data flow and permissions
+
+The operator authorization grants narrow read capabilities inside this plugin; it is **not an OS sandbox**. Server and preparation code run with the daemon user's filesystem/process/network access, and client code runs in connected Paseo apps. Trust the code, dependency and future updates before consenting to installation.
+
+Local authorization/TOML/source, health/run/session records, fixed systemd properties and bounded journal data are projected on the daemon. Only validated fields travel over Paseo RPC to the selected host's clients; observations/cursors are memory-only. GitHub.com receives fixed read-only API requests via the daemon user's existing `gh` authentication. That identity needs repository metadata, issues/comments/dependencies, PR and checks read access for the selected repositories; no new token or write permission is requested. Private-repository access must already be authorized. Authentication repair is external, not a plugin action.
+
+Preparation downloads only the locked runtime TOML parser (`smol-toml` 1.9.1) from npm, with project/dependency lifecycle scripts disabled. Runtime observation downloads/installs no software and sends no prompts or tool results to agent providers. There is no plugin-owned persistent cache, telemetry service or raw-log transport. Read-only means no runtime/config/GitHub mutation by this implementation, not a promise that trusted plugin code lacks the user's underlying privileges.
+
+## Navigation and shared setup
+
+Open the single **Orbi** sidebar entry on the intended host; it opens **Overview** (the existing `fleet` route, with host title Fleet). Inside configured Orbi, use **Overview · Issues · Runs · Blockers**. The compact navigation wraps, marks the current view selected, and keeps an authorized deployment selection when switching views. Existing `fleet`, `issues`, `runs`, `blockers` links and `deploymentId` parameters remain supported. Fleet's active-work link still opens Issues for that deployment. Overview leads with the selected host's opt-in user-service families above the configured-repository section; with inventory off, the catalog/setup flow below is unchanged.
+
+One shared selected-host catalog owns setup and Refresh. Unconfigured or globally invalid catalogs show the same operator setup/repair panel on every deep link, without feature tabs, selectors, telemetry requests or feature success badges. Provide an authorized JSON file through startup `PASEO_ORBI_CONFIG`, repair invalid authorization if needed, and explicitly reload the plugin with operator authorization. Catalog Refresh only rereads the startup snapshot; it cannot configure authorization or reload. A configured empty catalog says **No configured deployments**; rejected entries keep safe diagnostics and cannot be selected. Catalog transport freshness is separate from configuration state or deployment health. Offline/source failures show unavailable or correctly scoped stale catalog data, never another host's data.
+
+The consolidated navigation/setup flow has offline component/integration evidence. Installed desktop/mobile screenshots and real-client behavior remain the explicit live checks owned by #12/#13; historical fixture previews are not installed-client evidence and do not qualify this changed composition.
+
+The offline-qualified installation pin `875c69a101a102a8f14b064f0664069b5e603f4f` predates this composition: that revision registers the four routes as four separate sidebar rows (Fleet, Issues, Runs, Blockers) with Fleet as its own screen, and its Fleet screen has no host-first user-service section or single loaded detail. Current `main` exposes one **Orbi** sidebar row that opens Overview (host services first, then configured repositories) and switches views in-app. The catalog, setup/repair panel and read-only limits below apply to both revisions; the navigation and the Overview composition differ.
+
+## Issues and GitHub authentication
+
+Open **Orbi → Issues**, select an available repository in the catalog, then browse pages or select an issue to inspect its reports and native blockers. Enter an exact issue number and choose **Inspect issue** to read that issue's detail directly, including closed/merged issues and issues outside the ten-page window; a looked-up issue is its own detail section and not a browse-page membership claim. Rejected deployments remain visible with their diagnostics, never selectable. Each repository is read separately on the selected host. The typed `issues.list({deploymentId,page})` and `issues.get({deploymentId,issue})` RPCs expose validated projections only: no bodies, comments, credentials, activity targets or check output.
+
+Use the separate **Open on GitHub** link to deliberately open an issue or an available attributed PR. Links accept only the exact canonical GitHub destination for the currently selected catalog repository and issue/PR number; invalid, foreign or conflicting identity stays noninteractive text. Opening does not inspect an issue, change pages, make an extra RPC or mutate GitHub. Source, reported/verified and stale badges keep their meaning; retained stale evidence is navigable only for its still-selected repository. Paseo's `ExternalLink` uses the system browser on Electron, a new `noopener,noreferrer` tab on web, and the OS URL handler on native. A resolved opener does **not** prove the page opened or loaded, and popup blocking cannot reliably be detected. A rejected opener shows only “Could not open GitHub. Try again using the link.” Retry explicitly after checking the platform's browser/URL handler. Selection changes replace/remove mounted links and clear their error feedback; the SDK cannot revoke a retained old callback or cancel an already-dispatched open. Offline fixtures verify validation and opener invocation, not a real browser/OS launch; actual opening remains unrun pending the #12/#13 browser/native qualification gates.
+
+Authentication belongs to the operator and the daemon user's existing `gh` context, not plugin settings. The plugin does not extract tokens, source `.orbi/env`, authenticate, or change permissions. It runs only fixed `gh api --hostname github.com --method GET --include` requests with `Accept: application/vnd.github+json` and API version `2022-11-28`, without CLI caching or verbose output. Endpoints are constructed from authorized repository identities and validated positive issue/PR numbers; supplied URLs are never fetched. Only repository issues, selected-issue comments/details/dependencies, exact-repo PR metadata, and that PR head's check metadata are read.
+
+Lifecycle precedence is: verified associated PR merge or `ai-merged`; closed without merge evidence; `ai-blocked`; `ai-needs-detail`; `ai-epic`; reviewing (`ai-awaiting-merge`, `ai-pr-opened`, `ai-fix-needed`, with the specific label badge); `ai-in-progress`; `ai-planning` / `ai-paused`; `ai-ready`; Other. `ai-human-review` alone is not a wait state. Conflicting lifecycle labels remain visible as evidence warnings. A selected issue's newly read facts update its displayed group. Labels and receipts are **reported**, not verified merge evidence: verification requires the authorized PR's `merged_at`. GitHub terminal/manual facts outrank reported progress. Ready candidate never promises pickup; dependencies remain unknown until requested, and unavailable/incomplete dependency reads never mean unblocked. Foreign-repository dependencies are unavailable rather than incorrectly attributed locally.
+
+Browsing uses numbered pages of 100, sorted by updated time descending, excludes PR objects, and explicitly does not establish active membership. The server-only `GitHubReader.listIssueScope` completely paginates **open** issues for Runs/Blockers; consumers must check `complete`. Collections stop at ten pages or 60 seconds, with child deadlines reduced to the remaining cycle budget. A cap/failure never installs partial active membership or a new current run. Previous complete evidence is retained stale, or an initial incomplete result has no established members/run. Detail reads are on demand, not a sweep of historical issue comments. Identical requests coalesce and use a bounded memory-only, 30-second cache. An incomplete detail refresh can still show a newly confirmed closed/terminal fact while retaining explicitly incomplete report evidence. Report selections carry safe typed problems (including comment authentication failures), which also appear on the detail observation. A failed refresh of the same run's associated PR retains its previously verified merge stale; a different or conflicting identity cannot borrow that verification.
+
+Formal metadata follows the [pinned public contracts](https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/docs/public-contracts.mdx). Only configured `trustedPublisherLogins` authenticate publication; `authorAssociation` and copied markers grant no trust. A formal run prefix selects the newest updated run (numeric comment-ID tie break), then that run's newest progress. A newer missing/invalid report never borrows an older run. The reader validates the closed progress/failure/base-CI vocabularies and scene schema, strips every activity target, and does not parse arbitrary prose. The pinned base-CI writer's final block is accepted only on its formal validated base-CI failure, excluding quotes/fences. Legacy prose is missing; unknown versions are unsupported. Attribution includes repository, issue, REST comment ID and update time.
+
+A selected run's formal merged comment must carry one unquoted details block with all six unique fixed machine rows. Duplicate/missing/malformed rows, invalid commit/numeric values, mismatched run IDs and foreign PR URLs are invalid. A valid receipt can identify a PR without a scene; conflicting valid scene/receipt identities expose **conflict**, with no selected PR. A malformed present source cannot disappear behind a valid fallback. Runs and Blockers should reuse `readIssueReports` and the server-only `getPullRequestEvidence` helper/method rather than reparse receipts.
+
+### GitHub failure and repair
+
+- `auth_denied`: no empty/ready success. Ask the operator to repair the daemon user's `gh` authentication/repository permissions outside the plugin, then Refresh.
+- `rate_limited`: wait for `Retry-After`, rate-limit reset, or the 60-second fallback. All GitHub reads on this plugin installation share the gate; manual Refresh cannot bypass it. A 403 without quota exhaustion is `auth_denied` and also applies backoff.
+- `not_found` on dependencies: unknown/unavailable, not an empty blocker set. Check repository access/API availability outside the plugin.
+- `network_failed`, bounded process/read failures, `invalid_response`, `deadline`, or `incomplete`: retain previous complete evidence stale and retry after repair/the polling interval. Do not broaden authorization or infer an empty queue.
+
+Offline fixture tests exercise the registered RPC, real reader and React Native screen path, including auth failure/repair, pagination, stale retention and forbidden canaries. A separate Playwright fixture preview exercised the actual screen components with React Native Web, registered RPCs and a bounded fake-gh executable at desktop/tablet/mobile widths (light/dark), including auth failure and repair/Refresh, with no browser errors or horizontal overflow. Neither is live GitHub or installed Paseo qualification; those remain separately authorized live checks, not part of offline qualification. No installation, credential change or GitHub mutation is part of this feature.
+
+## Runs and log privacy
+
+Open **Orbi → Runs** on the intended host, select an available catalog deployment, then select a run for detail evidence. Rejected deployments retain their diagnostics and cannot be selected. `runs.list({deploymentId,issue?})` and `runs.read({deploymentId,issue,runId})` accept only deployment/issue/run identities, never paths, commands or cursors. Keys include deployment, configured repository, exact issue number and eight-hex run ID. Summary screens poll every 30 seconds while foreground/connected; event/PR detail loads only on explicit selection or its manual **Refresh**, with observation time visible. Host/deployment/issue changes and unmount discard late results and release owned timers/children.
+
+An Issues detail or a Blockers evidence row whose report read is complete and establishes a selected run shows **Reported run** as an activatable control. It reopens this Runs screen for the same deployment with screen params `deploymentId`, exact `issue` and eight-hex `runId`: the issue-history filter is preselected and the run detail opens once, and only after the existing `runs.list` observation contains that run. A run missing from the observed history is never selected or looked up; the screen says so and Refresh is the repair. Absent or invalid params render the unchanged Runs screen and select nothing, and params add no RPC, no read and no persisted state.
+
+Active rows require the **last complete successful open-issue scope**, an Implementing/Reviewing lifecycle and the trusted report reader's selected run identity. Terminal/manual states (including Blocked) win over progress. An initial incomplete scope establishes no members; a failed refresh retains the last complete scope visibly stale. A newer report without progress never borrows another run's stage. Local directories alone cannot create active rows or prove liveness. Enter an exact issue number and choose **Inspect issue history** to inspect local retained runs separately; history is never labeled active. Old runs without selected trusted PR identity do not borrow a newer run's PR.
+
+Discovery is confined to `<repoDir>/.worktrees/orbi-<owner>-<repo>-issue-<N>-<8hex>/`, with exact 42/420 separation. More than 200 matching entries per requested scope or 16 JSONL sessions per run yields `read_limit`, not an arbitrary filename/mtime-selected subset. Run-state repository/issue/run/branch must agree with that attribution; its `worktree` field is never followed. `created_at` is a recorded timestamp, **not a guaranteed start time**. Branch, pushed SHA and reviewed SHA are evidence values, not process-state probes.
+
+Session reads validate the complete first header within 64 KiB and read at most 256 KiB tail/increment per session, with 64 KiB records. In-memory offsets reset on observed truncation/replacement. Incomplete fragments are dropped; malformed data or missing identity means **unavailable activity, not idle**. Only session ID, activity timestamp and `read|edit|command|analysis` kind cross the boundary. No prompt, reasoning, message, tool arguments/targets/output, raw session/journal/test logs or command/path text is exposed. There is no terminal embedding, session creation/attachment, Git read/fetch, process signaling or lock probing.
+
+The fixed journal query is `journalctl --user -u <authorized-service> --no-pager --since '-1 hour' -n 200 -o json`, independently for configured slots. JSONL plus strict Orbi grammar permits only exact scoped `run_start`, `run_end`, `worktree_cleaned` and (installed profile only) `worktree_retained`. Prefix and run/issue fields must agree; duplicate/ambiguous fields and free-text tails are rejected. Only journal `__REALTIME_TIMESTAMP`, event, run ID and issue number are projected, at most 200 events / 64 KiB. Ticket-only `run_end` need not carry PR/commit. Failure details belong to structured reports, never `run_failed`/heartbeat parsing. This bounded window always reports `journal: incomplete`: gaps/rotation are not fabricated into continuous history.
+
+PR identity comes **only** from Issues' trusted `readIssueReports.prIdentity`; missing/invalid/conflicting identity triggers no guessed lookup. PR number/URL/state/`merged_at`/`head.sha` and safe check name/status/conclusion/GitHub URL are evidence, never check output/annotations. Only checks explicitly matching that observed head qualify it; absent, missing, pending, inaccessible or stale-head checks are **not passed**. Reported stage `checks` is not test success.
+
+For `auth_denied`/`rate_limited`, follow [GitHub failure and repair](#github-failure-and-repair). For filesystem `read_failed`, `invalid_response`, `incomplete` or `read_limit`, inspect the attributed writer/retention externally, repair it without broadening authorization, then Refresh. Refresh never repairs files or controls Orbi. These limits are planner bounds, not inherited Orbi latency promises.
+
+Offline tests compare fixture tree/content/metadata before/after observation (excluding atime), assert canary suppression, exact process argv, head-check states and teardown. A Playwright preview exercised the real registered Runs component and typed RPCs with bounded inert gh/journal/file fixtures at desktop/tablet/mobile widths, including auth failure → external repair → Refresh, without browser errors or horizontal overflow. Screenshots are run artifacts. This is **not** live-log-format, installed Paseo or native-mobile qualification; no real agent turn/Orbi process was started.
+
+## Blockers and recovery limits
+
+Open **Orbi → Blockers**, select an available deployment, then **Inspect artifact metadata** on an issue. Enter an exact issue number and choose **Inspect issue** to see why that issue is or is not in the attention scope, including **No current blocker label observed** for a non-candidate; a looked-up issue is not a blocker-scope or page membership claim and never changes the candidate page or `hasNextPage`. Rejected catalog entries retain their safe diagnostics and never grant reads. `blockers.list({deploymentId,page})` returns an `Observation<BlockerPage>`; `blockers.read({deploymentId,issue})` returns an `Observation<BlockerDetails>`. Selectors are positive integers, with no path or command input. Runs is not a prerequisite.
+
+The shared GitHub reader establishes complete open membership before classifying candidates with `ai-blocked`, `ai-needs-detail`, `ai-fix-needed` or `ai-awaiting-merge`. Pages contain up to 20 candidates; only that page's reports are read, not unrelated/historical comments. Manual attention, automatic fix/review pending, and maintainer merge wait are separate, not all terminal failures. Detail shows current GitHub state/labels and their update time, selected run, report status, repository/issue/comment attribution and source links. Closed/merged GitHub facts make retained failure reports historical. Conflicting labels remain visible.
+
+Only the selected run's trusted formal failure schema 1 supplies outcome (`blocked` / `fix_needed`), the closed reason/action enums, and strict boolean `retry_safe`. Explanations are plugin-owned, including legacy `tests_failed`. Missing, invalid, unsupported or unknown metadata never falls back to free-text diagnostics. **Reported retry safety is metadata, never permission to retry.** Base-CI `waiting`, `resuming`, `merged` and `stale` remain separate reported states; resuming is not delivery success, and reported merged does not independently verify delivery success. Source: [pinned failure vocabulary](https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/src/orbi/failure.py#L45).
+
+For a complete, valid, exact-run scene with nonconflicting repository PR identity, the server derives the pinned `gitops.worktree_path` name under the authorized repository's `.worktrees`. It does not use a supplied scene path, enumerate directories, scan alternate roots, or search renamed worktrees. Only the worktree directory and `.orbi/run-state.json`, `.orbi/test.log`, `.orbi/plan.md`, `.orbi/verify.md` are metadata candidates. The port performs bounded `lstat`/canonical-path checks, rejects symlinks/nonregular artifacts, and exposes only a fixed relative name, presence status, byte size and modification time. Sizes are stat sizes, not recursive worktree totals. No artifact is opened or read; even run-state contents are not inspected as proof of identity. Missing, unreadable, invalid, present and unattributed evidence remain distinct. No absolute scene paths, artifact contents, raw failure diagnostics, prompts, tokens or downloads cross the RPC boundary. A missing/cleaned scene never removes a GitHub blocker or triggers recreation/cleanup.
+
+Retention settings are inert startup observations, not promises:
+
+| Profile | Supported settings/defaults | Limit |
+| --- | --- | --- |
+| `orbi-0.7.41-release` | `worktree_retain_hours = 72` (finite positive number); `keep_failed_worktrees` unsupported and ignored | Official v0.7.41 may delete terminally failed worktrees |
+| `orbi-0.7.41-1a8b2f96` | `worktree_retain_hours = 72`; `keep_failed_worktrees = true` (strict boolean) | Installed pinned build adds failed-worktree retention behavior, not a presence guarantee |
+
+Invalid supported values reject that deployment as `invalid_config`; repair configuration externally and authorize a reload. **72 hours does not imply automatic reclamation of an open blocked scene.** Only observed presence is reported. Source: [release cleanup](https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/src/orbi/runner.py#L1121) and [installed retention profile](https://github.com/orbi-build/orbi/tree/1a8b2f9603f6258cb105293f238a8d3f775f3393).
+
+Partial GitHub failures preserve visible candidates and mark incomplete reports. An initial incomplete scope is unavailable, never “no blockers”; only complete empty membership permits that message. Prior successful observations retain their timestamp and become stale on failure. Refresh and foreground polling share Issues' cache/backoff rules. `auth_denied`: ask the operator to repair the daemon user's existing `gh` authentication/permissions outside the plugin, then Refresh. `rate_limited`: wait for the shared GitHub reset gate. `network_failed` / `incomplete`: repair access externally and Refresh; never infer successful delivery or no blockers. Host/deployment/page/issue changes ignore late callbacks.
+
+There is **no recovery execution interface**: no retry/requeue, pause, approval, merge, service control, credential validation/reset, worktree modification, or execution of comments/prose. Orbi and the operator own every recovery decision. Tests use synthetic trusted/untrusted metadata and filesystem stats on both profiles, including cleaned/unreadable/mismatched/escaping scenes. A Playwright fixture preview exercised the registered screen/RPC, real shared GitHub reader and bounded fake-gh GET process at desktop/tablet/mobile widths in light/dark, including auth failure → external fixture repair → Refresh and complete-empty scope, with no browser errors or horizontal overflow. Screenshots are excluded run artifacts. This is not live failed-delivery, installed Paseo, native-device or live-recovery qualification; no live recovery was run.
+
+## Fleet
+
+Open **Orbi → Overview** on the intended host. Overview answers the host question first and the repository question second.
+
+**Your Linux user services** is the first section. It names the selected host, the check state (`off`, `complete`, `partial` or `unavailable`), the observation time, the retained last-successful time, a **Refresh host services** control and the observed Orbi unit families. Families are grouped by unit-family prefix (never by template, slot or deployment), sorted failed/attention first, then running, then scheduled, then other/not loaded, with a stable label tie-break. Each family shows text badges, not colour alone: **Failed**; **Running · Issue unknown** (only observed service instances with `ActiveState=active` and `SubState=running` are counted, so starting or active/exited services are not running); **Scheduled · no runner observed running** (an active/waiting timer with no running service); **Installed** (template/installed names only, never a running service); **Not running · Issue unknown**. One family keeps every supported fact visible at once — a failed slot 1 and a running slot 2 both appear. **Inspect slots** expands a family in place to each observed service/timer slot with its runtime state, unit-file state and a template marker.
+
+Observed unit activity is not an active delivery, and this section attributes no issue: an unattributed family reads **Issue unknown**, and reported PR/issue history is never converted into a process status. The Overview count describes observed service problems, not repository blockers, and performs no per-repository read.
+
+Association is display-only. A family whose unit prefix uniquely and exactly matches one validated, available configured deployment says so and offers **View repository**, which opens Issues with that deployment selected in one activation; Runs and Blockers keep that selection on the same host/repository. Unit origin is not verified. A configured declaration rejected only for an unsupported source profile is explained as a compatibility limit — not a broken runner — and grants no detail. Duplicate claims are explained as ambiguous. Every other discovered family is explained as discovery-only, with **no disabled action** pretending to be a repair. A matched prefix whose deployment is missing from the current authorized catalog offers no action until authorization is restored, because missing, invalid and rejected catalogs still block every privileged read on every route (and never hide opted-in host inventory).
+
+Configured deployments stay listed even when this host check did not observe them, marked **Not observed in this host service check** (or **Observed in this host service check**). That observation marker appears only for a check that produced host evidence (`complete`/`partial`). A check that is off, denied or unavailable makes no observed/not-observed claim, and its attempt time is never reported as this host's last successful check or reused as a retained successful observation. Only one deployment detail loads: the selected `deploymentId` or the expanded row. Other repositories are listed without a read.
+
+The remaining Fleet evidence below applies to that one loaded detail. Every catalog entry stays listed, including rejected entries with safe diagnostics and repair guidance. Only available entries call `fleet.read({deploymentId})`; the server resolves that ID against startup authorization. No paths or command strings come from the client.
+
+Each loaded detail reports repository/profile identity, configured capacity (1..5), **Occupancy: unknown**, and **Active deliveries: unknown**. Neither active labels nor leftover PID/lock files establish occupancy. Capacity is not a machine-wide promise. **Show details**/**Hide details** (with `expanded`/`selected` state) load one detail at a time, and **View active work in Issues** opens Issues with that deployment filter.
+
+For instances `1..max_concurrency`, Fleet independently reads `orbi-<unit_name>@<instance>.timer` and `.service`, or `orbi@<instance>` when `unit_name` is absent. The fixed read is `systemctl --user show <authorized-instance> --property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic --no-pager`. No `Environment`, `ExecStart`, unrestricted properties, control commands, locks or PID probes are requested. Only safe state fields and recognized trigger timestamp strings reach the UI; unknown/missing fields remain unavailable. Monotonic trigger values are not guessed into wall-clock times.
+
+Recorded health comes only from bounded `<repoDir>/.orbi/health.json` reads, validated against the two pinned writers' `runs`, `last_pickup_ts` and `alerted` shape (at most 50 runs). The public projection contains only last pickup and run repository, issue, run ID, reported outcome and timestamp, never raw health JSON, alert keys or fingerprints. Missing/corrupt files are **unavailable**, not an empty successful history. Reported run outcomes are separate from current service state: `inactive/dead` with `Result=success` is not a failed service. No issue pickup is inferred from timers.
+
+Details keep independent source problems and timestamps. One inaccessible deployment or failed timer does not remove the others or the host service section. `systemd: process_failed` means that unit read failed; check access to the selected host's user units externally, then **Refresh**. `filesystem: read_failed` means health could not be read/validated; check the health writer/file externally, then **Refresh**. Port deadlines/output limits retain their safe codes. `process_limit` means the foundation's two-child bound was reached; retry Refresh after pending reads finish. Rejected entries require operator configuration/source repair and an authorized plugin reload. Refresh only reads; it never repairs or controls a service.
+
+The shared observation lifecycle polls foreground/connected surfaces (the host service check and the loaded detail) every 30 seconds. A failed refresh preserves previous data with a stale badge; after 60 seconds without success, data is visibly stale. Observed/last-success timestamps remain visible. Text uses theme tokens and compact layouts wrap within the viewport. These are design bounds, not measured performance claims. No new fleet daemon or scheduler is required.
+
+Shared observations declare descriptive loading/status accessibility labels and a stable alert region containing only safe problem source/code summaries, separate from timestamps and retained data. Age/offline staleness alone does not invent an error. **Refresh** stays named Refresh, shows Refresh/Refreshing, and is disabled with dimmed theme-colored text and disabled/busy accessibility state while the selected host is offline, the app is backgrounded, or a read is in flight. Reconnect the selected host/return to the foreground and repair the reported source externally before retrying; no other host is used and no service/settings controls are added. Mocked renderer tests verify these declarative semantics, not actual screen-reader speech, announcement timing, or WCAG conformance. Installed desktop/native mobile screen-reader qualification remains unperformed.
+
+The host-first Overview is covered by component fixtures in `tests/host-overview.test.tsx`: two hosts with an identical family label and slot, cancelled-generation isolation, expansion/selection state and accessible labels, plus distinct copy and next action for not enabled, complete-empty, partial-without-confirmed-rows, unavailable/denied and offline. Narrow/wide wrapping, theme contrast and real keyboard focus remain installed visual inspection owned by #32; these fixtures prove composition and declarative accessibility, not measured rendering.
+
+## Host service inventory (opt-in)
+
+A separate host-scoped, read-only `services.inventory({})` RPC can discover Orbi-named user service and timer candidates even when this host has zero authorized repositories. Disclosure is opt-in at plugin startup only: `PASEO_ORBI_HOST_INVENTORY=1` in the daemon's launch environment permits connected clients on that host to read it; any other value leaves the RPC `off`, spawns nothing and reveals nothing. It is independent of `PASEO_ORBI_CONFIG`, and a later environment change needs an explicitly authorized reload. Nothing is enabled by default.
+
+The inventory executes exactly two fixed reads and nothing else:
+
+```
+systemctl --user list-units --all --type=service,timer --plain --no-legend --no-pager --full 'orbi*.service' 'orbi*.timer'
+systemctl --user list-unit-files --type=service,timer --no-legend --no-pager --full 'orbi*.service' 'orbi*.timer'
+```
+
+The literal globs are single argv elements; shell is off, stdin ignored, and `LC_ALL`/`LANG` are `C` with `SYSTEMD_COLORS=0`. Both reads share the existing two-child cap, 1 MiB combined stdout/stderr ceiling, per-child timeout and process-group kill/reap, plus one overall 10-second deadline: a child that reaches the byte or time limit is stopped and the second read is not launched after the deadline. There is no system-manager or other-user access, sudo, broad process scan, `systemctl show/cat`/`Environment`/`ExecStart`, journal read for discovery, guessed file path, installed symlink follow or GitHub request. A discovery name match never becomes a repository read capability.
+
+Rows are parsed from validated `ID LOAD ACTIVE SUB` (loaded runtime state) and unit-file `ID state` (installed names) only; descriptions, vendor presets, paths, environment and stderr are never stored or transported. Service and timer sightings are deduplicated by ID while keeping per-source availability, and runtime and installed facts stay separately nullable: a timer schedule is never reported as runner execution, and an installed name is not a running service. Units are grouped by sanitized unit-family prefix with kind `runner-family`, `auxiliary` (the known `orbi-exporter`) or `other` (other safe orbi-prefixed names). Default/named templates and their observed slots stay in one group; unpaired service/timer records are retained; no slot, occupancy or authentication claim is synthesized.
+
+Association is display-only. A group is `matched` (and only then carries a deployment ID) only when its prefix uniquely and exactly equals the expected runner prefix of one validated, available deployment declaration. A configured declaration whose sole rejection is an unsupported source profile shows `incompatible` with no selectable deployment ID and its observed units are still listed. Duplicate prefixes — including a supported/unsupported collision — are `ambiguous`; other, auxiliary, unmatched or out-of-profile names stay `unmatched`; none grants repository authority or bypasses `ConfigRepository.resolve`.
+
+The response is `off`, `complete`, `partial` or `unavailable` with observation time, per-source completeness/observation times and fixed problem codes (`malformed_record`, `process_failed`, `process_timeout`, `process_limit`, `read_limit`, `row_limit`, `deadline`, `disposed`). At most 256 accepted rows are retained per inventory, sorted deterministically before display; a cap or any failed source is incomplete rather than a confirmed empty result, and no total is invented. A `complete` empty group list is the only confirmed "no Orbi-named user units observed" result. One host-level snapshot is coalesced across concurrent callers and cached in memory for at most 30 seconds with no disk state and no repeated reads per family or viewer.
+
+Repair: `process_failed` (including authorization/DBus failures), `process_timeout` or `process_limit` means the selected host's user `systemctl`/DBus access or child limits need external repair, then call again after the snapshot window (or reload for a startup opt-in change). `malformed_record`/`row_limit`/`read_limit` mean the host output exceeded the bounded parser/limits; do not infer an empty inventory. This RPC reports user-unit candidates only; it never controls, enables, disables or restarts a unit.
+
+The Overview screen consumes this snapshot as host evidence (`client/host-overview.tsx`), sorted and explained in [Fleet](#fleet). It is read only on Overview, keeps the host-qualified observation key, and is disabled with zero reads while the selected host is offline, the app is backgrounded, or a check is in flight. A cancelled host generation cannot publish into another host with the same family label and slot, and a host switch discards the previous host's expanded family. With inventory off, Overview keeps the #24 catalog/setup/deep-link behavior and shows no discovered families.
+
+## Authorized installation (not performed here)
+
+Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's root `pluginsEnabled` switch. If absent/false, obtain separate explicit consent before enabling it; do not assume plugin installation grants that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git) with the exact offline-tested candidate commit:
+
+```sh
+paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref 875c69a101a102a8f14b064f0664069b5e603f4f
+paseo plugin ls
+paseo plugin logs paseo-orbi
+```
+
+Commit `875c69a101a102a8f14b064f0664069b5e603f4f` is the offline-qualified Git candidate (Node 22.19.0; 97 tests, typecheck, boundary guard, pack inspection and isolated locked production preparation passed). This installation pin was added in a documentation-only follow-up; runtime/package/lock contents are unchanged. The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An initial `--ref` does not pin later ordinary updates (which follow default HEAD); inspect and authorize updates separately. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
+
+### Live qualification not run
+
+- Separately authorized installation of that exact revision on a test daemon.
+- Inspection of `pluginsEnabled` and explicit consent if it is absent/false.
+- Confirmation of `running` status and safe logs on the intended host.
+- Selected-host real RPC success and failure for all four views, including configuration errors and repair/Refresh.
+- Wide/compact and light/dark physical clients (desktop and native mobile), including accessibility behavior.
+- Authorized reload cleanup of registrations, timers, reads and process groups.
+
+No daemon/plugin installation or reload, live Orbi issue, credentials change, service activation, human-review approval, registry submission, npm publication, release/tag or branch-protection change was performed. Historical fixture previews are not physical-client screenshots or live approvals.
+
+## Related documents
+
+- [Paseo plugin development reference](paseo-plugins.md) - contracts, cautions and repository development checks.
+- [Installed Paseo qualification](testing/qualification.md) - pinned browser harness, evidence and native gates.
+- [Listing overview](../OVERVIEW.md).
