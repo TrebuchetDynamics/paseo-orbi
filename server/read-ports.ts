@@ -92,6 +92,59 @@ export async function boundedFile(root: string, path: string, metadataOnly = fal
 export async function readBytes(root: string, path: string, signal?: AbortSignal): Promise<Buffer> {
   return await boundedFile(root, path, false, signal) as Buffer;
 }
+// Shared bounded child execution for every fixed operation: no shell, stdin
+// ignored, at most two concurrent children, 10-second per-child ceiling and
+// 1 MiB combined stdout/stderr. Timeout and disposal kill each child's own
+// process group (helpers can inherit the output pipes), then reap the child.
+class ChildOperations {
+  constructor(private readonly children: Map<ChildProcess, () => Promise<void>>) {}
+  async run(command: string, args: string[], timeoutMs: number, options: { includeHttpError?: boolean; fixedLocale?: boolean } = {}): Promise<string> {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw new ReadError('unsafe_path');
+    if (this.children.size >= 2) throw new ReadError('process_limit');
+    const env = options.fixedLocale ? { ...process.env, LC_ALL: 'C', LANG: 'C', SYSTEMD_COLORS: '0' } : process.env;
+    return new Promise((resolveResult, reject) => {
+      let child: ChildProcess;
+      try { child = spawn(command, args, { shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env }); }
+      catch { reject(new ReadError('process_failed')); return; }
+      let failure: ReadError | undefined;
+      let length = 0;
+      const output: Buffer[] = [];
+      const stop = (code: ReadError['code']) => {
+        failure ??= new ReadError(code);
+        // Linux server: give each operation its own process group so helpers
+        // cannot keep stdout/stderr alive after the direct child is killed.
+        if (child.pid) {
+          try { process.kill(-child.pid, 'SIGKILL'); }
+          catch { child.kill('SIGKILL'); }
+        }
+      };
+      const timer = setTimeout(() => stop('process_timeout'), timeoutMs);
+      const done = new Promise<void>(resolveDone => {
+        child.once('close', code => {
+          clearTimeout(timer); this.children.delete(child); resolveDone();
+          if (failure) reject(failure);
+          else {
+            const text = Buffer.concat(output).toString('utf8');
+            // gh exits nonzero for HTTP errors, but --include still supplies the
+            // bounded status/headers needed for safe typed backoff. Never return stderr.
+            if (code !== 0 && !(options.includeHttpError && /^HTTP\//.test(text))) reject(new ReadError('process_failed'));
+            else resolveResult(text);
+          }
+        });
+      });
+      this.children.set(child, () => { stop('disposed'); return done; });
+      child.once('error', () => { failure = new ReadError('process_failed'); });
+      const collect = (stdout: boolean) => (chunk: Buffer) => {
+        length += chunk.length;
+        if (length > 1024 * 1024) stop('read_limit');
+        else if (stdout && !failure) output.push(chunk);
+      };
+      child.stdout!.on('data', collect(true)); child.stderr!.on('data', collect(false));
+    });
+  }
+  async dispose() { await Promise.all([...this.children.values()].map(stop => stop())); }
+}
+
 export type ProcessOperation =
   | { kind: 'systemctl-show'; slot: number; unit: 'service' | 'timer' }
   | { kind: 'journalctl'; slot: number }
@@ -103,7 +156,8 @@ export type ProcessOperation =
 export class ReadPorts {
   private disposed = false;
   private readonly lifetime = new AbortController();
-  private children = new Map<ChildProcess, () => Promise<void>>();
+  private readonly children = new Map<ChildProcess, () => Promise<void>>();
+  private readonly operations = new ChildOperations(this.children);
   constructor(private readonly repository: ConfigRepository) {}
   clock() { return new Date(); }
   async read(id: string, selector: 'health') {
@@ -248,50 +302,24 @@ export class ReadPorts {
       command = 'gh'; args = ['api', '--hostname', 'github.com', '--method', 'GET', '--include',
         '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', endpoint];
     } else throw new ReadError('unsafe_path');
-    if (this.children.size >= 2) throw new ReadError('process_limit');
-    return new Promise((resolveResult, reject) => {
-      let child: ChildProcess;
-      try { child = spawn(command, args, { shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env }); }
-      catch { reject(new ReadError('process_failed')); return; }
-      let failure: ReadError | undefined;
-      let length = 0;
-      const output: Buffer[] = [];
-      const stop = (code: ReadError['code']) => {
-        failure ??= new ReadError(code);
-        // Linux server: give each operation its own process group so helpers
-        // cannot keep stdout/stderr alive after the direct child is killed.
-        if (child.pid) {
-          try { process.kill(-child.pid, 'SIGKILL'); }
-          catch { child.kill('SIGKILL'); }
-        }
-      };
-      const timer = setTimeout(() => stop('process_timeout'), timeoutMs);
-      const done = new Promise<void>(resolveDone => {
-        child.once('close', code => {
-          clearTimeout(timer); this.children.delete(child); resolveDone();
-          if (failure) reject(failure);
-          else {
-            const text = Buffer.concat(output).toString('utf8');
-            // gh exits nonzero for HTTP errors, but --include still supplies the
-            // bounded status/headers needed for safe typed backoff. Never return stderr.
-            if (code !== 0 && !(operation.kind === 'gh-api-get' && /^HTTP\//.test(text))) reject(new ReadError('process_failed'));
-            else resolveResult(text);
-          }
-        });
-      });
-      this.children.set(child, () => { stop('disposed'); return done; });
-      child.once('error', () => { failure = new ReadError('process_failed'); });
-      const collect = (stdout: boolean) => (chunk: Buffer) => {
-        length += chunk.length;
-        if (length > 1024 * 1024) stop('read_limit');
-        else if (stdout && !failure) output.push(chunk);
-      };
-      child.stdout!.on('data', collect(true)); child.stderr!.on('data', collect(false));
-    });
+    return this.operations.run(command, args, timeoutMs, { includeHttpError: operation.kind === 'gh-api-get' });
+  }
+  // Dedicated host-scoped inventory port: two fixed systemctl argv forms only.
+  // It never resolves a deployment/config entry, so a name match can never
+  // become a repository read capability. The caller passes the remaining
+  // overall deadline; the shared child ceiling, byte cap and disposal apply.
+  async hostInventory(operation: 'runtime' | 'installed', timeoutMs = 10000): Promise<string> {
+    this.assertActive();
+    if (operation !== 'runtime' && operation !== 'installed') throw new ReadError('unsafe_path');
+    const args = operation === 'runtime'
+      ? ['--user', 'list-units', '--all', '--type=service,timer', '--plain', '--no-legend', '--no-pager', '--full', 'orbi*.service', 'orbi*.timer']
+      : ['--user', 'list-unit-files', '--type=service,timer', '--no-legend', '--no-pager', '--full', 'orbi*.service', 'orbi*.timer'];
+    // Fixed C locale and disabled colors keep the plain columns stable.
+    return this.operations.run('systemctl', args, timeoutMs, { fixedLocale: true });
   }
   async dispose() {
     this.disposed = true;
     this.lifetime.abort();
-    await Promise.all([...this.children.values()].map(stop => stop()));
+    await this.operations.dispose();
   }
 }

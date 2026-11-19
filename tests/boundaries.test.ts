@@ -134,7 +134,7 @@ describe('package_and_registration boundaries', () => {
       }
       visit(source);
     }
-    expect(rpcNames.sort()).toEqual(['blockers.list', 'blockers.read', 'deployments.list', 'fleet.read', 'issues.get', 'issues.list', 'runs.list', 'runs.read']);
+    expect(rpcNames.sort()).toEqual(['blockers.list', 'blockers.read', 'deployments.list', 'fleet.read', 'issues.get', 'issues.list', 'runs.list', 'runs.read', 'services.inventory']);
     const port = read('server/read-ports.ts');
     expect([...port.matchAll(/command = '([^']+)'/g)].map(m => m[1]).sort()).toEqual(['gh', 'journalctl', 'systemctl']);
     expect(port).toContain("'--method', 'GET'");
