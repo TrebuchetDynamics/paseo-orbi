@@ -91,7 +91,7 @@ it('four_views_read_only_journey', async () => {
     });
   } } as PluginServerContext);
   cleanups.push(stopServer);
-  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'fleet.read': host.readFleet, 'issues.list': host.readIssues, 'issues.get': host.readIssue, 'runs.list': host.readRuns, 'runs.read': host.readRun, 'blockers.list': host.readBlockers, 'blockers.read': host.readBlocker })) {
+  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory, 'fleet.read': host.readFleet, 'issues.list': host.readIssues, 'issues.get': host.readIssue, 'runs.list': host.readRuns, 'runs.read': host.readRun, 'blockers.list': host.readBlockers, 'blockers.read': host.readBlocker })) {
     mock.mockReset().mockImplementation(input => handlers.get(name)!(input));
   }
   const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
@@ -107,11 +107,25 @@ it('four_views_read_only_journey', async () => {
   const tree = (route: string, p = props) => { const Screen = screens.get(route)!; return <QueryClientProvider client={query}><Screen {...p} /></QueryClientProvider>; };
   await act(async () => { renderer = create(tree('fleet')); });
   cleanups.push(async () => { await act(async () => renderer.unmount()); });
-  const settle = async () => { for (let n = 0; n < 5; n++) await act(async () => { await pause(10); await vi.advanceTimersByTimeAsync(5); }); };
+  // Fake timers deliver React Query's batched notifications one tick per round.
+  // Keep flushing while this client still has an in-flight read (bounded), so a
+  // host service check that lands first cannot starve the next screen's read.
+  const settle = async () => {
+    for (let n = 0; n < 20; n++) {
+      await act(async () => { await pause(10); await vi.advanceTimersByTimeAsync(5); });
+      if (query.isFetching() === 0) break;
+    }
+    await act(async () => { await pause(10); await vi.advanceTimersByTimeAsync(5); });
+  };
   const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
   const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); };
   await settle();
   expect(text()).toContain('Configured capacity: 2; Occupancy: unknown'); expect(text()).toContain('Second (Other/repository)');
+  // Host inventory is not opted in here: the Overview keeps the #24 catalog
+  // semantics and adds no discovered family or repository action.
+  expect(host.readInventory).toHaveBeenCalledTimes(1);
+  expect(text()).toContain('Host service check: off');
+  expect(text()).not.toContain('View repository');
   partial = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
   expect(text()).toContain('partial'); expect(text()).toContain('systemd: process_failed');
