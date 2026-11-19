@@ -7,6 +7,7 @@ import { ConfigRepository } from '../server/config';
 import { ReadPorts, readBytes, boundedFile, FILE_LIMIT } from '../server/read-ports';
 import { fingerprint, profiles } from '../server/compatibility';
 import { deploymentsList, DeploymentCatalog, observationSchema } from '../shared/common';
+import { servicesInventory } from '../shared/services';
 import { z } from 'zod';
 import contribute from '../index.server';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
@@ -440,6 +441,25 @@ describe('package_and_registration', () => {
       await act(async () => renderer.unmount());
     }
     for (const read of features) expect(read).not.toHaveBeenCalled();
+    // #24's setup gate is unchanged when the opt-in host inventory is on: host
+    // evidence adds no navigation, selectors, repository actions or feature reads.
+    host.readInventory.mockResolvedValue(servicesInventory.output.parse({
+      state: 'complete', observedAt: '2026-11-14T23:00:00.000Z',
+      sources: [
+        { source: 'runtime', state: 'complete', observedAt: '2026-11-14T23:00:00.000Z', problems: [] },
+        { source: 'installed', state: 'complete', observedAt: '2026-11-14T23:00:00.000Z', problems: [] },
+      ],
+      problems: [], groups: [{ label: 'orbi-demo', kind: 'runner-family', association: 'matched', deploymentId: 'demo', units: [] }],
+    }));
+    host.readCatalog.mockReset().mockResolvedValue(unconfigured);
+    const inventoryRenderer = await render(queryClient(), React.createElement(screens[0].Component, { ...props, params: { deploymentId: 'demo' } }));
+    expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
+    expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(0);
+    expect(inventoryRenderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('View repository'))).toHaveLength(0);
+    expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('not in the current authorized catalog');
+    for (const read of features) expect(read).not.toHaveBeenCalled();
+    await act(async () => inventoryRenderer.unmount());
+    host.readInventory.mockResolvedValue({ state: 'off', observedAt: null, sources: [], groups: [], problems: [] });
     // Missing selected-host source data is unavailable, never another host's cached catalog.
     let fail!: (error: Error) => void;
     host.readCatalog.mockReset().mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
