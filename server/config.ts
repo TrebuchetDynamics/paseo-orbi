@@ -14,6 +14,13 @@ const identity = z.object({
   trustedPublisherLogins: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?$/)).max(32),
 }).strict();
 const configuration = z.object({ schema: z.literal(1), deployments: z.array(identity) }).strict();
+// Display-only association candidate for the host service inventory. A claim is
+// recorded only after the unit prefix and capacity are validated; an entry whose
+// sole rejection is an unsupported source profile keeps its claim without
+// gaining read authority. Read authority still requires resolve().
+export type UnitFamilyClaim = Readonly<{
+  id: string; unitName: string | null; status: 'available' | 'unsupported_source_profile';
+}>;
 export type ValidatedDeployment = Readonly<{
   id: string; repo: string; configPath: string; engineSourcePath: string; repoDir: string; deployHome: string;
   sourceProfile: SourceProfile; unitName: string | null; capacity: number; trustedPublisherLogins: readonly string[];
@@ -25,7 +32,8 @@ function tomlPath(value: unknown, base: string) {
   return resolve(base, value);
 }
 export class ConfigRepository {
-  private constructor(private readonly view: DeploymentCatalog, private readonly deployments = new Map<string, ValidatedDeployment>()) {}
+  private constructor(private readonly view: DeploymentCatalog, private readonly deployments = new Map<string, ValidatedDeployment>(),
+    private readonly claims: readonly UnitFamilyClaim[] = []) {}
   static async load(path: string | undefined, signal?: AbortSignal): Promise<ConfigRepository> {
     if (path === undefined) return new ConfigRepository({ state: 'unconfigured', entries: [], problems: [] });
     const invalid = (code: Problem['code']) => new ConfigRepository({ state: 'invalid', entries: [], problems: [problem(code)] });
@@ -46,6 +54,7 @@ export class ConfigRepository {
     }
     const catalog: DeploymentCatalog = { state: 'configured', entries: [], problems: [] };
     const valid = new Map<string, ValidatedDeployment>();
+    const claims: UnitFamilyClaim[] = [];
     for (const entry of parsed.data.deployments) {
       if (signal?.aborted) return invalid('disposed');
       const safe: DeploymentCatalog['entries'][number] = {
@@ -66,13 +75,16 @@ export class ConfigRepository {
         if ((unitName !== null && (typeof unitName !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(unitName)))
           || typeof capacity !== 'number' || !Number.isInteger(capacity) || capacity < 1 || capacity > 5) throw new Error('config_mismatch');
         if (!await compatible(entry.engineSourcePath, entry.adapter, signal)) {
-          safe.status = 'unsupported_source_profile'; safe.problems = [problem('unsupported_source_profile', 'compatibility')]; continue;
+          safe.status = 'unsupported_source_profile'; safe.problems = [problem('unsupported_source_profile', 'compatibility')];
+          claims.push(Object.freeze({ id: entry.id, unitName, status: 'unsupported_source_profile' }));
+          continue;
         }
         const worktreeRetainHours = toml.worktree_retain_hours ?? 72;
         const keepFailedWorktrees = entry.adapter === 'orbi-0.7.41-1a8b2f96' ? toml.keep_failed_worktrees ?? true : null;
         if (typeof worktreeRetainHours !== 'number' || !Number.isFinite(worktreeRetainHours) || worktreeRetainHours <= 0
           || (keepFailedWorktrees !== null && typeof keepFailedWorktrees !== 'boolean')) throw new Error('config_mismatch');
         safe.status = 'available';
+        claims.push(Object.freeze({ id: entry.id, unitName, status: 'available' }));
         valid.set(entry.id, Object.freeze({
           id: entry.id, repo: entry.repo, configPath: entry.configPath, engineSourcePath: entry.engineSourcePath,
           repoDir: entry.repoDir, deployHome: entry.deployHome, sourceProfile: entry.adapter as SourceProfile,
@@ -80,9 +92,13 @@ export class ConfigRepository {
         }));
       } catch (error) { safe.problems = [problem(error instanceof ReadError ? error.code : 'config_mismatch')]; }
     }
-    return new ConfigRepository(catalog, valid);
+    return new ConfigRepository(catalog, valid, claims);
   }
   catalog(): DeploymentCatalog { return structuredClone(this.view); }
+  // Display-only inventory association claims. This is not a read capability:
+  // resolve() remains the only path to deployment reads and still excludes
+  // unsupported profiles.
+  unitClaims(): readonly UnitFamilyClaim[] { return this.claims; }
   resolve(id: string): ValidatedDeployment {
     const deployment = this.deployments.get(id);
     if (!deployment) throw new Error('deployment_unavailable');
