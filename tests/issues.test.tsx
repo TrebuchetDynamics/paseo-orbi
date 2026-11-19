@@ -32,7 +32,7 @@ import contribute from '../index.server';
 import { deploymentsList } from '../shared/common';
 import { fleetRead } from '../shared/fleet';
 import { runsList, runsRead } from '../shared/runs';
-import { blockersList, blockersRead } from '../shared/blockers';
+import { blockersList, blockersRead, waitGuidance } from '../shared/blockers';
 import { servicesInventory } from '../shared/services';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 const reports = JSON.parse(await readFile(new URL('./fixtures/github/reports.json', import.meta.url), 'utf8'));
@@ -801,4 +801,76 @@ it('opens_a_complete_reported_run_in_runs_and_keeps_incomplete_reports_as_text',
   expect(controls()).toHaveLength(0);
   expect(text()).toContain('Reported run: unknown; reports complete');
   expect(openScreen).toHaveBeenCalledTimes(1);
+});
+
+it('renders recorded base-CI, scene round and receipt values only while their status is available', async () => {
+  vi.useFakeTimers();
+  const f = fakeReader();
+  const comments = [
+    comment(1, `${marker()}\n${kind('failure')}\n${block('failure', reports.failure)}\n${block('base-ci-red', reports.baseCi)}`),
+    comment(2, `${marker()}\n${kind('review-round')}\n${block('scene', reports.scene)}`),
+    comment(3, `${marker()}\n${kind('merged')}\nReadable merged PROSE_CANARY\n\n${reports.receipt}`),
+  ];
+  f.process.mockImplementation(async (_id, op) => {
+    if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+    if (op.resource === 'issues') return response([rest.issue]);
+    if (op.resource === 'issue') return response(rest.issue);
+    if (op.resource === 'comments') return response(comments);
+    if (op.resource === 'pull') return response({ ...rest.pull, merged_at: null });
+    if (op.resource === 'checks') return response(rest.checks);
+    return response([]);
+  });
+  host.readCatalog.mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+  host.readIssues.mockImplementation(input => f.reader.listIssues(input.deploymentId, input.page));
+  host.readIssue.mockImplementation(input => f.reader.getIssue(input.deploymentId, input.issue));
+  const { renderer, settle, client } = await renderIssues();
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
+  const reads = () => [host.readCatalog.mock.calls.length, host.readIssues.mock.calls.length, host.readIssue.mock.calls.length, f.process.mock.calls.length];
+  const before = reads();
+  // The validated base-CI, scene and receipt values arrive in issues.get and are rendered from there.
+  expect(text()).toContain('Base CI: waiting; PR #42');
+  expect(text()).toContain(waitGuidance('waiting'));
+  expect(text()).toContain('Scene review_round: 2');
+  expect(text()).toContain(`Reported receipt: merge_commit ${'b'.repeat(40)}; review_rounds 2; commits 3; external_commits 0; run_id ${run}`);
+  expect(text()).toContain('Merge evidence: reported. Receipts and labels alone do not verify a merge.');
+  expect(text()).toContain(`mergedReceipt: ${repo}#4`);
+  // No check names, check output or transported prose from any report source.
+  expect(text()).not.toMatch(/typecheck|PROSE_CANARY|TARGET_CANARY|OUTPUT_CANARY/);
+  expect(reads()).toEqual(before);
+  const key = ['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:4`];
+  const detail = issuesGet.output.parse(client.getQueryData(key));
+  const setReports = async (value: object) => {
+    await act(async () => { client.setQueryData(key, issuesGet.output.parse({ ...detail, data: { ...detail.data!, reports: value } })); });
+    await settle();
+  };
+  const attr = detail.data!.reports.attribution!;
+  const noReceiptValues = () => {
+    expect(text()).not.toContain('merge_commit');
+    expect(text()).not.toContain('commits');
+    expect(text()).not.toContain('run_id');
+  };
+  const noValues = () => {
+    expect(text()).not.toContain('Base CI: waiting');
+    expect(text()).not.toContain(waitGuidance('waiting'));
+    expect(text()).not.toContain('review_round');
+    noReceiptValues();
+  };
+  for (const status of ['missing', 'invalid', 'unsupported'] as const) {
+    await setReports({ ...detail.data!.reports,
+      baseCi: { status, attribution: status === 'missing' ? null : attr },
+      scene: { status, attribution: status === 'missing' ? null : attr },
+      mergedReceipt: { status, attribution: status === 'missing' ? null : attr } });
+    expect(text()).toContain(`Scene: ${status}; Base CI: ${status}; Receipt: ${status}`);
+    noValues(); // status only: no values and no fabricated zeros
+  }
+  // A valid scene cannot lend values to a malformed receipt (and vice versa).
+  await setReports({ ...detail.data!.reports, mergedReceipt: { status: 'invalid', attribution: attr } });
+  expect(text()).toContain('Scene review_round: 2');
+  expect(text()).toContain('Base CI: waiting; PR #42');
+  expect(text()).toContain('Receipt: invalid');
+  noReceiptValues(); // a malformed receipt cannot borrow the valid scene's values
+  expect(text()).toContain('mergedReceipt: Example/project#4');
+  expect(reads()).toEqual(before);
+  expect(JSON.stringify(renderer.toJSON())).not.toMatch(/PROSE_CANARY|TARGET_CANARY/);
 });
