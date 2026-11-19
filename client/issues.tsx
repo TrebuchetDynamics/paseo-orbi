@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useRpc, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
 import { issuesList, issuesGet, issueStates, type IssueDetail, type IssuePage } from '../shared/issues';
+import { waitGuidance } from '../shared/blockers';
 import { ObservationView, useObservationQuery } from './observation';
 import { GitHubEvidenceLink } from './github-evidence-link';
 
@@ -24,6 +25,10 @@ function Detail({ data, ...props }: Props & { data: IssueDetail }) {
     <Text style={text}>Progress: {data.reports.progress.status}{data.reports.progress.status === 'available' ? `; reported stage: ${data.reports.progress.data.step ?? 'unknown'} (not live execution; GitHub facts take precedence)` : ''}</Text>
     <Text style={text}>Failure: {data.reports.failure.status}{data.reports.failure.status === 'available' ? `; ${data.reports.failure.data.reason_code}; action: ${data.reports.failure.data.action_code}` : ''}</Text>
     <Text style={text}>Scene: {data.reports.scene.status}; Base CI: {data.reports.baseCi.status}; Receipt: {data.reports.mergedReceipt.status}</Text>
+    {data.reports.scene.status === 'available' && <Text style={text}>Scene review_round: {data.reports.scene.data.review_round}</Text>}
+    {data.reports.baseCi.status === 'available' && <Text style={text}>Base CI: {data.reports.baseCi.data.state}; PR #{data.reports.baseCi.data.pr}</Text>}
+    {data.reports.baseCi.status === 'available' && <Text style={text}>{waitGuidance(data.reports.baseCi.data.state)}</Text>}
+    {data.reports.mergedReceipt.status === 'available' && <Text style={text}>Reported receipt: merge_commit {data.reports.mergedReceipt.data.merge_commit}; review_rounds {data.reports.mergedReceipt.data.review_rounds}; commits {data.reports.mergedReceipt.data.commits}; external_commits {data.reports.mergedReceipt.data.external_commits}; run_id {data.reports.mergedReceipt.data.run_id}</Text>}
     <Text style={text}>PR identity: {data.reports.prIdentity.status}{data.reports.prIdentity.status === 'available' ? `; ${data.reports.prIdentity.url} (${data.reports.prIdentity.source})` : ''}</Text>
     {data.reports.prIdentity.status === 'available' && <GitHubEvidenceLink
       key={JSON.stringify([props.hostId, props.deploymentId, props.repo, 'pull', data.reports.prIdentity.number])}
