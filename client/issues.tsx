@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { useRpc, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
 import { issuesList, issuesGet, issueStates, type IssueDetail, type IssuePage } from '../shared/issues';
 import { ObservationView, useObservationQuery } from './observation';
@@ -37,15 +37,19 @@ function Detail({ data, ...props }: Props & { data: IssueDetail }) {
 export function Issues(props: Props) {
   const [page, setPage] = useState(1);
   const [selected, select] = useState<number | null>(null);
+  const [issueText, setIssueText] = useState('');
   const read = useRpc(issuesList);
   const readDetail = useRpc(issuesGet);
   const query = useObservationQuery<IssuePage>({ ...props, selector: `issues.list:${props.repo}:${page}`, read: () => read({ deploymentId: props.deploymentId, page }) });
   const detail = useObservationQuery<IssueDetail>({ ...props, connected: props.connected && selected !== null, selector: `issues.get:${props.repo}:${selected ?? 'none'}`,
     read: () => readDetail({ deploymentId: props.deploymentId, issue: selected! }) });
   const text = { color: props.theme.colors.foreground };
+  const lookup = /^[1-9][0-9]*$/.test(issueText) && Number.isSafeInteger(Number(issueText));
   return <View>
     <Text style={text}>Ready candidate does not promise pickup. Dependency status is unknown until an issue is selected. Labels are evidence, not execution instructions.</Text>
     <Text style={text}>If auth_denied: ask the operator to repair the daemon user's existing gh authentication, then Refresh. rate_limited: wait for GitHub's retry/reset gate; Refresh cannot bypass it.</Text>
+    <TextInput accessibilityLabel="Issue number to inspect" value={issueText} onChangeText={setIssueText} keyboardType="number-pad" style={{ ...text, borderColor: props.theme.colors.foreground, borderWidth: 1 }} />
+    <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue by number" disabled={!lookup} onPress={() => { if (lookup) select(Number(issueText)); }}><Text style={text}>Inspect issue</Text></Pressable>
     <ObservationView {...query} theme={props.theme}>{data => <View>
       <Text style={text}>{data.repo} — Page {data.page}. This displayed page is not the complete active scope.</Text>
       {data.records.length === 0 && <Text style={text}>No issues on this observed page.</Text>}
@@ -67,6 +71,9 @@ export function Issues(props: Props) {
       <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={page === 1} onPress={() => { select(null); setPage(page - 1); }}><Text style={text}>Previous page</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={!data.hasNextPage || page >= 10} onPress={() => { select(null); setPage(page + 1); }}><Text style={text}>Next page</Text></Pressable>
     </View>}</ObservationView>
-    {selected !== null && <ObservationView {...detail} theme={props.theme}>{data => <Detail data={data} {...props} />}</ObservationView>}
+    {selected !== null && <View>
+      <Text style={text}>Issue #{selected} — detail read by number; not a browse-page membership claim.</Text>
+      <ObservationView {...detail} theme={props.theme}>{data => <Detail data={data} {...props} />}</ObservationView>
+    </View>}
   </View>;
 }

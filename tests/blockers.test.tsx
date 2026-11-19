@@ -287,8 +287,8 @@ it('partial_stale_and_layout', async () => {
   expect(JSON.stringify(renderer.toJSON())).toContain('Artifact metadata only');
   expect(JSON.stringify(renderer.toJSON())).toContain('missing');
   expect(JSON.stringify(renderer.toJSON())).not.toMatch(/CANARY|\/tmp\//);
-  const allowed = /^(Refresh|Inspect blocker \d+|Inspect run [0-9a-f]{8} in Runs|Previous blockers page|Next blockers page|Select .+|Open (Overview|Issues|Runs|Blockers))$/;
-  for (const button of renderer.root.findAll(node => node.type === ('Pressable' as any))) expect(button.props.accessibilityLabel).toMatch(allowed);
+  const allowed = /^(Refresh|Inspect blocker \d+|Inspect issue by number|Issue number to inspect|Inspect run [0-9a-f]{8} in Runs|Previous blockers page|Next blockers page|Select .+|Open (Overview|Issues|Runs|Blockers))$/;
+  for (const control of renderer.root.findAll(node => node.type === ('Pressable' as any) || node.type === ('TextInput' as any))) expect(control.props.accessibilityLabel).toMatch(allowed);
   for (const compact of [true, false]) for (const foreground of ['#eee', '#111']) {
     await screen.update({ ...props, layout: { ...props.layout, compact }, theme: { colors: { ...theme.colors, foreground } } as any });
     for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe(foreground);
@@ -360,6 +360,84 @@ it('paginates_only_candidate_states_without_scanning_unrelated_comments', async 
   const second = BlockerPage.parse((await f.reader.list({ deploymentId: 'demo', page: 2 })).data);
   expect(second.records.map(r => r.issue.number)).toEqual([21]); expect(second.hasNextPage).toBe(false);
   expect(f.process.mock.calls.filter(([, op]) => op.kind === 'gh-api-get' && op.resource === 'comments').map(([, op]) => 'issue' in op ? op.issue : 0)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
+});
+
+it('looks_up_a_non_candidate_issue_without_page_membership_or_has_next_change', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  host.readBlockers.mockReset().mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: true, records: [safeBlocker(4)] }));
+  host.readBlocker.mockReset();
+  const nonCandidate = (number: number, title: string) => blockersRead.output.parse(available(BlockerDetails.parse({
+    issue: { ...issue(number, []), title },
+    attention: 'not_candidate',
+    reports: { selectedRunId: null, attribution: null, complete: false, failure: { status: 'missing', attribution: null },
+      scene: { status: 'missing', attribution: null }, baseCi: { status: 'missing', attribution: null } },
+    artifacts: artifactNames.map(name => ({ name, status: 'unattributed', size: null, modifiedAt: null })),
+    retention: { profile: 'orbi-0.7.41-release', worktreeRetainHours: 72, keepFailedWorktrees: null },
+  })));
+  host.readBlocker.mockImplementation(async input => input.issue === 998 ? Promise.reject(new Error('NETWORK_SECRET')) : nonCandidate(input.issue, `LOOKED_UP_${input.issue}_TITLE`));
+  const screen = await renderScreen();
+  const { renderer, settle } = screen;
+  const input = () => renderer.root.findByProps({ accessibilityLabel: 'Issue number to inspect' });
+  const inspect = () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue by number' });
+  const setInput = async (value: string) => { await act(async () => input().props.onChangeText(value)); await settle(); };
+  const press = async () => { await act(async () => inspect().props.onPress()); await settle(); await settle(); };
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  const candidateRows = () => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && /^Inspect blocker \d+$/.test(node.props.accessibilityLabel)).map(node => node.props.accessibilityLabel);
+  expect(text()).toContain('Blockers page 1; scope complete');
+  expect(candidateRows()).toEqual(['Inspect blocker 4']);
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Next blockers page' }).props.disabled).toBe(true);
+  for (const value of ['', '0', '007', '-1', '4.5', 'abc', String(Number.MAX_SAFE_INTEGER + 1)]) {
+    await setInput(value);
+    expect(inspect().props.disabled).toBe(true);
+    await press();
+    expect(host.readBlocker).not.toHaveBeenCalled();
+  }
+  await setInput('999');
+  expect(inspect().props.disabled).toBe(false);
+  await press();
+  expect(host.readBlocker).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 999 });
+  expect(text()).toContain('Issue #999 — looked-up evidence; not blocker-scope membership or a page candidate claim.');
+  expect(text()).toContain(attentionText.not_candidate);
+  expect(text()).toContain('LOOKED_UP_999_TITLE');
+  expect(text()).toContain('worktree: unattributed');
+  // A failed lookup keeps the unavailable observation, never the previous issue's evidence.
+  await setInput('998');
+  await press();
+  expect(host.readBlocker).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 998 });
+  expect(text()).toContain('refresh_failed');
+  expect(text()).not.toContain('LOOKED_UP_999_TITLE');
+  expect(text()).not.toContain('NETWORK_SECRET');
+  // The candidate page and its scope statement are untouched by a lookup.
+  expect(text()).toContain('Blockers page 1; scope complete');
+  expect(candidateRows()).toEqual(['Inspect blocker 4']);
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Next blockers page' }).props.disabled).toBe(true);
+});
+
+it('ignores a late blocker lookup for a previous issue number', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  host.readBlockers.mockReset().mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: true, records: [safeBlocker(4)] }));
+  host.readBlocker.mockReset();
+  const nonCandidate = (number: number, title: string) => blockersRead.output.parse(available(BlockerDetails.parse({
+    issue: { ...issue(number, []), title },
+    attention: 'not_candidate',
+    reports: { selectedRunId: null, attribution: null, complete: false, failure: { status: 'missing', attribution: null },
+      scene: { status: 'missing', attribution: null }, baseCi: { status: 'missing', attribution: null } },
+    artifacts: artifactNames.map(name => ({ name, status: 'unattributed', size: null, modifiedAt: null })),
+    retention: { profile: 'orbi-0.7.41-release', worktreeRetainHours: 72, keepFailedWorktrees: null },
+  })));
+  let finishSeven!: (value: unknown) => void;
+  host.readBlocker.mockImplementationOnce(() => new Promise(resolve => { finishSeven = resolve; })).mockResolvedValueOnce(nonCandidate(8, 'LOOKED_UP_EIGHT_TITLE'));
+  const screen = await renderScreen();
+  const { renderer, settle } = screen;
+  const setInput = async (value: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Issue number to inspect' }).props.onChangeText(value)); await settle(); };
+  const inspect = async () => { await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue by number' }).props.onPress()); await settle(); await settle(); };
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  await setInput('7'); await inspect();
+  await setInput('8'); await inspect();
+  expect(text()).toContain('LOOKED_UP_EIGHT_TITLE');
+  await act(async () => finishSeven(nonCandidate(7, 'LATE_SEVEN_TITLE'))); await settle(); await settle();
+  expect(text()).toContain('LOOKED_UP_EIGHT_TITLE');
+  expect(text()).not.toContain('LATE_SEVEN_TITLE');
 });
 
 it('repository_change_separates_pending_blocker_rows_details_and_sources', async () => {
