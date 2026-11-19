@@ -93,9 +93,14 @@ describe('package_and_registration boundaries', () => {
     for (const name of ['cli', 'client', 'server']) expect(lock.packages[`node_modules/@getpaseo/${name}`].version).toBe('0.15.4');
     expect(json('package.json').files).not.toContain('tests');
     expect(read('.github/workflows/ci.yml')).not.toContain('npm run test:e2e\n');
-    expect(read('.github/workflows/paseo-qualification.yml')).toContain('workflow_dispatch:');
-    expect(read('.github/workflows/paseo-qualification.yml')).toContain('retention-days: 30');
-    expect(read('.github/workflows/paseo-qualification.yml')).toContain('if: always()');
+    const qualification = read('.github/workflows/paseo-qualification.yml');
+    expect(qualification).toContain('workflow_dispatch:');
+    expect(qualification).toContain('retention-days: 30');
+    expect(qualification).toContain('if: always()');
+    // The offline gates stop the run before any runtime/browser acquisition, disposable-daemon install or journey.
+    const offlineGates = qualification.slice(qualification.indexOf('- name: Offline gates'), qualification.indexOf('- name: Explicit isolated locked runtime and browser acquisition'));
+    expect(offlineGates).toContain('timeout 60 npm run test:boundaries');
+    expect(offlineGates).toContain('timeout 180 npm test');
   });
   it('limits transitive runtime capabilities to read-only named imports and fixed RPCs', () => {
     const nodeImports: Record<string, string[]> = {

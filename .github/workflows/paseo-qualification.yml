@@ -60,6 +60,8 @@ jobs:
           timeout 60 npm run test:e2e:typecheck
           timeout 60 npm run test:e2e:unit
           timeout 60 npm run test:e2e:list
+          timeout 60 npm run test:boundaries
+          timeout 180 npm test
       - name: Explicit isolated locked runtime and browser acquisition
         run: |
           mkdir tests/e2e/runtime/.setup
