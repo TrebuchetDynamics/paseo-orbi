@@ -1,10 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
-import { useRpc, type PluginHostProps } from '@getpaseo/plugin/client';
+import { useRpc, type PluginHostProps, type PluginScreenParams } from '@getpaseo/plugin/client';
 import { runsList, runsRead, type RunSummary, type RunDetails } from '../shared/runs';
 import { ObservationView, useObservationQuery } from './observation';
 
-type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginHostProps['theme'] };
+type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginHostProps['theme']; params?: PluginScreenParams };
+// Params travel in the screen URL as strings. Only an exact issue/run identity pair
+// is usable; runs.list stays the authority for which runs may ever be selected.
+function navigate(params: PluginScreenParams | undefined): { issue: number; runId: string } | null {
+  const issue = params?.issue, runId = params?.runId;
+  if (!issue || !runId || !/^[1-9][0-9]*$/.test(issue) || !Number.isSafeInteger(Number(issue)) || !/^[0-9a-f]{8}$/.test(runId)) return null;
+  return { issue: Number(issue), runId };
+}
 function Summary({ row, theme }: { row: RunSummary; theme: PluginHostProps['theme'] }) {
   const text = { color: theme.colors.foreground };
   return <View>
@@ -38,10 +45,22 @@ function Detail({ input, ...props }: Props & { input: { issue: number; runId: st
 }
 export function Runs(props: Props) {
   const read = useRpc(runsList);
-  const [issueText, setIssueText] = useState('');
-  const [issue, setIssue] = useState<number | undefined>();
+  const navigation = navigate(props.params);
+  const [issueText, setIssueText] = useState(navigation ? String(navigation.issue) : '');
+  const [issue, setIssue] = useState<number | undefined>(navigation?.issue);
   const [selected, select] = useState<{ issue: number; runId: string } | null>(null);
+  // A navigation request is consumed once: it selects only a run the observed
+  // history actually contains and never triggers a guessed detail lookup.
+  const [pending, setPending] = useState(navigation);
+  const [unobserved, setUnobserved] = useState<{ issue: number; runId: string } | null>(null);
   const query = useObservationQuery<RunSummary[]>({ ...props, selector: `runs.list:${props.repo}:${issue ?? 'scope'}`, read: () => read({ deploymentId: props.deploymentId, ...(issue ? { issue } : {}) }) });
+  const observed = query.observation?.data;
+  useEffect(() => {
+    if (!pending || !observed) return;
+    setPending(null);
+    if (observed.some(row => row.issue === pending.issue && row.runId === pending.runId)) select(pending);
+    else setUnobserved(pending);
+  }, [pending, observed]);
   const text = { color: props.theme.colors.foreground };
   const valid = /^[1-9][0-9]*$/.test(issueText) && Number.isSafeInteger(Number(issueText));
   return <View style={{ gap: 12 }}>
@@ -49,12 +68,13 @@ export function Runs(props: Props) {
     <Text style={text}>Summary refresh: 30 seconds while foreground/connected. Active scope requires complete GitHub membership; selected issue history is separate.</Text>
     <Text style={text}>auth_denied: ask the operator to repair the daemon user's existing gh authentication, then Refresh. rate_limited: wait for the retry/reset gate. Unavailable activity: check the session writer externally and Refresh; do not infer idle.</Text>
     <TextInput accessibilityLabel="Issue number for history" value={issueText} onChangeText={setIssueText} keyboardType="number-pad" style={{ ...text, borderColor: props.theme.colors.foreground, borderWidth: 1 }} />
-    <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue history" disabled={!valid} onPress={() => { select(null); setIssue(Number(issueText)); }}><Text style={text}>Inspect issue history</Text></Pressable>
-    <Pressable accessibilityRole="button" accessibilityLabel="Show active scope" onPress={() => { select(null); setIssue(undefined); }}><Text style={text}>Show active scope</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue history" disabled={!valid} onPress={() => { select(null); setUnobserved(null); setIssue(Number(issueText)); }}><Text style={text}>Inspect issue history</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel="Show active scope" onPress={() => { select(null); setUnobserved(null); setIssue(undefined); }}><Text style={text}>Show active scope</Text></Pressable>
     <Text style={text}>{issue ? `Issue #${issue} history — not active membership` : 'Observed active issue scope — no current/live run inferred'}</Text>
+    {unobserved && <Text style={text}>{`Requested run ${unobserved.runId} is not in the observed history of issue #${unobserved.issue}; nothing is selected. Refresh after the writer records it; no lookup is guessed.`}</Text>}
     <ObservationView {...query} theme={props.theme}>{rows => <View>
       {!rows.length && <Text style={text}>No attributed runs in this observed scope.</Text>}
-      {rows.map(row => <Pressable key={JSON.stringify([row.deploymentId, row.repo, row.issue, row.runId])} accessibilityRole="button" accessibilityLabel={`Inspect run ${row.issue} ${row.runId}`} onPress={() => select({ issue: row.issue, runId: row.runId })}><Summary row={row} theme={props.theme} /></Pressable>)}
+      {rows.map(row => <Pressable key={JSON.stringify([row.deploymentId, row.repo, row.issue, row.runId])} accessibilityRole="button" accessibilityLabel={`Inspect run ${row.issue} ${row.runId}`} onPress={() => { select({ issue: row.issue, runId: row.runId }); setUnobserved(null); }}><Summary row={row} theme={props.theme} /></Pressable>)}
     </View>}</ObservationView>
     {selected && <Detail key={`${props.hostId}:${props.deploymentId}:${props.repo}:${selected.issue}:${selected.runId}`} {...props} input={selected} />}
   </View>;

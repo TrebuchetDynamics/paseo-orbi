@@ -663,3 +663,54 @@ it('repository_change_separates_pending_lists_details_and_late_reads', async () 
   expect(text()).toContain('stale'); expect(text()).toContain('Reported run: bbbbbbbb'); expect(text()).not.toContain('aaaaaaaa');
   expect(renderer.root.findByProps({ accessibilityLabel: 'Open Reassigned/project issue 4 on GitHub' })).toBeDefined();
 });
+
+it('opens_a_complete_reported_run_in_runs_and_keeps_incomplete_reports_as_text', async () => {
+  vi.useFakeTimers();
+  const f = fakeReader();
+  f.process.mockImplementation(async (_id, op) => {
+    if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+    if (op.resource === 'issues') return response([rest.issue]);
+    if (op.resource === 'issue') return response(rest.issue);
+    if (op.resource === 'comments') return response([comment(1, `${marker()}\n${block('progress', reports.progress)}`)]);
+    if (op.resource === 'dependencies') return response({}, 404);
+    return response([]);
+  });
+  host.readCatalog.mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+  host.readIssues.mockImplementation(input => f.reader.listIssues(input.deploymentId, input.page));
+  host.readIssue.mockImplementation(input => f.reader.getIssue(input.deploymentId, input.issue));
+  const openScreen = vi.fn(), client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} openScreen={openScreen} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
+  const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+  await settle(); await settle();
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
+  const controls = () => renderer.root.findAll(node => node.props.accessibilityLabel === `Inspect run ${run} in Runs`);
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  expect(controls()).toHaveLength(1);
+  expect(controls()[0].props.accessibilityRole).toBe('button');
+  expect(text()).toContain(`Reported run: ${run}; reports complete`);
+  const reads = () => [host.readCatalog.mock.calls.length, host.readIssues.mock.calls.length, host.readIssue.mock.calls.length, f.process.mock.calls.length];
+  const beforeOpen = reads();
+  await act(async () => controls()[0].props.onPress()); await settle();
+  expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs', params: { deploymentId: 'demo', issue: '4', runId: run } });
+  expect(host.readRun).not.toHaveBeenCalled(); // navigation adds no read of its own
+  expect(reads()).toEqual(beforeOpen);
+  // Incomplete or unestablished reports keep the existing plain wording and no control.
+  const key = ['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:4`];
+  const detail = issuesGet.output.parse(client.getQueryData(key));
+  const setReports = async (reports: object) => {
+    await act(async () => { client.setQueryData(key, issuesGet.output.parse({ ...detail, data: { ...detail.data!, reports } })); });
+    await settle();
+  };
+  await setReports({ ...detail.data!.reports, complete: false, selectedRunId: null });
+  expect(controls()).toHaveLength(0);
+  expect(text()).toContain('Reported run: unknown; reports incomplete — current run not established; retained evidence may be stale');
+  await setReports({ ...detail.data!.reports, complete: false, selectedRunId: run });
+  expect(controls()).toHaveLength(0);
+  expect(text()).toContain(`Reported run: ${run}; reports incomplete — current run not established; retained evidence may be stale`);
+  await setReports({ ...detail.data!.reports, complete: true, selectedRunId: null });
+  expect(controls()).toHaveLength(0);
+  expect(text()).toContain('Reported run: unknown; reports complete');
+  expect(openScreen).toHaveBeenCalledTimes(1);
+});

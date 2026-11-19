@@ -304,6 +304,92 @@ it('checks_and_selection_lifecycle', async () => {
   host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
 });
 
+it('navigation_params_preselect_history_and_open_only_an_observed_run_once', async () => {
+  vi.useFakeTimers();
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+  host.readCatalog.mockResolvedValue({ state: 'configured', entries: [
+    { id: 'demo', label: 'Demo', repo, status: 'available', problems: [] },
+    { id: 'other', label: 'Other', repo: 'Other/repo', status: 'available', problems: [] }], problems: [] });
+  host.readRuns.mockReset().mockImplementation(async (input: { deploymentId: string }) => observation(input.deploymentId === 'other' ? [] : [{ ...row, membership: 'history' as const }]));
+  host.readRun.mockReset().mockResolvedValue(observation(pr('passed')));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  const tree = (params: Record<string, string>) => <QueryClientProvider client={client}><Shell {...screenProps} params={params} /></QueryClientProvider>;
+  const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+  const mount = async (params: Record<string, string>) => {
+    if (renderer) await act(async () => renderer.unmount());
+    client.clear();
+    await act(async () => { renderer = create(tree(params)); });
+    await settle(); await settle();
+  };
+  const update = async (params: Record<string, string>) => { await act(async () => renderer.update(tree(params))); await settle(); await settle(); };
+  cleanups.push(async () => { if (renderer) await act(async () => renderer.unmount()); client.clear(); });
+  const visible = () => JSON.stringify(renderer.toJSON());
+  const issueInput = () => renderer.root.findByProps({ accessibilityLabel: 'Issue number for history' });
+  const press = async (label: string) => { await act(async () => { renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === label)[0].props.onPress(); }); await settle(); await settle(); };
+
+  // A valid pair preselects that issue's history and opens the observed run once.
+  await mount({ deploymentId: 'demo', issue: '42', runId: '22222222' });
+  expect(issueInput().props.value).toBe('42');
+  expect(host.readRuns).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 42 });
+  expect(host.readRun).toHaveBeenCalledTimes(1);
+  expect(host.readRun).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(visible()).toContain('Issue #42 history'); expect(visible()).toContain('Detail evidence — loaded only on selection');
+  // One-shot: leaving the detail and a later summary refresh never re-open it.
+  await press('Show active scope');
+  await act(async () => { await vi.advanceTimersByTimeAsync(30001); });
+  await settle(); await settle();
+  expect(visible()).not.toContain('Detail evidence — loaded only on selection');
+  expect(host.readRun).toHaveBeenCalledTimes(1);
+  await press('Inspect run 42 22222222'); // an explicit selection still loads detail evidence
+  expect(host.readRun).toHaveBeenCalledTimes(2);
+
+  // Absent or invalid params render today's Runs screen and select nothing.
+  host.readRun.mockClear();
+  for (const params of [
+    { deploymentId: 'demo', issue: '0', runId: '22222222' },
+    { deploymentId: 'demo', issue: '042', runId: '22222222' },
+    { deploymentId: 'demo', issue: '4.5', runId: '22222222' },
+    { deploymentId: 'demo', issue: '9007199254740992', runId: '22222222' },
+    { deploymentId: 'demo', issue: '42', runId: 'ABCDEF12' },
+    { deploymentId: 'demo', issue: '42', runId: '2222222' },
+    { deploymentId: 'demo', issue: '42' },
+    { deploymentId: 'demo', runId: '22222222' },
+  ] as Record<string, string>[]) {
+    await mount(params);
+    expect(issueInput().props.value).toBe('');
+    expect(host.readRuns).toHaveBeenLastCalledWith({ deploymentId: 'demo' });
+    expect(visible()).toContain('Observed active issue scope — no current/live run inferred');
+    expect(visible()).not.toContain('Issue #42 history');
+    expect(visible()).not.toContain('Requested run');
+    expect(host.readRun).not.toHaveBeenCalled();
+  }
+
+  // A run id that the observed history does not contain is never selected or looked up.
+  host.readRuns.mockImplementation(async () => observation([{ ...row, runId: '33333333', membership: 'history' as const }]));
+  await mount({ deploymentId: 'demo', issue: '42', runId: '22222222' });
+  expect(issueInput().props.value).toBe('42');
+  expect(host.readRuns).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 42 });
+  expect(host.readRun).not.toHaveBeenCalled();
+  expect(visible()).toContain('Inspect run 42 33333333');
+  expect(visible()).toContain('Requested run 22222222 is not in the observed history of issue #42; nothing is selected. Refresh after the writer records it; no lookup is guessed.');
+  expect(visible()).not.toContain('Detail evidence — loaded only on selection');
+  await press('Show active scope'); // a new filter clears the stale navigation notice
+  expect(visible()).not.toContain('Requested run 22222222');
+
+  // Changing deployment clears the selection and never carries the run identity across.
+  host.readRuns.mockImplementation(async (input: { deploymentId: string }) => observation(input.deploymentId === 'other' ? [] : [{ ...row, membership: 'history' as const }]));
+  await mount({ deploymentId: 'demo', issue: '42', runId: '22222222' });
+  expect(host.readRun).toHaveBeenCalledTimes(1);
+  await update({ deploymentId: 'other' });
+  expect(issueInput().props.value).toBe('');
+  expect(host.readRuns).toHaveBeenLastCalledWith({ deploymentId: 'other' });
+  expect(host.readRun).toHaveBeenCalledTimes(1);
+  expect(visible()).toContain('Observed active issue scope');
+  expect(visible()).not.toContain('Issue #42 history');
+  expect(visible()).not.toContain('Detail evidence — loaded only on selection');
+});
+
 it('projects complete tool-result activity, including incremental reads, without exposing output', async () => {
   const f = await membershipFixture();
   const input = { deploymentId: 'demo', issue: 42, runId: '22222222' };

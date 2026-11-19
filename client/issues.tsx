@@ -1,19 +1,25 @@
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { useRpc, type PluginScreenProps } from '@getpaseo/plugin/client';
+import { useRpc, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
 import { issuesList, issuesGet, issueStates, type IssueDetail, type IssuePage } from '../shared/issues';
 import { ObservationView, useObservationQuery } from './observation';
 import { GitHubEvidenceLink } from './github-evidence-link';
 
-type Props = { deploymentId: string; hostId: string; repo: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme'] };
+type Props = { deploymentId: string; hostId: string; repo: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme']; openScreen: PluginClientContext['openScreen'] };
 function Detail({ data, ...props }: Props & { data: IssueDetail }) {
   const text = { color: props.theme.colors.foreground };
+  // Only a complete report establishes the current run; any other read stays inert text.
+  const reportedRun = data.reports.complete ? data.reports.selectedRunId : null;
   return <View>
     <Text style={text}>#{data.issue.number}: {data.issue.state} — {data.issue.badge ?? 'no lifecycle label'} ({data.issue.provenance})</Text>
     <Text style={text}>Merge evidence: {data.mergeEvidence}. Receipts and labels alone do not verify a merge.</Text>
     <Text style={text}>Dependencies: {!data.dependencies.complete ? 'unknown / incomplete or unavailable' : data.dependencies.records.some(r => r.githubState === 'open') ? 'blocked by open issues' : 'no open blockers observed'}</Text>
     {data.dependencies.records.map(dependency => <Text key={dependency.number} style={text}>#{dependency.number} {dependency.title} ({dependency.githubState})</Text>)}
-    <Text style={text}>Reported run: {data.reports.selectedRunId ?? 'unknown'}; reports {data.reports.complete ? 'complete' : 'incomplete — current run not established; retained evidence may be stale'}</Text>
+    {reportedRun
+      ? <Pressable accessibilityRole="button" accessibilityLabel={`Inspect run ${reportedRun} in Runs`} onPress={() => props.openScreen({ screenId: 'runs', params: { deploymentId: props.deploymentId, issue: String(data.issue.number), runId: reportedRun } })}>
+        <Text style={text}>{`Reported run: ${reportedRun}; reports complete — open in Runs`}</Text>
+      </Pressable>
+      : <Text style={text}>Reported run: {data.reports.selectedRunId ?? 'unknown'}; reports {data.reports.complete ? 'complete' : 'incomplete — current run not established; retained evidence may be stale'}</Text>}
     {data.reports.attribution && <Text style={text}>Run attribution: {data.reports.attribution.repo}#{data.reports.attribution.issue}, comment {data.reports.attribution.commentId}, updated {data.reports.attribution.updatedAt}</Text>}
     <Text style={text}>Progress: {data.reports.progress.status}{data.reports.progress.status === 'available' ? `; reported stage: ${data.reports.progress.data.step ?? 'unknown'} (not live execution; GitHub facts take precedence)` : ''}</Text>
     <Text style={text}>Failure: {data.reports.failure.status}{data.reports.failure.status === 'available' ? `; ${data.reports.failure.data.reason_code}; action: ${data.reports.failure.data.action_code}` : ''}</Text>

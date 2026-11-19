@@ -199,7 +199,7 @@ it('verified_pr_merge_makes_retained_failure_historical_even_with_open_issue_lab
     attention: 'github_terminal', reports: { failure: { status: 'available' } },
   } });
   let renderer!: ReactTestRenderer;
-  await act(async () => { renderer = create(<BlockerEvidence data={result.data!} theme={theme} />); });
+  await act(async () => { renderer = create(<BlockerEvidence data={result.data!} theme={theme} deploymentId="demo" openScreen={vi.fn()} />); });
   cleanups.push(async () => { await act(async () => renderer.unmount()); });
   const text = JSON.stringify(renderer.toJSON());
   expect(text).toContain('historical');
@@ -241,29 +241,33 @@ function catalog() {
   ] });
 }
 it('renders_each_formal_guidance_with_provenance_and_no_recovery_controls', async () => {
+  const openScreen = vi.fn();
   let renderer!: ReactTestRenderer;
-  await act(async () => { renderer = create(<BlockerEvidence data={safeBlocker()} theme={theme} />); });
+  const evidence = (data: Blocker) => <BlockerEvidence data={data} theme={theme} deploymentId="demo" openScreen={openScreen} />;
+  await act(async () => { renderer = create(evidence(safeBlocker())); });
   cleanups.push(async () => { await act(async () => renderer.unmount()); });
   for (const reason_code of Failure.shape.reason_code.options) for (const action_code of Failure.shape.action_code.options) {
     const data = safeBlocker();
     if (data.reports.failure.status === 'available') data.reports.failure.data = { schema: 1, outcome: 'fix_needed', reason_code, action_code, retry_safe: false };
-    await act(async () => renderer.update(<BlockerEvidence data={data} theme={theme} />));
+    await act(async () => renderer.update(evidence(data)));
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain(guidance.reasons[reason_code]); expect(text).toContain(guidance.actions[action_code]);
     expect(text).toContain('never permission'); expect(text).toContain('issuecomment-1'); expect(text).toContain(stamp);
-    expect(renderer.root.findAll(node => node.props.accessibilityRole === 'button')).toHaveLength(0);
+    // The only control is the reported-run navigation; nothing recovers or retries.
+    expect(renderer.root.findAll(node => node.props.accessibilityRole === 'button').map(node => node.props.accessibilityLabel)).toEqual([`Inspect run ${run} in Runs`]);
   }
   for (const state of ['waiting', 'resuming', 'merged', 'stale'] as const) {
     const data = safeBlocker(); if (data.reports.baseCi.status === 'available') data.reports.baseCi.data.state = state;
-    await act(async () => renderer.update(<BlockerEvidence data={data} theme={theme} />));
+    await act(async () => renderer.update(evidence(data)));
     expect(JSON.stringify(renderer.toJSON())).toContain(waitGuidance(state));
   }
   for (const status of ['missing', 'invalid', 'unsupported'] as const) {
     const data = safeBlocker(); data.reports.failure = { status, attribution: null };
-    await act(async () => renderer.update(<BlockerEvidence data={data} theme={theme} />));
+    await act(async () => renderer.update(evidence(data)));
     expect(JSON.stringify(renderer.toJSON())).toContain(`metadata ${status}`);
     expect(JSON.stringify(renderer.toJSON())).toContain('No prose fallback');
   }
+  expect(openScreen).not.toHaveBeenCalled();
 });
 
 it('partial_stale_and_layout', async () => {
@@ -276,11 +280,14 @@ it('partial_stale_and_layout', async () => {
   expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
   expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Rejected')).toHaveLength(0);
   expect(JSON.stringify(renderer.toJSON())).toContain('Base CI resuming');
-  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 4' }).props.onPress()); await settle(); await settle();
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 4' }).props.onPress());
+  // The detail read is real filesystem work; wait for it to leave Loading instead of
+  // assuming a fixed number of timer ticks (a tight budget made this test flaky).
+  for (let tick = 0; tick < 10 && JSON.stringify(renderer.toJSON()).includes('"Loading"'); tick++) await settle();
   expect(JSON.stringify(renderer.toJSON())).toContain('Artifact metadata only');
   expect(JSON.stringify(renderer.toJSON())).toContain('missing');
   expect(JSON.stringify(renderer.toJSON())).not.toMatch(/CANARY|\/tmp\//);
-  const allowed = /^(Refresh|Inspect blocker \d+|Previous blockers page|Next blockers page|Select .+|Open (Overview|Issues|Runs|Blockers))$/;
+  const allowed = /^(Refresh|Inspect blocker \d+|Inspect run [0-9a-f]{8} in Runs|Previous blockers page|Next blockers page|Select .+|Open (Overview|Issues|Runs|Blockers))$/;
   for (const button of renderer.root.findAll(node => node.type === ('Pressable' as any))) expect(button.props.accessibilityLabel).toMatch(allowed);
   for (const compact of [true, false]) for (const foreground of ['#eee', '#111']) {
     await screen.update({ ...props, layout: { ...props.layout, compact }, theme: { colors: { ...theme.colors, foreground } } as any });
@@ -396,4 +403,34 @@ it('repository_change_separates_pending_blocker_rows_details_and_sources', async
   await act(async () => { for (const refresh of renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })) await refresh.props.onPress(); }); await settle();
   expect(text()).toContain('stale'); expect(text()).toContain('refresh_failed'); expect(text()).toContain('B_BLOCKER_TITLE');
   expect(text()).toContain('Artifact metadata only'); expect(text()).not.toContain('A_BLOCKER_TITLE'); expect(text()).not.toContain(`https://github.com/${repo}/issues/4`);
+});
+
+it('opens_a_complete_reported_run_in_runs_without_extra_reads', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  const openScreen = vi.fn();
+  host.readBlockers.mockReset().mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: true, records: [safeBlocker()] }));
+  host.readBlocker.mockReset().mockResolvedValue(available({ ...safeBlocker(), artifacts: [], retention: { profile: 'orbi-0.7.41-release', worktreeRetainHours: 72, keepFailedWorktrees: null } }));
+  const screen = await renderScreen({ ...props, openScreen });
+  const { renderer, settle } = screen;
+  const controls = () => renderer.root.findAll(node => node.props.accessibilityLabel === `Inspect run ${run} in Runs`);
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  expect(controls()).toHaveLength(1); // list evidence is activatable on its own
+  expect(text()).toContain(`Reported run: ${run}; complete report read`);
+  expect(host.readBlocker).not.toHaveBeenCalled();
+  await act(async () => controls()[0].props.onPress()); await settle();
+  expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs', params: { deploymentId: 'demo', issue: '4', runId: run } });
+  expect(host.readBlocker).not.toHaveBeenCalled(); // navigation adds no read
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect blocker 4' }).props.onPress()); await settle(); await settle();
+  expect(controls()).toHaveLength(2); // list + loaded detail evidence
+  await act(async () => controls()[1].props.onPress()); await settle();
+  expect(openScreen).toHaveBeenLastCalledWith({ screenId: 'runs', params: { deploymentId: 'demo', issue: '4', runId: run } });
+  expect(openScreen).toHaveBeenCalledTimes(2);
+  // Incomplete report reads keep today's plain wording and no activation.
+  let direct!: ReactTestRenderer;
+  const incomplete: Blocker = { ...safeBlocker(), reports: { ...safeBlocker().reports, complete: false, selectedRunId: null } };
+  await act(async () => { direct = create(<BlockerEvidence data={incomplete} theme={theme} deploymentId="demo" openScreen={openScreen} />); });
+  cleanups.push(async () => { await act(async () => direct.unmount()); });
+  expect(direct.root.findAll(node => node.props.accessibilityRole === 'button')).toHaveLength(0);
+  expect(direct.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n')).toContain('Reported run: unknown; incomplete — retained evidence may be stale; current run not established');
+  expect(openScreen).toHaveBeenCalledTimes(2);
 });

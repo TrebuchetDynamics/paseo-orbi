@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
-import { useRpc, type PluginScreenProps } from '@getpaseo/plugin/client';
+import { useRpc, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
 import { attentionText, blockersList, blockersRead, failureGuidance, waitGuidance, type Blocker, type BlockerPage, type BlockerDetails } from '../shared/blockers';
 import { ObservationView, useObservationQuery } from './observation';
 
-type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme'] };
-export function BlockerEvidence({ data, theme }: { data: Blocker | BlockerDetails; theme: Props['theme'] }) {
+type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme']; openScreen: PluginClientContext['openScreen'] };
+export function BlockerEvidence({ data, theme, deploymentId, openScreen }: { data: Blocker | BlockerDetails; theme: Props['theme']; deploymentId: string; openScreen: PluginClientContext['openScreen'] }) {
   const text = { color: theme.colors.foreground };
   const reports = data.reports;
+  // Only a complete report establishes the current run; any other read stays inert text.
+  const reportedRun = reports.complete ? reports.selectedRunId : null;
   const link = (url: string, label: string) => <Text style={text} accessibilityRole="link" onPress={() => { void Linking.openURL(url).catch(() => undefined); }}>{label}: {url}</Text>;
   return <View style={{ gap: 8 }}>
     <Text style={text}>#{data.issue.number} {data.issue.title} — GitHub {data.issue.githubState}; updated {data.issue.updatedAt}</Text>
@@ -15,7 +17,11 @@ export function BlockerEvidence({ data, theme }: { data: Blocker | BlockerDetail
     <Text style={text}>Labels: {data.issue.labels.join(', ') || 'none'}{data.issue.warning ? ' — conflicting lifecycle labels' : ''}</Text>
     {link(data.issue.url, 'GitHub source')}
     <Text style={text}>{attentionText[data.attention]}</Text>
-    <Text style={text}>Reported run: {reports.selectedRunId ?? 'unknown'}; {reports.complete ? 'complete report read' : 'incomplete — retained evidence may be stale; current run not established'}</Text>
+    {reportedRun
+      ? <Pressable accessibilityRole="button" accessibilityLabel={`Inspect run ${reportedRun} in Runs`} onPress={() => openScreen({ screenId: 'runs', params: { deploymentId, issue: String(data.issue.number), runId: reportedRun } })}>
+        <Text style={text}>{`Reported run: ${reportedRun}; complete report read — open in Runs`}</Text>
+      </Pressable>
+      : <Text style={text}>Reported run: {reports.selectedRunId ?? 'unknown'}; {reports.complete ? 'complete report read' : 'incomplete — retained evidence may be stale; current run not established'}</Text>}
     <Text style={text}>{failureGuidance(reports.failure)}</Text>
     {reports.failure.status === 'available' && <Text style={text}>Reason: {reports.failure.data.reason_code}; action: {reports.failure.data.action_code}</Text>}
     <Text style={text}>Scene metadata: {reports.scene.status}; Base CI metadata: {reports.baseCi.status}</Text>
@@ -47,12 +53,12 @@ export function Blockers(props: Props) {
       <Text style={text}>{data.repo} — Blockers page {data.page}; scope {data.complete ? 'complete' : 'incomplete / retained membership'}</Text>
       {data.records.length === 0 && <Text style={text}>{data.complete ? data.page === 1 ? 'No blockers in the complete observed scope.' : 'No blockers on this page.' : 'Blocker membership unavailable; not an empty success.'}</Text>}
       {data.records.map(blocker => <View key={blocker.issue.number}>
-        <BlockerEvidence data={blocker} theme={props.theme} />
+        <BlockerEvidence data={blocker} theme={props.theme} deploymentId={props.deploymentId} openScreen={props.openScreen} />
         <Pressable accessibilityRole="button" accessibilityLabel={`Inspect blocker ${blocker.issue.number}`} onPress={() => select(blocker.issue.number)}><Text style={text}>Inspect artifact metadata</Text></Pressable>
       </View>)}
       <Pressable accessibilityRole="button" accessibilityLabel="Previous blockers page" disabled={page === 1} onPress={() => { select(null); setPage(page - 1); }}><Text style={text}>Previous page</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Next blockers page" disabled={!data.hasNextPage} onPress={() => { select(null); setPage(page + 1); }}><Text style={text}>Next page</Text></Pressable>
     </View>}</ObservationView>
-    {selected !== null && <ObservationView {...detail} theme={props.theme}>{data => <BlockerEvidence data={data} theme={props.theme} />}</ObservationView>}
+    {selected !== null && <ObservationView {...detail} theme={props.theme}>{data => <BlockerEvidence data={data} theme={props.theme} deploymentId={props.deploymentId} openScreen={props.openScreen} />}</ObservationView>}
   </View>;
 }

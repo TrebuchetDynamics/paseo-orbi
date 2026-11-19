@@ -67,9 +67,9 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
           <Text style={text}>{title(route)} — select a repository to browse</Text>
           {catalog.entries.filter(entry => entry.status === 'available').map(entry => <Pressable key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })}><Text style={text}>{entry.label} ({entry.repo})</Text></Pressable>)}
           {selected && (route === 'issues'
-            ? <Issues key={featureKey} deploymentId={selected.id} repo={selected.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
-            : route === 'runs' ? <Runs key={featureKey} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
-            : route === 'blockers' ? <Blockers key={featureKey} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} />
+            ? <Issues key={featureKey} deploymentId={selected.id} repo={selected.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} openScreen={openScreen} />
+            : route === 'runs' ? <Runs key={`${featureKey}:${props.params.issue ?? ''}:${props.params.runId ?? ''}`} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} params={props.params} />
+            : route === 'blockers' ? <Blockers key={featureKey} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} openScreen={openScreen} />
             : null)}
         </>}
       </View>
