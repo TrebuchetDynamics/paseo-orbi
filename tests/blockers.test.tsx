@@ -512,3 +512,65 @@ it('opens_a_complete_reported_run_in_runs_without_extra_reads', async () => {
   expect(direct.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n')).toContain('Reported run: unknown; incomplete — retained evidence may be stale; current run not established');
   expect(openScreen).toHaveBeenCalledTimes(2);
 });
+
+const blockerWith = (number: number, attention: Blocker['attention']): Blocker => ({ ...safeBlocker(number), attention });
+const rowNumbers = (renderer: ReactTestRenderer) => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && /^Inspect blocker \d+$/.test(node.props.accessibilityLabel))
+  .map(node => Number(node.props.accessibilityLabel.slice('Inspect blocker '.length)));
+const screenText = (renderer: ReactTestRenderer) => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+const countLabel = (label: string, count: number, total: number) => `${label}: ${count} of ${total} records on this observed page`;
+
+it('summarises_the_observed_page_by_attention_class_and_orders_rows', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  // Deliberately not in attention-priority order; two manual rows keep their observed order.
+  const records = [blockerWith(4, 'github_terminal'), blockerWith(5, 'maintainer_merge_wait'), blockerWith(6, 'manual_attention'), blockerWith(7, 'automatic_fix_pending'), blockerWith(8, 'manual_attention')];
+  host.readBlockers.mockReset().mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: true, records }));
+  const { renderer, settle } = await renderScreen();
+  const text = () => screenText(renderer);
+  expect(rowNumbers(renderer)).toEqual([6, 8, 7, 5, 4]);
+  // The summary describes this observed page only, with manual attention first.
+  expect(text()).toContain('Attention on this observed page (at most 20 candidates), not a repository total.');
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Attention on this observed blockers page, not a repository total')).toHaveLength(1);
+  const order = ['Manual attention: 2', 'Automatic fix pending: 1', 'Maintainer merge wait: 1', 'GitHub terminal: 1'].map(entry => text().indexOf(entry));
+  expect(order.every(index => index >= 0)).toBe(true);
+  expect([...order].sort((left, right) => left - right)).toEqual(order);
+  for (const label of [countLabel('Manual attention', 2, 5), countLabel('Automatic fix pending', 1, 5), countLabel('Maintainer merge wait', 1, 5), countLabel('GitHub terminal', 1, 5)]) {
+    expect(renderer.root.findAll(node => node.props.accessibilityLabel === label)).toHaveLength(1);
+  }
+  // Each row keeps today's evidence text and both existing controls.
+  for (const guidance of [attentionText.manual_attention, attentionText.automatic_fix_pending, attentionText.maintainer_merge_wait, attentionText.github_terminal]) expect(text()).toContain(guidance);
+  expect(renderer.root.findAllByType('Text' as any).filter(node => node.props.children === 'Inspect artifact metadata')).toHaveLength(5);
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel === `Inspect run ${run} in Runs`)).toHaveLength(5);
+  // A refresh of the same observed page keeps every row in place.
+  await act(async () => { for (const refresh of renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })) await refresh.props.onPress(); }); await settle(); await settle();
+  expect(rowNumbers(renderer)).toEqual([6, 8, 7, 5, 4]);
+  expect(text()).toContain('Manual attention: 2');
+});
+
+it('keeps_an_incomplete_page_summary_page_scoped_and_not_an_empty_success', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  const records = [blockerWith(9, 'github_terminal'), blockerWith(10, 'manual_attention'), blockerWith(11, 'manual_attention')];
+  host.readBlockers.mockReset().mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: false, records }));
+  const { renderer } = await renderScreen();
+  const text = () => screenText(renderer);
+  expect(rowNumbers(renderer)).toEqual([10, 11, 9]);
+  expect(text()).toContain('Blockers page 1; scope incomplete / retained membership');
+  expect(text()).toContain('Attention on this observed page (at most 20 candidates), not a repository total;');
+  expect(text()).toContain('incomplete / retained membership');
+  expect(text()).toContain('these counts describe only the records listed here.');
+  expect(text()).not.toContain('No blockers in');
+  expect(text()).toContain('Manual attention: 2');
+  expect(text()).toContain('GitHub terminal: 1');
+  expect(text()).toContain('Automatic fix pending: 0');
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel === countLabel('Automatic fix pending', 0, 3))).toHaveLength(1);
+});
+
+it('shows_no_attention_counts_on_an_empty_complete_page', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  host.readBlockers.mockReset().mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: true, records: [] }));
+  const { renderer } = await renderScreen();
+  const text = () => screenText(renderer);
+  expect(text()).toContain('No blockers in the complete observed scope');
+  expect(text()).not.toContain('Attention on this observed page');
+  expect(text()).not.toContain('Manual attention:');
+  expect(renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.includes('records on this observed page'))).toHaveLength(0);
+});
