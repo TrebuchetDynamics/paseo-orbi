@@ -54,6 +54,53 @@ describe('declared_paseo_range_policy_admission', () => {
   });
 });
 
+// Row-by-row qualification record: declared admission is a policy check, and a row is only
+// qualified by its own installed evidence for one exact committed candidate.
+const OWNER_SELECTED_ROWS = ['0.15.1', '0.15.4', '0.16.0-beta.2', '0.16.0'];
+const ROW_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
+const UNOBSERVED = 'not observed';
+const UNPINNED = 'not pinned before an authorized run';
+function documentedRows() {
+  const guide = read('docs/testing/qualification.md');
+  const start = guide.indexOf('## Paseo version compatibility rows');
+  expect(start, 'qualification report records the compatibility rows').toBeGreaterThanOrEqual(0);
+  const end = guide.indexOf('\n## ', start + 1);
+  const section = guide.slice(start, end === -1 ? undefined : end);
+  const rows = section.split('\n').flatMap(line => {
+    const cells = line.split('|').map(cell => cell.trim().replaceAll('`', ''));
+    return cells.length === 7 && ROW_VERSION.test(cells[1]) ? [{ identity: cells[2], observed: cells[3], sha: cells[4], status: cells[5], version: cells[1] }] : [];
+  });
+  return { section, rows };
+}
+
+describe('documented_paseo_qualification_rows', () => {
+  it('records exactly the four owner-selected rows, each NOT_RUN with its locked runtime identity', () => {
+    const { rows } = documentedRows();
+    expect(rows.map(row => row.version)).toEqual(OWNER_SELECTED_ROWS);
+    for (const row of rows) {
+      expect(row.status, `${row.version}: installed evidence`).toBe('NOT_RUN');
+      expect(row.identity, `${row.version}: required matching runtime identity`).toContain(`@getpaseo/cli ${row.version}`);
+      expect(row.observed, `${row.version}: no observed versions without a run`).toBe(UNOBSERVED);
+      expect(row.sha, `${row.version}: no source SHA without a run`).toBe(UNPINNED);
+    }
+  });
+  it('refuses to claim a qualified row without recorded versions and a source SHA', () => {
+    for (const row of documentedRows().rows) {
+      expect(['PASS', 'FAIL', 'NOT_RUN'], `${row.version}: status vocabulary`).toContain(row.status);
+      if (row.status === 'NOT_RUN') continue;
+      expect(row.observed, `${row.version}: observed versions`).not.toBe(UNOBSERVED);
+      expect(row.sha, `${row.version}: source SHA`).not.toBe(UNPINNED);
+    }
+  });
+  it('keeps every shipped compatibility statement equal to the manifest requirement', () => {
+    const requirements = json('paseo-plugin.json').requirements;
+    for (const doc of ['README.md', 'OVERVIEW.md', 'docs/paseo-plugins.md', 'docs/operator-guide.md', 'docs/testing/qualification.md']) {
+      expect(read(doc), `${doc}: states the shipped requirement`).toContain(`\`${requirements.paseo}\``);
+      expect(read(doc), `${doc}: no historical bounded range`).not.toContain(HISTORICAL_BOUNDED_RANGE);
+    }
+  });
+});
+
 describe('package_and_registration boundaries', () => {
   it('keeps every transitive runtime and type import in its lane', () => {
     const lanes = (file: string) => file.startsWith('index.client') || file.startsWith('client/') ? 'client' : file.startsWith('index.server') || file.startsWith('server/') ? 'server' : 'shared';
