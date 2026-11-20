@@ -49,6 +49,7 @@ export function useHostServicesQuery(options: { hostId: string; connected: boole
 function summarizeFamily(group: InventoryGroup) {
   const observed = group.units.filter(unit => unit.runtime !== null);
   const runtime = (unit: InventoryUnit) => unit.runtime!;
+  const services = group.units.filter(unit => unit.kind === 'service');
   const running = observed.filter(unit => unit.kind === 'service' && runtime(unit).activeState === 'active' && runtime(unit).subState === 'running').length;
   const idle = observed.filter(unit => unit.kind === 'service' && runtime(unit).loadState === 'loaded' && runtime(unit).activeState === 'inactive' && runtime(unit).subState === 'dead').length;
   const failed = observed.some(unit => runtime(unit).activeState === 'failed' || runtime(unit).subState === 'failed');
@@ -58,7 +59,10 @@ function summarizeFamily(group: InventoryGroup) {
   const facts: FamilyFact[] = [];
   if (failed) facts.push('failed');
   if (running > 0) facts.push('running');
-  else if (idle > 0) facts.push('idle');
+  // Idle describes the group's workers, so every service instance must be
+  // positively observed idle. A transitional (active/exited, activating) or
+  // not-observed worker keeps its unknown/transitional fact instead.
+  else if (idle > 0 && idle === services.length) facts.push('idle');
   if (waiting) facts.push('waiting');
   if (group.units.length > 0 && observed.length === 0) facts.push('installed');
   if (facts.length === 0) facts.push('unknown');
@@ -195,8 +199,15 @@ function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle
   const status = facts.filter(fact => fact !== 'failed' || failure === null);
   const entry = authorizedEntry(group, entries);
   const [technical, setTechnical] = useState(false);
+  // This row is one accessibility element, so its visible status text is not
+  // exposed on its own: the disclosure carries it as the accessible hint.
+  const description = [
+    ...(failure === null ? [] : [failure]),
+    ...status.map(fact => familyFactText[fact]),
+    ...(entry ? [] : ['Unlinked']),
+  ].join(' · ');
   return <View testID={`orbi-family-${group.label}`} style={{ gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityState={{ expanded }}
+    <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityHint={description} accessibilityState={{ expanded }}
       style={({ pressed }) => ({ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, opacity: pressed ? 0.65 : 1 })}
       onPress={toggle}>
       <View style={{ flexShrink: 1, gap: 4 }}>

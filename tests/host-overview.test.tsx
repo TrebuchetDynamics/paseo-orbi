@@ -277,6 +277,8 @@ describe('compact first-screen triage', () => {
     expect(lines.indexOf('1 of 9 groups needs attention')).toBeLessThan(lines.indexOf('Refresh services'));
     expect(lines.indexOf('Refresh services')).toBeLessThan(lines.indexOf('Slot 3 · Worker failed · +1 more'));
     expect(lines.indexOf('Slot 3 · Worker failed · +1 more')).toBeLessThan(lines.indexOf('orbi-g1'));
+    // The row is one accessibility element, so its visible status is announced too.
+    expect(disclosure.props.accessibilityHint).toBe('Slot 3 · Worker failed · +1 more · Running · Unlinked');
     // The full row is one 44-unit disclosure with pressed feedback and a chevron.
     expect(disclosure.props.style({ pressed: false })).toMatchObject({ minHeight: 44, opacity: 1 });
     expect(disclosure.props.style({ pressed: true }).opacity).toBeLessThan(1);
@@ -316,6 +318,21 @@ describe('compact first-screen triage', () => {
     expect(rowPage(renderer, 'orbi')).toContain('Timer waiting');
     expect(rowPage(renderer, 'orbi')).not.toContain('Idle');
     expect(rowPage(renderer, 'orbi-g1')).toContain('Unknown / transitional');
+  });
+
+  it('keeps a transitional or not-observed worker out of an Idle summary', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [
+      family('orbi', 'unmatched', null, [unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@2.service', 'service', 'active', 'exited')]),
+      family('orbi-unobserved', 'unmatched', null, [unit('orbi-unobserved@1.service', 'service', 'inactive', 'dead'), unit('orbi-unobserved@2.service', 'service', null, null)]),
+    ] }));
+    const { renderer } = await render();
+    // One idle worker does not let the group claim Idle while another worker is
+    // transitional or not observed.
+    for (const label of ['orbi', 'orbi-unobserved']) {
+      expect(rowPage(renderer, label)).toContain('Unknown / transitional');
+      expect(rowPage(renderer, label)).not.toContain('Idle');
+      expect(renderer.root.findByProps({ accessibilityLabel: `Expand ${label}` }).props.accessibilityHint).toBe('Unknown / transitional · Unlinked');
+    }
   });
 });
 
