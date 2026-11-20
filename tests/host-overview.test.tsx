@@ -442,7 +442,12 @@ describe('host states and authority', () => {
     expect(text(renderer)).toContain(`Catalog: ${state}`);
     expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
     expect(text(renderer).indexOf('Host A · Fleet')).toBeLessThan(text(renderer).indexOf('Repository setup'));
-    expect(rowPage(renderer, 'orbi-demo')).toContain('Unlinked');
+    // A confirmed unconfigured catalog explains the missing repository detail once
+    // above the rows instead of repeating the badge on every row.
+    if (state === 'unconfigured') {
+      expect(rowPage(renderer, 'orbi-demo')).not.toContain('Unlinked');
+      expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' }).props.accessibilityHint).not.toContain('Unlinked');
+    } else expect(rowPage(renderer, 'orbi-demo')).toContain('Unlinked');
     expect(repositoryActions(renderer)).toHaveLength(0);
     await press('Expand orbi-demo'); await press('Unit details for orbi-demo');
     expect(rowPage(renderer, 'orbi-demo')).toContain('not in the current authorized catalog');
@@ -451,6 +456,58 @@ describe('host states and authority', () => {
     await switchTo('host-a', 'issues');
     expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
     for (const read of [host.readFleet, host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) expect(read).not.toHaveBeenCalled();
+  });
+
+  it('explains a confirmed unconfigured catalog once above the rows and offers inventory-only refresh', async () => {
+    const explanation = "Showing host services. Repository details aren't configured.";
+    host.readCatalog.mockResolvedValue({ state: 'unconfigured', entries: [], problems: [] });
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    const servicesTexts = () => renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join(''));
+    // One explanation, above the first host service row.
+    expect(servicesTexts().filter(item => item === explanation)).toHaveLength(1);
+    expect(servicesTexts().indexOf(explanation)).toBeLessThan(servicesTexts().indexOf('orbi'));
+    // The setup action is a real disclosure with a 44-unit target.
+    const instructions = () => renderer.root.findByProps({ accessibilityLabel: 'Setup instructions' });
+    expect(instructions().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
+    expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
+    await press('Setup instructions');
+    expect(instructions().props.accessibilityState.expanded).toBe(true);
+    expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
+    expect(text(renderer)).toContain('explicitly reload');
+    expect(servicesTexts().filter(item => item === explanation)).toHaveLength(1);
+    // No repeated Unlinked badge: this catalog state already explains the missing repository details.
+    for (const group of hostA.groups) expect(rowPage(renderer, group.label)).not.toContain('Unlinked');
+    expect(repositoryActions(renderer)).toHaveLength(0);
+    // No catalog refresh in this state, even with the setup panel open.
+    expect(renderer.root.findByProps({ testID: 'orbi-catalog' }).findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
+    await press('Repository setup');
+    expect(text(renderer)).toContain('Catalog: unconfigured');
+    expect(renderer.root.findByProps({ testID: 'orbi-catalog' }).findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
+    // Separate spies: "Refresh services" reads inventory only and never the repository catalog.
+    const catalogReads = host.readCatalog.mock.calls.length;
+    const inventoryReads = host.readInventory.mock.calls.length;
+    await press('Refresh services');
+    expect(host.readInventory.mock.calls.length).toBe(inventoryReads + 1);
+    expect(host.readCatalog.mock.calls.length).toBe(catalogReads);
+  });
+
+  it('keeps loading, invalid and offline states distinguishable from unconfigured', async () => {
+    const explanation = "Showing host services. Repository details aren't configured.";
+    let finishCatalog!: (value: DeploymentCatalog) => void;
+    host.readCatalog.mockImplementationOnce(() => new Promise(resolve => { finishCatalog = resolve; }));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, switchTo } = await render();
+    expect(text(renderer)).toContain('Catalog: loading');
+    expect(text(renderer)).not.toContain(explanation);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup instructions' })).toHaveLength(0);
+    await act(async () => finishCatalog({ state: 'invalid', entries: [], problems: [] })); await settle();
+    expect(text(renderer)).toContain('Catalog: invalid');
+    expect(text(renderer)).not.toContain(explanation);
+    host.hosts[0].status = 'offline';
+    await switchTo('host-a');
+    expect(text(renderer)).toContain('Offline · current activity unknown');
+    expect(text(renderer)).not.toContain(explanation);
   });
 
   it('keeps catalog stale/unavailable visible while setup is collapsed', async () => {
@@ -464,12 +521,17 @@ describe('host states and authority', () => {
     expect(text(renderer)).not.toContain('SECRET');
   });
 
-  it('keeps initial catalog failure visible and refuses repository detail', async () => {
+  it('keeps initial catalog failure visible with retry and refuses repository detail', async () => {
     host.readCatalog.mockRejectedValue(new Error('SECRET'));
     host.readInventory.mockResolvedValue(hostA);
-    const { renderer } = await render();
+    const { renderer, press } = await render();
     expect(text(renderer)).toContain('Catalog: unavailable');
     expect(text(renderer)).not.toContain('SECRET');
+    // A real read failure keeps the catalog retry and never reads as unconfigured.
+    expect(text(renderer)).not.toContain("Showing host services. Repository details aren't configured.");
+    await press('Repository setup');
+    expect(text(renderer)).toContain('Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.');
+    expect(renderer.root.findByProps({ testID: 'orbi-catalog' }).findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(1);
     expect(repositoryActions(renderer)).toHaveLength(0);
     expect(host.readFleet).not.toHaveBeenCalled();
   });
