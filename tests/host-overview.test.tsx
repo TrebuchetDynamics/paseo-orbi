@@ -406,6 +406,67 @@ describe('host states and authority', () => {
     expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Worker failed');
     expect(rowPage(renderer, 'orbi')).toContain('Running');
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
+    // Every retained row is marked inside the row itself, so the marker survives
+    // the header scrolling offscreen; the retained facts read as last seen, not current.
+    for (const group of hostA.groups) {
+      expect(rowPage(renderer, group.label)).toContain(`Last seen ${stamp}`);
+      expect(row(renderer, group.label).findByProps({ testID: `orbi-last-seen-${group.label}` })).toBeDefined();
+    }
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' }).props.accessibilityHint).toContain(`Last seen ${stamp}`);
+    // A successful reread clears every marker and restores the current count.
+    host.readInventory.mockResolvedValue(hostA);
+    await press('Refresh services');
+    for (const group of hostA.groups) expect(rowPage(renderer, group.label)).not.toContain('Last seen');
+    expect(text(renderer)).not.toContain(`Last success: ${stamp}`);
+    expect(text(renderer)).toContain('1 of 5 groups needs attention');
+  });
+
+  it('marks each retained row Last seen on disconnect and borrows no rows or markers from another host', async () => {
+    host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, switchTo } = await render();
+    expect(rowPage(renderer, 'orbi')).not.toContain('Last seen');
+    host.hosts[0].status = 'offline';
+    await switchTo('host-a');
+    expect(text(renderer)).toContain('Offline · current activity unknown');
+    // A retained snapshot publishes no current attention count while offline.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
+    expect(text(renderer)).not.toMatch(/\d+ of \d+ (?:observed )?groups? needs? attention/);
+    for (const group of hostA.groups) expect(rowPage(renderer, group.label)).toContain(`Last seen ${stamp}`);
+    expect(row(renderer, 'orbi-demo').findByProps({ testID: 'orbi-last-seen-orbi-demo' })).toBeDefined();
+    // Host B reads its own fresh snapshot: no host-A row or marker is reused.
+    host.readInventory.mockResolvedValue(hostB);
+    await switchTo('host-b');
+    expect(text(renderer)).toContain('Host B · Fleet');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    expect(rowPage(renderer, 'orbi')).not.toContain('Last seen');
+    expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-last-seen-'))).toHaveLength(0);
+    expect(text(renderer)).not.toContain('Slot 1 · Worker failed');
+  });
+
+  it('qualifies partial attention counts as observed and separates partial absence from complete absence', async () => {
+    const groups = [
+      family('orbi', 'unmatched', null, [unit('orbi@1.service', 'service', 'failed', 'failed')]),
+      family('orbi-b', 'unmatched', null, [unit('orbi-b@1.service', 'service', 'inactive', 'dead')]),
+    ];
+    host.readInventory.mockResolvedValue(inventory({ state: 'partial', groups, problems: [{ source: 'installed', code: 'process_failed' }] }));
+    const { renderer, press } = await render();
+    // Partial readings qualify their numbers as observed, never as host totals.
+    expect(text(renderer)).toContain('1 of 2 observed groups needs attention');
+    expect(text(renderer)).toContain('Partial · units may be missing.');
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups }));
+    await press('Refresh services');
+    expect(text(renderer)).toContain('1 of 2 groups needs attention');
+    expect(text(renderer)).not.toContain('observed groups');
+    // Empty partial evidence is never complete absence; empty complete evidence is.
+    host.readInventory.mockResolvedValue(inventory({ state: 'partial', groups: [], problems: [{ source: 'runtime', code: 'process_failed' }] }));
+    await press('Refresh services');
+    expect(text(renderer)).toContain('Partial · no units confirmed; units may be missing.');
+    expect(text(renderer)).not.toContain('No Orbi units found.');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete' }));
+    await press('Refresh services');
+    expect(text(renderer)).toContain('No Orbi units found.');
   });
 
   it.each(['partial', 'unavailable'] as const)('shows %s and problems without zero counts or absence claims', async state => {
