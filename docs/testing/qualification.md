@@ -50,6 +50,19 @@ timeout 300 env -i PATH="$setup_path" HOME="$setup/home" XDG_CONFIG_HOME="$setup
 
 Do not copy npmrc, gh profiles, provider/auth settings, Paseo hosts or browser profiles. The four required packages' locks remain synchronized; acquisition audit advisories are not permission to upgrade pins implicitly. Root installation and runtime acquisition are different gates.
 
+## Paseo version compatibility rows (#23)
+
+`paseo-plugin.json` declares admission `>0.15.0`, and the daemon and the app each evaluate that requirement before installing or loading the plugin. Declared admission is a policy check with a strict floor, no upper bound and no interoperability proof: a release is only qualified by its own installed evidence, and future releases stay unqualified until they are run.
+
+| Row | Required locked runtime identity | Observed daemon, app and plugin child | Candidate source SHA | Installed result |
+| --- | --- | --- | --- | --- |
+| `0.15.1` | `@getpaseo/cli 0.15.1` with matching client, server, protocol and bundled web app; separate row lock not created | not observed | not pinned before an authorized run | NOT_RUN |
+| `0.15.4` | `@getpaseo/cli 0.15.4` as locked in `tests/e2e/runtime`, with matching client, server, protocol and bundled web app | not observed | not pinned before an authorized run | NOT_RUN |
+| `0.16.0-beta.2` | `@getpaseo/cli 0.16.0-beta.2` with matching prerelease client, server, protocol and bundled web app; separate row lock not created | not observed | not pinned before an authorized run | NOT_RUN |
+| `0.16.0` | `@getpaseo/cli 0.16.0` with matching client, server, protocol and bundled web app; a separate stable row, never renamed beta evidence | not observed | not pinned before an authorized run | NOT_RUN |
+
+A row qualifies only with a running installation of its exact committed candidate, real client screen and plugin RPC results, and identity-safe teardown from a disposable home with its own lock, integrity set, ports and output. Every row above is NOT_RUN: no matrix-specific disposable-host consent exists, per-row locks and setup inputs are unfinished, and the pinned 0.15.4 harness does not extend to the other rows; the earlier failed #12 receipt below is retained unchanged and is not matrix evidence. Record each row's actual versions, source SHA and PASS/FAIL/NOT_RUN separately, and never qualify a version because declared admission admits it, because the catalog lists the plugin as running, or because a neighbouring row passed.
+
 ## Exact execution inputs
 
 Set **all** of these after personally verifying the owner instruction (replace placeholders; they are not defaults):
