@@ -131,6 +131,9 @@ it('stale_compact_and_theme', async () => {
   await act(async () => { renderer = create(tree()); }); cleanups.push(async () => { await act(async () => renderer.unmount()); });
   await settle(); await settle();
   const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+  expect(host.readFleet).not.toHaveBeenCalled();
+  const firstReadAt = new Date().toISOString();
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.onPress()); await settle(); await settle();
   expect(text()).toContain('Demo (Example/project)'); expect(text()).toContain('Inaccessible (Other/repo)'); expect(text()).toContain('Rejected (Rejected/repo)');
   // Overview loads rich detail for the selected deployment only, never every repository.
   expect(text()).toContain('Configured capacity: 2; Occupancy: unknown');
@@ -159,12 +162,12 @@ it('stale_compact_and_theme', async () => {
   expect(text()).toContain('Active: inactive');
   expect(text()).toContain('systemd: process_failed');
   expect(text()).toContain('filesystem: read_failed');
-  expect(text()).toContain('Last success: 2026-11-14T23:00:00.000Z');
+  expect(text()).toContain(`Last success: ${firstReadAt}`);
   host.readFleet.mockRejectedValue(new Error('SECRET raw error'));
   const refreshes = renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' });
   await act(async () => { await refreshes[0].props.onPress(); }); await settle();
   expect(text()).toContain('stale'); expect(text()).toContain('refresh_failed');
-  expect(text()).toContain('Last success: 2026-11-14T23:00:00.000Z');
+  expect(text()).toContain(`Last success: ${firstReadAt}`);
   expect(text()).not.toContain('SECRET');
   await act(async () => { for (const listener of host.listeners) listener('background'); await vi.advanceTimersByTimeAsync(60001); }); await settle();
   expect(text()).toContain('stale'); expect(text()).toContain('Observed: 2026-11-14');
@@ -186,6 +189,7 @@ const fleetSnapshot = (units: FleetSnapshot['units'], configuredCapacity = Math.
   data: { deploymentId: 'demo', repo: 'Example/project', profile: 'orbi-0.7.41-release', configuredCapacity, occupancy: null, units, health: null },
 });
 const renderFleet = async (snapshot: FleetObservation) => {
+  const selectedProps = { ...props, params: { deploymentId: 'demo' } };
   vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
   host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', problems: [], entries: [
     { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi', status: 'available', problems: [] },
@@ -193,14 +197,14 @@ const renderFleet = async (snapshot: FleetObservation) => {
   host.readFleet.mockReset().mockResolvedValue(snapshot);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   let renderer!: ReactTestRenderer;
-  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...props} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>); });
+  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...selectedProps} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>); });
   cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
   await settle(); await settle();
   const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
   const summaries = () => renderer.root.findAll(node => node.props.accessibilityRole === 'summary').map(node => node.children.join(''));
   const update = async (next: PluginScreenProps) => {
     const tree = (p: PluginScreenProps) => <QueryClientProvider client={client}><Shell {...p} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
-    await act(async () => renderer.update(tree(next))); await settle(); await settle();
+    await act(async () => renderer.update(tree({ ...next, params: selectedProps.params }))); await settle(); await settle();
   };
   return { renderer, text, summaries, update };
 };
@@ -313,6 +317,8 @@ it('repository_change_scopes_fresh_capacity_health_and_failed_refresh', async ()
       state: 'available', observedAt: new Date().toISOString(), lastSuccessfulAt: new Date().toISOString(), problems: [], data: catalog(repo),
     }); }); await settle(); await settle();
   };
+  expect(host.readFleet).not.toHaveBeenCalled();
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.onPress()); await settle(); await settle();
   expect(text()).toContain('Configured capacity: 2'); expect(text()).toContain('A_HEALTH');
   let reject!: (error: Error) => void;
   host.readFleet.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));

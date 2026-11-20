@@ -356,8 +356,8 @@ describe('package_and_registration', () => {
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
         const fleetText = renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
-        expect(fleetText).toContain('Your Linux user services — Host A');
-        expect(fleetText.indexOf('Your Linux user services')).toBeLessThan(fleetText.indexOf('Fleet — read-only'));
+        expect(fleetText).toContain('Orbi · Host A');
+        expect(fleetText.indexOf('Orbi · Host A')).toBeLessThan(fleetText.indexOf('Fleet — read-only'));
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Set up service access' })).toHaveLength(1);
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
@@ -420,6 +420,11 @@ describe('package_and_registration', () => {
       const json = () => JSON.stringify(renderer.toJSON());
       expect(renderer.root.findAllByProps({ testID: 'orbi-catalog' })).toHaveLength(1);
       const setup = catalog.state !== 'configured';
+      if (screen.id === 'fleet') {
+        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(0);
+        if (setup) expect(json()).toContain(catalog.state);
+        await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Repository setup' }).props.onPress());
+      }
       expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(setup ? 1 : 0);
       expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(setup ? 0 : 1);
       if (setup) {
@@ -461,6 +466,9 @@ describe('package_and_registration', () => {
     expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
     expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(0);
     expect(inventoryRenderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('View repository'))).toHaveLength(0);
+    expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('Unlinked');
+    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' }).props.onPress());
+    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Technical details for orbi-demo' }).props.onPress());
     expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('not in the current authorized catalog');
     for (const read of features) expect(read).not.toHaveBeenCalled();
     await act(async () => inventoryRenderer.unmount());

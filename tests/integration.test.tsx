@@ -40,6 +40,7 @@ async function snapshot(root: string): Promise<unknown[]> {
 }
 
 it('four_views_read_only_journey', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '0');
   const a = await fixture('release'), b = await fixture('installed');
   cleanups.push(a.cleanup, b.cleanup);
   await writeFile(b.configPath, b.toml.replace('Example/project', 'Other/repository'));
@@ -124,11 +125,10 @@ it('four_views_read_only_journey', async () => {
   // Host inventory is not opted in here: the Overview keeps the #24 catalog
   // semantics and adds no discovered family or repository action.
   expect(host.readInventory).toHaveBeenCalledTimes(1);
-  expect(text()).toContain('Host service check: off');
-  expect(text()).toContain('undecided');
+  expect(text()).toContain('Service check off · activity unknown');
   expect(text()).not.toContain('Observed unit families');
   expect(text()).not.toContain('last successful check');
-  expect(text().indexOf('Your Linux user services')).toBeLessThan(text().indexOf('Demo (Example/project)'));
+  expect(text().indexOf('Orbi · Host A')).toBeLessThan(text().indexOf('Demo (Example/project)'));
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
   await press('Set up service access');
   expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');
