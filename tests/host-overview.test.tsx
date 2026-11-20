@@ -429,7 +429,9 @@ describe('host states and authority', () => {
     host.hosts[0].status = 'offline';
     await switchTo('host-a');
     expect(text(renderer)).toContain('Offline · current activity unknown');
-    expect(text(renderer)).not.toContain('groups need attention');
+    // A retained snapshot publishes no current attention count while offline.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
+    expect(text(renderer)).not.toMatch(/\d+ of \d+ (?:observed )?groups? needs? attention/);
     for (const group of hostA.groups) expect(rowPage(renderer, group.label)).toContain(`Last seen ${stamp}`);
     expect(row(renderer, 'orbi-demo').findByProps({ testID: 'orbi-last-seen-orbi-demo' })).toBeDefined();
     // Host B reads its own fresh snapshot: no host-A row or marker is reused.
