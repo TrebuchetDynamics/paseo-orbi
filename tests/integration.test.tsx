@@ -125,6 +125,14 @@ it('four_views_read_only_journey', async () => {
   // semantics and adds no discovered family or repository action.
   expect(host.readInventory).toHaveBeenCalledTimes(1);
   expect(text()).toContain('Host service check: off');
+  expect(text()).toContain('undecided');
+  expect(text()).not.toContain('Observed unit families');
+  expect(text()).not.toContain('last successful check');
+  expect(text().indexOf('Your Linux user services')).toBeLessThan(text().indexOf('Demo (Example/project)'));
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+  await press('Set up service access');
+  expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');
+  expect(text()).toContain('Connected clients on this host can then see Orbi unit names');
   expect(text()).not.toContain('View repository');
   partial = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
@@ -147,7 +155,7 @@ it('four_views_read_only_journey', async () => {
   let finishDetail!: (value: unknown) => void;
   host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
   let pending!: Promise<unknown>;
-  await act(async () => { pending = renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' }).at(-1)!.props.onPress(); }); await settle();
+  await act(async () => { pending = renderer.root.findByProps({ testID: 'orbi-issues' }).findByProps({ accessibilityLabel: 'Refresh selected issue' }).props.onPress(); }); await settle();
   host.hosts.push({ serverId: 'host-b', label: 'Host A', status: 'online' });
   const otherHost = { ...props, host: { id: 'host-b', label: 'Host A' } } as PluginScreenProps;
   await act(async () => renderer.update(tree('issues', otherHost))); await settle();

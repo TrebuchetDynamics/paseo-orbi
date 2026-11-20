@@ -172,6 +172,29 @@ describe('host_first_overview', () => {
     expect(rowPage(renderer, 'orbi-aux')).not.toContain('orbi-aux@.service');
   });
 
+  it('separates a waiting timer from an inactive runner and keeps a running runner visible beside a failed timer', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [
+      family('orbi-waiting', 'runner-family', 'matched', 'demo', [
+        unit('orbi-waiting@1.service', 'service', 'inactive', 'dead', 'disabled'),
+        unit('orbi-waiting@1.timer', 'timer', 'active', 'waiting'),
+      ]),
+      family('orbi-mixed', 'runner-family', 'unmatched', null, [
+        unit('orbi-mixed@1.service', 'service', 'active', 'running'),
+        unit('orbi-mixed@1.timer', 'timer', 'failed', 'failed'),
+      ]),
+    ] }));
+    const renderer = await render(props());
+    expect(rowPage(renderer, 'orbi-waiting')).toContain('Scheduled · no runner observed running');
+    expect(rowPage(renderer, 'orbi-waiting')).not.toContain('Running · Issue unknown');
+    expect(rowPage(renderer, 'orbi-mixed')).toContain('Failed');
+    expect(rowPage(renderer, 'orbi-mixed')).toContain('Running · Issue unknown');
+    // A row never invents an issue number or a timer trigger from the schedule.
+    for (const label of ['orbi-waiting', 'orbi-mixed']) expect(rowPage(renderer, label)).not.toMatch(/Last trigger|Next trigger|issue \d/i);
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Expand orbi-mixed' }).props.onPress()); await settle();
+    expect(rowPage(renderer, 'orbi-mixed')).toContain('orbi-mixed@1.service: active/running, load loaded; unit file enabled');
+    expect(rowPage(renderer, 'orbi-mixed')).toContain('orbi-mixed@1.timer: failed/failed, load loaded; unit file enabled');
+  });
+
   it('retains the host-scoped expanded family across an in-page remount and falls back to the Overview heading', async () => {
     host.readInventory.mockResolvedValue(hostA);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -243,21 +266,67 @@ describe('host_services_states', () => {
     return render(props(overrides));
   };
 
-  it('names a not-enabled inventory with its own next action', async () => {
+  it('shows the selected host, an undecided state and one reachable setup disclosure when inventory is off', async () => {
     const renderer = await renderWith(inventory({ state: 'off', observedAt: null }));
-    expect(text(renderer)).toContain('Host service check: off');
-    expect(text(renderer)).toContain('not enabled on this host');
-    expect(text(renderer)).toContain('PASEO_ORBI_HOST_INVENTORY=1');
-    expect(text(renderer)).toContain('last successful check: never');
-    // Not enabled is not an observation: no deployment claims "not observed".
-    expect(text(renderer)).not.toContain('Not observed in this host service check');
+    const page = text(renderer);
+    expect(page).toContain('Your Linux user services — Host A');
+    expect(page).toContain('Host service check: off');
+    expect(page).toContain('undecided');
+    // Off is not an observation: no zero count, failure count or never timestamp.
+    expect(page).not.toContain('Observed unit families');
+    expect(page).not.toContain('families with failed units');
+    expect(page).not.toContain('Last check');
+    expect(page).not.toContain('last successful check');
+    expect(page).not.toContain('never');
+    // No deployment claims "not observed" and no Refresh implies it can enable access.
+    expect(page).not.toContain('Not observed in this host service check');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+    // One reachable disclosure carries the existing operator instructions and audience.
+    const disclosure = renderer.root.findByProps({ accessibilityLabel: 'Set up service access' });
+    expect(disclosure.props.accessibilityRole).toBe('button');
+    expect(disclosure.props.accessibilityState).toEqual({ expanded: false });
+    expect(page).not.toContain('PASEO_ORBI_HOST_INVENTORY=1');
+    await act(async () => disclosure.props.onPress()); await settle();
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Set up service access' }).props.accessibilityState).toEqual({ expanded: true });
+    const setup = text(renderer);
+    expect(setup).toContain('PASEO_ORBI_HOST_INVENTORY=1');
+    expect(setup).toContain('explicitly authorize a reload');
+    expect(setup).toContain('Connected clients on this host can then see Orbi unit names');
+    expect(setup).toContain('Refresh cannot enable access');
+    expect(setup).not.toContain('Observed unit families');
     expect(host.readInventory).toHaveBeenCalledTimes(1);
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh host services' }).props.disabled).toBe(false);
   });
 
-  it('distinguishes a complete empty check from a partial result with no confirmed rows', async () => {
+  it('keeps the off state undecided and Refresh-free when the selected host goes offline', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    cleanups.push(() => client.clear());
+    let renderer!: ReactTestRenderer;
+    vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
+    const tree = () => <QueryClientProvider client={client}><Shell {...props()} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
+    await act(async () => { renderer = create(tree()); });
+    cleanups.push(async () => { await act(async () => renderer.unmount()); });
+    await settle();
+    host.hosts[0] = { serverId: 'host-a', label: 'Host A', status: 'offline' };
+    await act(async () => renderer.update(tree())); await settle();
+    const page = text(renderer);
+    const panel = renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+    expect(page).toContain('Host service check: off');
+    expect(panel).toContain('Selected host is offline');
+    // Off stays undecided offline: no count, no absence claim, and no instruction
+    // to press a Refresh control the off state does not render.
+    expect(panel).not.toContain('Observed unit families');
+    expect(panel).not.toContain('No matching Orbi user units');
+    expect(panel).not.toContain('then Refresh');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+  });
+
+  it('reports no matching units only for a fresh complete empty observation', async () => {
     const complete = await renderWith(inventory({ state: 'complete' }));
     expect(text(complete)).toContain("No matching Orbi user units found in the selected host's user services");
+    await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
+    expect(text(complete)).toContain("Showing this host's last successful observation");
+    expect(text(complete)).not.toContain('No matching Orbi user units found');
+    expect(text(complete)).not.toContain('Observed unit families');
   });
 
   it('reports partial results as possibly missing units with a repair step', async () => {
@@ -270,6 +339,7 @@ describe('host_services_states', () => {
     expect(text(partial)).toContain('installed: process_failed');
     expect(text(partial)).toContain('Ask the operator to check user systemd/DBus access on this host, then Refresh.');
     expect(text(partial)).not.toContain('No matching Orbi user units found');
+    expect(text(partial)).not.toContain('Observed unit families');
     // Partial host evidence is still evidence: it may be retained as a success.
     expect(text(partial)).toContain('last successful check: ' + stamp);
   });
@@ -282,9 +352,10 @@ describe('host_services_states', () => {
     // A denied check is never retained as this host's success, at any age.
     expect(text(unavailable)).toContain('last successful check: never');
     expect(text(unavailable)).not.toContain('last successful observation');
-    // ...and it never becomes per-deployment "not observed" evidence either.
+    // ...and it never becomes per-deployment "not observed" evidence or a zero count.
     expect(text(unavailable)).not.toContain('Not observed in this host service check');
     expect(text(unavailable)).not.toContain('Observed in this host service check');
+    expect(text(unavailable)).not.toContain('Observed unit families');
     await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
     expect(text(unavailable)).toContain('Current activity on this host is unknown');
     expect(text(unavailable)).not.toContain("Showing this host's last successful observation");

@@ -50,12 +50,21 @@ export function Issues(props: Props) {
     read: () => readDetail({ deploymentId: props.deploymentId, issue: selected! }) });
   const text = { color: props.theme.colors.foreground };
   const lookup = /^[1-9][0-9]*$/.test(issueText) && Number.isSafeInteger(Number(issueText));
+  // One shared detail observation, placed beside its row only while that exact number is
+  // on the observed page. Any other number stays an independent by-number result next to
+  // the field, so a loading or unavailable list never hides it.
+  const listed = selected !== null && query.observation?.data?.records.some(record => record.number === selected) === true;
+  const panel = selected === null ? null : <View>
+    <Text style={text}>Issue #{selected} — {listed ? 'selected row; detail below.' : 'detail read by number; not a browse-page membership claim.'}</Text>
+    <ObservationView {...detail} theme={props.theme} refreshLabel="Refresh selected issue">{data => <Detail data={data} {...props} />}</ObservationView>
+  </View>;
   return <View>
     <Text style={text}>Ready candidate does not promise pickup. Dependency status is unknown until an issue is selected. Labels are evidence, not execution instructions.</Text>
     <Text style={text}>If auth_denied: ask the operator to repair the daemon user's existing gh authentication, then Refresh. rate_limited: wait for GitHub's retry/reset gate; Refresh cannot bypass it.</Text>
     <TextInput accessibilityLabel="Issue number to inspect" value={issueText} onChangeText={setIssueText} keyboardType="number-pad" style={{ ...text, borderColor: props.theme.colors.foreground, borderWidth: 1 }} />
     <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue by number" disabled={!lookup} onPress={() => { if (lookup) select(Number(issueText)); }}><Text style={text}>Inspect issue</Text></Pressable>
-    <ObservationView {...query} theme={props.theme}>{data => <View>
+    {!listed && panel}
+    <ObservationView {...query} theme={props.theme} refreshLabel="Refresh issue page">{data => <View>
       <Text style={text}>{data.repo} — Page {data.page}. This displayed page is not the complete active scope.</Text>
       {data.records.length === 0 && <Text style={text}>No issues on this observed page.</Text>}
       {issueStates.map(state => {
@@ -63,22 +72,22 @@ export function Issues(props: Props) {
           const observed = detail.observation?.data?.issue;
           return observed?.number === issue.number && observed.updatedAt >= issue.updatedAt ? observed : issue;
         }).filter(issue => issue.state === state);
-        return records.length ? <View key={state}><Text style={text}>{state}</Text>{records.map(issue => <View key={issue.number}><Pressable accessibilityRole="button" accessibilityLabel={`Inspect issue ${issue.number}`} onPress={() => select(issue.number)}>
+        return records.length ? <View key={state}><Text style={text}>{state}</Text>{records.map(issue => {
+          const isSelected = issue.number === selected;
+          return <View key={issue.number}><Pressable accessibilityRole="button" accessibilityLabel={`Inspect issue ${issue.number}`} accessibilityState={{ selected: isSelected }} onPress={() => select(issue.number)}>
           <Text style={text}>#{issue.number} {issue.title} — {issue.badge ?? 'no lifecycle label'} ({issue.provenance})</Text>
           <Text style={text}>{issue.url}; updated {issue.updatedAt}; labels: {issue.labels.join(', ') || 'none'}; dependencies unknown</Text>
           {issue.warning && <Text style={text}>Evidence warning: conflicting lifecycle labels.</Text>}
+          {isSelected && <Text style={text}>Selected; detail below this row.</Text>}
         </Pressable>
           <GitHubEvidenceLink key={JSON.stringify([props.hostId, props.deploymentId, props.repo, 'issues', issue.number])}
             repo={props.repo} kind="issues" number={issue.number} url={issue.url} theme={props.theme} />
-        </View>)}</View> : null;
+          {isSelected && panel}
+        </View>; })}</View> : null;
       })}
       {data.hasNextPage && page === 10 && <Text style={text}>Safety page limit reached; historical scope is incomplete.</Text>}
       <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={page === 1} onPress={() => { select(null); setPage(page - 1); }}><Text style={text}>Previous page</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={!data.hasNextPage || page >= 10} onPress={() => { select(null); setPage(page + 1); }}><Text style={text}>Next page</Text></Pressable>
     </View>}</ObservationView>
-    {selected !== null && <View>
-      <Text style={text}>Issue #{selected} — detail read by number; not a browse-page membership claim.</Text>
-      <ObservationView {...detail} theme={props.theme}>{data => <Detail data={data} {...props} />}</ObservationView>
-    </View>}
   </View>;
 }

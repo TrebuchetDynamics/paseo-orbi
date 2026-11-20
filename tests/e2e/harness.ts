@@ -1,20 +1,28 @@
+import { constants } from 'node:fs';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, readFile, writeFile, realpath, lstat, readdir, rm, chmod, symlink, readlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, realpath, lstat, readdir, rm, chmod, symlink, readlink, access } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
 import { fixture } from '../helpers/fixtures';
 
 const exec = promisify(execFile);
 export type Inputs = { repo: string; sha: string; output: string; approval: string };
-export function approveLaunch(env: NodeJS.ProcessEnv, effect: (input: Inputs) => unknown) {
-  if (env.PASEO_E2E_ENABLE_TRUSTED_PLUGINS !== '1' || !/^https:\/\/github\.com\/TrebuchetDynamics\/paseo-orbi\/issues\/12#issuecomment-\d+$/.test(env.PASEO_E2E_APPROVAL_URL ?? ''))
-    throw new Error('Owner approval required on execution issue #12. Read and verify the trusted-plugin consent before setting the approval URL and flag.');
+const approvalUrl = (issue: 12 | 13) => new RegExp(`^https://github\\.com/TrebuchetDynamics/paseo-orbi/issues/${issue}#issuecomment-\\d+$`);
+function explicit(env: NodeJS.ProcessEnv, issue: 12 | 13, message: string): Inputs {
+  if (env.PASEO_E2E_ENABLE_TRUSTED_PLUGINS !== '1' || !approvalUrl(issue).test(env.PASEO_E2E_APPROVAL_URL ?? '')) throw new Error(message);
   const repo = env.PASEO_E2E_CANDIDATE_REPO ?? '', sha = env.PASEO_E2E_CANDIDATE_SHA ?? '', output = env.PASEO_E2E_OUTPUT ?? '';
   if (!isAbsolute(repo) || resolve(repo) !== repo || !/^[0-9a-f]{40}$/.test(sha) || !isAbsolute(output) || resolve(output) !== output || !output.includes('/.artifacts/paseo-qualification/') || output === repo || output.startsWith(repo + '/node_modules/'))
     throw new Error('Explicit absolute candidate repository, committed full SHA and new .artifacts/paseo-qualification/<run-id> output required.');
-  return effect({ repo, sha, output, approval: env.PASEO_E2E_APPROVAL_URL! });
+  return { repo, sha, output, approval: env.PASEO_E2E_APPROVAL_URL! };
+}
+export function approveLaunch(env: NodeJS.ProcessEnv, effect: (input: Inputs) => unknown) {
+  // Browser consent on #12 never authorizes the native lane, and vice versa.
+  return effect(explicit(env, 12, 'Owner approval required on execution issue #12. Read and verify the trusted-plugin consent before setting the approval URL and flag.'));
+}
+export function approveNativeLaunch(env: NodeJS.ProcessEnv, effect: (input: Inputs) => unknown) {
+  return effect(explicit(env, 13, 'Owner approval required on execution issue #13. Read and verify the Linux native trusted-plugin consent before setting the approval URL and flag.'));
 }
 export function isolation(root: string, home: string, host: string, owned: boolean, fresh: boolean) {
   if (!isAbsolute(root) || !home.startsWith(root + '/') || resolve(home) !== home || !owned || !fresh || !/^tcp:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(host) || Number(host.split(':').at(-1)) > 65535)
@@ -87,6 +95,81 @@ export function sanitize(text: string, roots: string[] = []) {
 export async function command(file: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, timeout = 60000) {
   return (await exec(file, args, { env, cwd, timeout, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' })).stdout;
 }
+export type InstallationHost = {
+  alias: string; host: string; installation: 'never-attempted' | 'uncertain' | 'confirmed';
+  cliCall: (...args: string[]) => Promise<string>;
+};
+function pluginList(text: string): { id: string }[] {
+  const rows = JSON.parse(text);
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row.id !== 'string')) throw new Error('Invalid plugin list response');
+  return rows;
+}
+function diagnostic(error: unknown) {
+  const detail = error as { stderr?: string; stdout?: string } | null;
+  return sanitize([String(error), detail?.stderr, detail?.stdout].filter(Boolean).join('\n'));
+}
+export async function exposePs(bin: string, effects = { access, symlink }) {
+  try { await effects.access('/usr/bin/ps', constants.X_OK); }
+  catch { throw new Error('Missing runtime prerequisite: executable /usr/bin/ps required before daemon launch'); }
+  await effects.symlink('/usr/bin/ps', join(bin, 'ps'));
+}
+export async function installWhenRpcReady(host: InstallationHost & { candidate: string; startup: { deadline: number } }, sleep: (ms: number) => Promise<void> = pause, now = Date.now) {
+  const remaining = host.startup.deadline - now();
+  if (remaining <= 0) throw new Error('60-second host startup deadline exceeded');
+  await boundedWait(async () => {
+    if (now() >= host.startup.deadline) throw new Error('60-second host startup deadline exceeded');
+    try { pluginList(await host.cliCall('ls', '--json')); return true; }
+    catch (error) {
+      // Pinned CLI's pre-ready WebSocket upgrade rejection, not arbitrary 503s/refusals.
+      const stderr = (error as { stderr?: string })?.stderr ?? '';
+      let response: { code?: string; message?: string } | undefined;
+      try { response = JSON.parse(stderr).error; } catch { /* non-JSON failures are not startup readiness */ }
+      if (response?.code === 'DAEMON_UNREACHABLE' && response.message === `Cannot connect to daemon at ${host.host}: Unexpected server response: 503`) return false;
+      throw error;
+    }
+  }, remaining, sleep, now);
+  if (now() >= host.startup.deadline) throw new Error('60-second host startup deadline exceeded');
+  host.installation = 'uncertain'; // never automatically retry a possibly server-side install
+  await host.cliCall('install', host.candidate, '--id', 'paseo-orbi');
+  host.installation = 'confirmed';
+}
+export async function cleanupInstallations<T extends InstallationHost>(hosts: T[], effects: {
+  snapshot: () => Promise<Identity[]>; stop: (owned: Identity[]) => Promise<void>;
+  verify: (owned: Identity[]) => Promise<void>; log: (host: T) => Promise<void>;
+}) {
+  const errors: string[] = [], removals: { host: string; state: T['installation']; operation: string; diagnostic?: string }[] = [];
+  let owned: Identity[] = [];
+  try { owned = await effects.snapshot(); } catch (error) { errors.push(diagnostic(error)); }
+  for (const host of hosts) {
+    const removal = { host: host.alias, state: host.installation, operation: 'not-attempted', diagnostic: undefined as string | undefined };
+    removals.push(removal);
+    try {
+      if (host.installation !== 'never-attempted') {
+        removal.operation = 'unresolved';
+        if (host.installation === 'uncertain' && !pluginList(await host.cliCall('ls', '--json')).some(row => row.id === 'paseo-orbi')) {
+          // This observation is neither a remove success nor proof an in-flight install stopped.
+          removal.operation = 'absent-after-uncertain';
+        } else {
+          await host.cliCall('remove', 'paseo-orbi'); removal.operation = 'removed';
+        }
+      }
+    } catch (error) {
+      removal.diagnostic = diagnostic(error);
+      errors.push(`Removal unresolved: ${host.alias}: ${removal.diagnostic}`);
+    }
+    try { await effects.log(host); } catch (error) { errors.push(diagnostic(error)); }
+  }
+  // Always account for processes again, even after an empty list or removal error.
+  // A failed ownership snapshot is not permission to signal unknown processes.
+  try { owned = [...owned, ...await effects.snapshot()]; await effects.stop(owned); } catch (error) { errors.push(diagnostic(error)); }
+  try { await effects.verify(owned); } catch (error) { errors.push(diagnostic(error)); }
+  return { errors, removals };
+}
+export async function finishFailedStart(primary: unknown, cleanup: () => Promise<void>): Promise<never> {
+  try { await cleanup(); }
+  catch (secondary) { throw new AggregateError([primary, secondary], `Startup failed: ${String(primary)}; cleanup failed: ${String(secondary)}`); }
+  throw primary;
+}
 export async function prepareTelemetry(root: string, alias: string, profile: 'release' | 'installed') {
   const data = await fixture(profile, root); // existing pinned source data, no engine execution
   const registry = join(root, `${alias}-reads.jsonl`), calls = join(root, `${alias}-calls.jsonl`), state = join(root, `${alias}-state.json`);
@@ -106,11 +189,12 @@ export async function prepareTelemetry(root: string, alias: string, profile: 're
   return { data, registry, calls, state, setState };
 }
 export type Host = Awaited<ReturnType<typeof makeHost>>;
-async function makeHost(root: string, alias: string, profile: 'release' | 'installed', candidate: string, cli: string, mode: 'available' | 'unconfigured') {
+export async function makeHost(root: string, alias: string, profile: 'release' | 'installed', candidate: string, cli: string, mode: 'available' | 'unconfigured') {
   const home = join(root, alias); await mkdir(home);
   const bin = join(root, `${alias}-bin`); await mkdir(bin);
   await symlink(process.execPath, join(bin, 'node'));
-  // npm's absolute script is used for preparation; only node and strict fixture tools are exposed to the daemon.
+  // npm's absolute script is used for preparation; expose only the required ps identity reader, not system PATH.
+  await exposePs(bin);
   const npm = await realpath(join(dirname(process.execPath), 'npm')); await symlink(npm, join(bin, 'npm'));
   const { data, registry, calls, state, setState } = await prepareTelemetry(root, alias, profile);
   const standin = await readFile(new URL('./fixtures/tool.mjs', import.meta.url), 'utf8');
@@ -138,7 +222,7 @@ async function makeHost(root: string, alias: string, profile: 'release' | 'insta
     if (remaining <= 0) throw new Error('60-second host startup deadline exceeded');
     return command(process.execPath, [cli, '--host', host, 'plugin', ...args], env, candidate, Math.min(10000, remaining));
   };
-  const handle = { alias, profile, home, state, cli, candidate, startup, port: port.port, url: `http://127.0.0.1:${port.port}`, host, data, env, registry, calls, initial, setState, cliCall,
+  const handle = { installation: 'never-attempted' as InstallationHost['installation'], alias, profile, home, state, cli, candidate, startup, port: port.port, url: `http://127.0.0.1:${port.port}`, host, data, env, registry, calls, initial, setState, cliCall,
     log: () => sanitize(log, [root, data.root]),
   };
   return handle;
@@ -158,8 +242,8 @@ export async function assertListenerOwned(host: { initial: Identity; port: numbe
   }
   requireListenerOwnership(true, listeners.length === 1 && inodes.has(`socket:[${listeners[0][9]}]`));
 }
-export async function ownedProcesses(hosts: Host[], root: string) {
-  const table = await processTable(), owned = hosts.map(h => h.initial);
+export async function ownedProcesses(hosts: Host[], root: string, extra: Identity[] = []) {
+  const table = await processTable(), owned = [...hosts.map(h => h.initial), ...extra];
   // Snapshot daemon descendants BEFORE removal; detached read children additionally register themselves.
   for (let changed = true; changed;) {
     changed = false;
@@ -181,82 +265,113 @@ export async function ownedProcesses(hosts: Host[], root: string) {
   }
   return owned;
 }
+// Fresh isolated HOME/XDG/npm/tmp tree for preparation and daemon launches.
+export async function setupEnvironment(root: string) {
+  await mkdir(join(root, 'tmp')); await writeFile(join(root, 'npmrc'), ''); await writeFile(join(root, 'global-npmrc'), '');
+  const isolated = environment(root, dirname(process.execPath), join(root, 'setup-home'));
+  await mkdir(isolated.HOME!);
+  return isolated;
+}
+// Exact committed archive and reviewed preparation only; shared by the browser and native lanes.
+export async function prepareCandidate(input: Pick<Inputs, 'repo' | 'sha'>, root: string, isolated: NodeJS.ProcessEnv) {
+  if (await realpath(input.repo) !== input.repo) throw new Error('Candidate repository must be canonical');
+  const candidate = join(root, 'candidate'); await mkdir(candidate);
+  const npm = await realpath(join(dirname(process.execPath), 'npm'));
+  const sha = (await command('/usr/bin/git', ['-C', input.repo, 'rev-parse', '--verify', `${input.sha}^{commit}`], isolated, root)).trim();
+  if (sha !== input.sha) throw new Error('Candidate SHA must name the exact committed tree');
+  const archive = join(root, 'candidate.tar');
+  await command('/usr/bin/git', ['-C', input.repo, 'archive', '--format=tar', `--output=${archive}`, input.sha], isolated, root);
+  await command('/usr/bin/tar', ['-xf', archive, '-C', candidate], isolated, root);
+  // Reject tracked symlinks and accidental credential/runtime payloads before preparation.
+  const inspect = async (dir: string): Promise<void> => { for (const name of await readdir(dir)) { const path = join(dir, name), stat = await lstat(path); if (stat.isSymbolicLink() || /^(?:\.git|node_modules|\.npmrc|\.env|credentials)$/.test(name)) throw new Error('Unsafe committed candidate payload'); if (stat.isDirectory()) await inspect(path); } }; await inspect(candidate);
+  const runtime = JSON.parse(await readFile(resolve('tests/e2e/runtime/node_modules/@getpaseo/cli/package.json'), 'utf8'));
+  if (runtime.version !== '0.15.4') throw new Error('Run explicit pinned runtime setup first');
+  await command(process.execPath, [npm, 'ci', '--omit=dev', '--ignore-scripts'], isolated, candidate, 180000);
+  const manifest = JSON.parse(await readFile(join(candidate, 'paseo-plugin.json'), 'utf8'));
+  if (JSON.stringify(manifest.build) !== JSON.stringify([['npm', 'ci', '--omit=dev', '--ignore-scripts']])) throw new Error('Unreviewed preparation command');
+  return { candidate, sha };
+}
+// Both lanes consume the same fixture hosts, ports and identity-safe accounting.
+export async function startHosts(hosts: Host[], root: string, candidate: string, cli: string, mode: 'available' | 'unconfigured' = 'available') {
+  for (const [alias, profile] of [['host-a', 'release'], ['host-b', 'installed']] as const) {
+    const host = await makeHost(root, alias, profile, candidate, cli, mode); hosts.push(host);
+    const deadline = host.startup.deadline;
+    await boundedWait(async () => {
+      if (!(await portClosed(host.port))) await assertListenerOwned(host);
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 1000);
+      try { return (await fetch(`${host.url}/api/health`, { signal: controller.signal })).ok; } catch { return false; } finally { clearTimeout(timer); }
+    }, Math.max(1, deadline - Date.now()));
+    await installWhenRpcReady(host);
+    await boundedWait(async () => { const rows = JSON.parse(await host.cliCall('ls', 'paseo-orbi', '--json')); return rows.length === 1 && rows[0].id === 'paseo-orbi' && rows[0].status === 'running'; }, Math.max(1, deadline - Date.now()));
+    host.startup.deadline = Infinity;
+  }
+}
+export function lease(running: { root: string; input: Inputs; hosts: Host[] }) {
+  return { root: running.root, input: running.input, hosts: running.hosts.map(h => ({
+    initial: h.initial, alias: h.alias, profile: h.profile, home: h.home, state: h.state, cli: h.cli, candidate: h.candidate, port: h.port, url: h.url, host: h.host, env: h.env,
+    registry: h.registry, calls: h.calls, data: { authorization: h.data.authorization, entry: h.data.entry },
+  })) };
+}
+// Ownership-aware teardown shared by both lanes. Extra identities (owned display/app
+// groups) are only ever verified and signalled by proven pid+pgid+start identity.
+export async function release(input: Pick<Inputs, 'output' | 'repo'>, root: string, hosts: Host[], extra: { identities?: Identity[] } = {}) {
+  const extras = extra.identities ?? [];
+  for (const host of hosts) host.startup.deadline = Infinity;
+  const result = await cleanupInstallations(hosts, {
+    snapshot: () => ownedProcesses(hosts, root, extras), stop: stopOwned,
+    log: host => writeFile(join(input.output, `${host.alias}.log`), host.log()),
+    verify: async owned => {
+      const failures: string[] = [];
+      for (const host of hosts) if (!(await portClosed(host.port))) failures.push(`Owned port still listening: ${host.alias}`);
+      const table = await processTable();
+      if (owned.some(p => table.some(q => same(p, q)))) failures.push('Owned subprocess remains after cleanup');
+      if (extras.some(p => table.some(q => same(p, q)))) failures.push('Owned native process remains after cleanup');
+      // Re-scan the owner marker after termination, including ambiguous-absent installs.
+      if ((await ownedProcesses(hosts, root, extras)).some(p => table.some(q => same(p, q)))) failures.push('Owned descendant remains after cleanup');
+      if (failures.length) throw new Error(failures.join('; '));
+    },
+  });
+  const errors = [...result.errors];
+  const report = { status: errors.length ? 'fail' : 'pass', ...result, errors };
+  if (errors.length) {
+    await writeFile(join(input.output, 'cleanup.json'), sanitize(JSON.stringify(report), [root, input.repo, input.output]));
+    throw new Error('Ownership-aware cleanup failed; runtime trees retained for investigation. Inspect cleanup.json for removal and process diagnostics.');
+  }
+  for (const host of hosts) await host.data.cleanup();
+  await rm(root, { recursive: true });
+  await writeFile(join(input.output, 'cleanup.json'), JSON.stringify(report));
+  return report;
+}
+
 export async function start(env = process.env, mode: 'available' | 'unconfigured' = 'available') {
   let input!: Inputs; approveLaunch(env, value => { input = value; }); // no effects before approval
   if (process.version !== 'v22.19.0' || process.platform !== 'linux') throw new Error('Qualification requires Linux and Node 22.19.0');
-  if (await realpath(input.repo) !== input.repo) throw new Error('Candidate repository must be canonical');
   // Every existing output ancestor must be canonical. mkdir is exclusive: never reuse evidence/runtime state.
   await checkFreshPath(input.output);
   await mkdir(dirname(input.output), { recursive: true });
   if (await realpath(dirname(input.output)) !== dirname(input.output)) throw new Error('Outside/symlink evidence parent');
   await mkdir(input.output);
   const root = await mkdtemp(join(await realpath('/tmp'), 'paseo-orbi-e2e-')), hosts: Host[] = [];
-  await mkdir(join(root, 'tmp')); await writeFile(join(root, 'npmrc'), ''); await writeFile(join(root, 'global-npmrc'), '');
-  const candidate = join(root, 'candidate'); await mkdir(candidate);
-  const isolated = environment(root, dirname(process.execPath), join(root, 'setup-home')); await mkdir(isolated.HOME!);
-  const npm = await realpath(join(dirname(process.execPath), 'npm'));
+  const isolated = await setupEnvironment(root);
   const cli = resolve('tests/e2e/runtime/node_modules/@getpaseo/cli/bin/paseo');
-  const cleanup = async () => {
-    const errors: string[] = [];
-    let owned: Identity[] = [];
-    try { owned = await ownedProcesses(hosts, root); } catch (e) { errors.push(String(e)); }
-    for (const host of hosts) {
-      host.startup.deadline = Infinity;
-      try { await host.cliCall('remove', 'paseo-orbi'); } catch { errors.push(`Removal failed: ${host.alias}`); }
-      await writeFile(join(input.output, `${host.alias}.log`), host.log());
-    }
-    try { owned = [...owned, ...await ownedProcesses(hosts, root)]; await stopOwned(owned); } catch (e) { errors.push(String(e)); }
-    for (const host of hosts) {
-      if (!(await portClosed(host.port))) errors.push(`Owned port still listening: ${host.alias}`);
-      const table = await processTable();
-      if (owned.some(p => table.some(q => same(p, q)))) errors.push('Owned subprocess remains after cleanup');
-    }
-    if (errors.length) { await writeFile(join(input.output, 'cleanup.json'), JSON.stringify({ status: 'fail', errors: errors.map(e => sanitize(e, [root])) })); throw new Error('Ownership-aware cleanup failed; runtime trees retained for investigation.'); }
-    for (const host of hosts) await host.data.cleanup();
-    await rm(root, { recursive: true });
-    await writeFile(join(input.output, 'cleanup.json'), JSON.stringify({ status: 'pass' }));
-  };
+  const cleanup = async () => { await release(input, root, hosts); };
   try {
-    const sha = (await command('/usr/bin/git', ['-C', input.repo, 'rev-parse', '--verify', `${input.sha}^{commit}`], isolated, root)).trim();
-    if (sha !== input.sha) throw new Error('Candidate SHA must name the exact committed tree');
-    const archive = join(root, 'candidate.tar');
-    await command('/usr/bin/git', ['-C', input.repo, 'archive', '--format=tar', `--output=${archive}`, input.sha], isolated, root);
-    await command('/usr/bin/tar', ['-xf', archive, '-C', candidate], isolated, root);
-    // Reject tracked symlinks and accidental credential/runtime payloads before preparation.
-    const inspect = async (dir: string): Promise<void> => { for (const name of await readdir(dir)) { const path = join(dir, name), stat = await lstat(path); if (stat.isSymbolicLink() || /^(?:\.git|node_modules|\.npmrc|\.env|credentials)$/.test(name)) throw new Error('Unsafe committed candidate payload'); if (stat.isDirectory()) await inspect(path); } }; await inspect(candidate);
-    const runtime = JSON.parse(await readFile(resolve('tests/e2e/runtime/node_modules/@getpaseo/cli/package.json'), 'utf8'));
-    if (runtime.version !== '0.15.4') throw new Error('Run explicit pinned runtime setup first');
-    await command(process.execPath, [npm, 'ci', '--omit=dev', '--ignore-scripts'], isolated, candidate, 180000);
-    const manifest = JSON.parse(await readFile(join(candidate, 'paseo-plugin.json'), 'utf8'));
-    if (JSON.stringify(manifest.build) !== JSON.stringify([['npm', 'ci', '--omit=dev', '--ignore-scripts']])) throw new Error('Unreviewed preparation command');
+    const { candidate, sha } = await prepareCandidate(input, root, isolated);
     await writeFile(join(input.output, 'receipt.json'), JSON.stringify({ approval: input.approval, candidate: '[EXACT_COMMITTED_ARCHIVE]', evidenceKind: 'browser', pluginSha: sha, dirty: false, nodeVersion: process.version, daemonVersion: '0.15.4', appVersion: '0.15.4', playwrightVersion: '1.65.1', observedAt: new Date().toISOString() }, null, 2));
-    for (const [alias, profile] of [['host-a', 'release'], ['host-b', 'installed']] as const) {
-      const host = await makeHost(root, alias, profile, candidate, cli, mode); hosts.push(host);
-      const deadline = host.startup.deadline;
-      await boundedWait(async () => {
-        if (!(await portClosed(host.port))) await assertListenerOwned(host);
-        const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 1000);
-        try { return (await fetch(`${host.url}/api/health`, { signal: controller.signal })).ok; } catch { return false; } finally { clearTimeout(timer); }
-      }, Math.max(1, deadline - Date.now()));
-      await host.cliCall('install', candidate, '--id', 'paseo-orbi');
-      await boundedWait(async () => { const rows = JSON.parse(await host.cliCall('ls', 'paseo-orbi', '--json')); return rows.length === 1 && rows[0].id === 'paseo-orbi' && rows[0].status === 'running'; }, Math.max(1, deadline - Date.now()));
-      host.startup.deadline = Infinity;
-    }
+    await startHosts(hosts, root, candidate, cli, mode);
     return { input, root, hosts, cleanup };
   } catch (error) {
-    await writeFile(join(input.output, 'startup.log'), sanitize(String(error), [root, input.repo, input.output]));
-    await cleanup(); throw error;
+    const primary = new Error(sanitize(diagnostic(error), [root, input.repo, input.output]));
+    await writeFile(join(input.output, 'startup.log'), primary.message);
+    return finishFailedStart(primary, cleanup);
   }
 }
 
 // Playwright invokes global setup only for execution, never for --list/imports.
 export default async function globalSetup() {
   const running = await start();
-  const lease = join(running.root, 'lease.json');
-  await writeFile(lease, JSON.stringify({ root: running.root, input: running.input, hosts: running.hosts.map(h => ({
-    initial: h.initial, alias: h.alias, profile: h.profile, home: h.home, state: h.state, cli: h.cli, candidate: h.candidate, port: h.port, url: h.url, host: h.host, env: h.env,
-    registry: h.registry, calls: h.calls, data: { authorization: h.data.authorization, entry: h.data.entry },
-  })) }));
-  process.env.PASEO_E2E_LEASE = lease;
+  const path = join(running.root, 'lease.json');
+  await writeFile(path, JSON.stringify(lease(running)));
+  process.env.PASEO_E2E_LEASE = path;
   return running.cleanup;
 }

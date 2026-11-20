@@ -355,6 +355,11 @@ describe('package_and_registration', () => {
       expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'runs' || screen.id === 'blockers' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
+        const fleetText = renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+        expect(fleetText).toContain('Your Linux user services — Host A');
+        expect(fleetText.indexOf('Your Linux user services')).toBeLessThan(fleetText.indexOf('Fleet — read-only'));
+        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Set up service access' })).toHaveLength(1);
+        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
         await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Active work for Demo' }).props.onPress());
         expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });

@@ -608,7 +608,7 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("daemon user's existing gh authentication");
     expect(JSON.stringify(renderer.toJSON())).toContain('incomplete — current run not established');
     f.advance(); denyComments = false;
-    await act(async () => renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress()); await settle(); await settle();
+    await act(async () => renderer.root.findByProps({ testID: 'orbi-issues' }).findByProps({ accessibilityLabel: 'Refresh selected issue' }).props.onPress()); await settle(); await settle();
     expect(JSON.stringify(renderer.toJSON())).not.toContain('auth_denied\"');
     expect(JSON.stringify(renderer.toJSON())).toContain(run);
     expect((await f.reader.readIssueReports('demo', 4)).problems).toEqual([]);
@@ -623,7 +623,7 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("daemon user's existing gh authentication");
     expect(JSON.stringify(renderer.toJSON())).not.toContain('No issues on this observed page');
     f.advance(); f.process.mockResolvedValue(response([rest.issue]));
-    await act(async () => renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
+    await act(async () => renderer.root.findByProps({ testID: 'orbi-issues' }).findByProps({ accessibilityLabel: 'Refresh issue page' }).props.onPress()); await settle(); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('Browse issue evidence');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' })).toBeDefined();
   });
@@ -651,6 +651,7 @@ it('looks_up_an_issue_number_without_changing_browse_rows_or_page_limit', async 
   const setInput = async (value: string) => { await act(async () => input().props.onChangeText(value)); await settle(); };
   const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
   const pageRows = () => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && /^Inspect issue \d+$/.test(node.props.accessibilityLabel)).map(node => node.props.accessibilityLabel);
+  const selectedRows = () => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && /^Inspect issue \d+$/.test(node.props.accessibilityLabel) && node.props.accessibilityState?.selected === true).map(node => node.props.accessibilityLabel);
   for (let index = 0; index < 9; index++) await press('Next page');
   expect(text()).toContain('Safety page limit reached; historical scope is incomplete.');
   expect(pageRows()).toEqual(['Inspect issue 10']);
@@ -667,12 +668,14 @@ it('looks_up_an_issue_number_without_changing_browse_rows_or_page_limit', async 
   await press('Inspect issue 10');
   const rowDetail = text();
   expect(rowDetail).toContain('Example/project#10');
+  expect(selectedRows()).toEqual(['Inspect issue 10']); // the listed row owns the inline panel
   // A listed issue renders the same detail through the lookup as through its row.
   await setInput('11');
   await press('Inspect issue by number');
   expect(host.readIssue).toHaveBeenLastCalledWith({ deploymentId: 'demo', issue: 11 });
   expect(text()).toContain('Issue #11 — detail read by number; not a browse-page membership claim.');
   expect(text()).toContain('Example/project#11');
+  expect(selectedRows()).toEqual([]); // an absent number marks no row as selected
   expect(pageRows()).toEqual(['Inspect issue 10']);
   expect(text()).toContain('Safety page limit reached; historical scope is incomplete.');
   // A failed lookup keeps the unavailable observation and its problem code, never stale evidence.
@@ -682,11 +685,78 @@ it('looks_up_an_issue_number_without_changing_browse_rows_or_page_limit', async 
   expect(text()).toContain('refresh_failed');
   expect(text()).not.toContain('Example/project#11');
   expect(text()).not.toContain('NETWORK_SECRET');
+  expect(selectedRows()).toEqual([]);
   expect(pageRows()).toEqual(['Inspect issue 10']);
   expect(text()).toContain('Safety page limit reached; historical scope is incomplete.');
   await setInput('10');
   await press('Inspect issue by number');
   expect(text()).toBe(rowDetail);
+});
+
+it('places_the_selected_issue_detail_beside_its_row_on_a_full_page', async () => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+  const catalog = { state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] };
+  const record = (number: number) => ({ number, title: `ROW_${number}_TITLE`, url: `https://github.com/${repo}/issues/${number}`,
+    githubState: 'open' as const, updatedAt: '2026-10-15T06:20:00Z', labels: ['ai-blocked'], ...classifyIssue('open', ['ai-blocked']) });
+  const detailFor = (number: number) => issuesGet.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+    data: { issue: record(number),
+      reports: selectReports(repo, number, [comment(1, `${marker()}\n${block('progress', reports.progress)}`)], ['runner'], true),
+      dependencies: { complete: true, observedAt: '2026-11-14T23:00:00Z', records: [], problems: [] }, mergeEvidence: 'unknown' } });
+  const listKey = ['paseo-orbi', 'host-a', 'demo', `issues.list:${repo}:1`];
+  host.readCatalog.mockResolvedValue(catalog);
+  host.readIssues.mockReset().mockResolvedValue(issuesList.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+    data: { repo, page: 1, hasNextPage: true, dependencyStatus: 'unknown', records: Array.from({ length: 100 }, (_, index) => record(index + 1)) } }));
+  host.readIssue.mockReset().mockImplementation(async input => detailFor(input.issue));
+  const { renderer, settle, client } = await renderIssues();
+  const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); await settle(); };
+  const setInput = async (value: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Issue number to inspect' }).props.onChangeText(value)); await settle(); };
+  const lines = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join(''));
+  const index = (line: string) => lines().indexOf(line);
+  const rows = () => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && /^Inspect issue \d+$/.test(node.props.accessibilityLabel));
+  const selectedRows = () => rows().filter(node => node.props.accessibilityState?.selected === true).map(node => node.props.accessibilityLabel);
+  const detailLine = (number: number) => `#${number}: Blocked — ai-blocked (github)`;
+  const refreshes = () => renderer.root.findByProps({ testID: 'orbi-issues' }).findAll(node => typeof node.props.accessibilityLabel === 'string' && /^Refresh /.test(node.props.accessibilityLabel));
+  const absentHeader = 'Issue #999 — detail read by number; not a browse-page membership claim.';
+  expect(rows()).toHaveLength(100);
+  expect(selectedRows()).toEqual([]);
+  expect(refreshes().map(node => node.props.accessibilityLabel)).toEqual(['Refresh issue page']); // no stale detail control before selection
+  await press('Inspect issue 1');
+  // Exactly one detail, directly after its own row: after row 1, before row 2 and the pager.
+  expect(lines().filter(line => line === detailLine(1))).toHaveLength(1);
+  expect(index('Selected; detail below this row.')).toBeGreaterThan(index('#1 ROW_1_TITLE — ai-blocked (github)'));
+  expect(index(detailLine(1))).toBeGreaterThan(index('#1 ROW_1_TITLE — ai-blocked (github)'));
+  expect(index(detailLine(1))).toBeLessThan(index('#2 ROW_2_TITLE — ai-blocked (github)'));
+  expect(index(detailLine(1))).toBeLessThan(index('Previous page'));
+  expect(selectedRows()).toEqual(['Inspect issue 1']);
+  // Both controls still say Refresh but expose distinguishable accessible labels.
+  expect(refreshes().map(node => node.props.accessibilityLabel).sort()).toEqual(['Refresh issue page', 'Refresh selected issue']);
+  for (const control of refreshes()) {
+    expect(control.props.accessibilityRole).toBe('button');
+    expect(control.findByType('Text' as any).children).toEqual(['Refresh']);
+  }
+  // Selecting another row moves the one panel and the selected state; nothing is left behind.
+  await press('Inspect issue 2');
+  expect(lines().filter(line => line === detailLine(2))).toHaveLength(1);
+  expect(lines()).not.toContain(detailLine(1));
+  expect(index(detailLine(2))).toBeLessThan(index('#3 ROW_3_TITLE — ai-blocked (github)'));
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 1' }).props.accessibilityState).toEqual({ selected: false });
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 2' }).props.accessibilityState).toEqual({ selected: true });
+  expect(selectedRows()).toEqual(['Inspect issue 2']);
+  // A number absent from the page keeps one result beside the field, with no row selected.
+  await setInput('999'); await press('Inspect issue by number');
+  expect(index(absentHeader)).toBeGreaterThan(-1);
+  expect(index(absentHeader)).toBeLessThan(index(`${repo} — Page 1. This displayed page is not the complete active scope.`));
+  expect(lines().some(line => line.includes('Example/project#999'))).toBe(true);
+  expect(lines()).not.toContain(detailLine(2));
+  expect(selectedRows()).toEqual([]);
+  expect(rows()).toHaveLength(100);
+  // That result is not hidden behind a readable list: an unavailable page keeps it visible.
+  await act(async () => { client.setQueryData(listKey, issuesList.output.parse({ state: 'unavailable', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: null,
+    problems: [{ source: 'github', code: 'auth_denied' }], data: null })); }); await settle();
+  expect(lines()).toContain(absentHeader);
+  expect(lines().some(line => line.includes('Example/project#999'))).toBe(true);
+  expect(rows()).toHaveLength(0);
+  expect(selectedRows()).toEqual([]);
 });
 
 it('ignores a late detail response for a previous issue number', async () => {
@@ -745,7 +815,7 @@ it('repository_change_separates_pending_lists_details_and_late_reads', async () 
   expect(text()).toContain('A_ISSUE_TITLE'); expect(text()).toContain('Reported run: aaaaaaaa');
   let finishA!: (value: unknown) => void;
   host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishA = resolve; }));
-  await act(async () => { renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress(); }); await settle();
+  await act(async () => { renderer.root.findByProps({ testID: 'orbi-issues' }).findByProps({ accessibilityLabel: 'Refresh selected issue' }).props.onPress(); }); await settle();
   let finishList!: (value: unknown) => void, rejectDetail!: (error: Error) => void;
   host.readIssues.mockImplementationOnce(() => new Promise(resolve => { finishList = resolve; }));
   host.readIssue.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectDetail = reject; }));
@@ -768,7 +838,7 @@ it('repository_change_separates_pending_lists_details_and_late_reads', async () 
   expect(client.getQueryData(['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:4`])).toEqual(aDetail);
   await act(async () => rejectDetail(new Error('transport unavailable'))); await settle();
   expect(text()).toContain('unavailable'); expect(text()).toContain('refresh_failed'); expect(text()).not.toContain('aaaaaaaa');
-  const refreshDetail = async () => { await act(async () => { await renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' })[1].props.onPress(); }); await settle(); };
+  const refreshDetail = async () => { await act(async () => { await renderer.root.findByProps({ testID: 'orbi-issues' }).findByProps({ accessibilityLabel: 'Refresh selected issue' }).props.onPress(); }); await settle(); };
   host.readIssue.mockResolvedValue(bDetail); await refreshDetail();
   expect(text()).toContain('Reported run: bbbbbbbb');
   expect(text()).not.toContain(`https://github.com/${repo}/`);
