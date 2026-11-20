@@ -83,9 +83,15 @@ export async function navigate(page: Page, view: string) {
 export async function select(page: Page, view: string) {
   if (view !== 'fleet') await page.getByTestId(`orbi-${view}`).getByRole('button', { name: 'Select Demo', exact: true }).click();
 }
+// Issues distinguishes its page-level Refresh from the selected issue's detail Refresh;
+// every other view keeps the single shared "Refresh" label.
+const refreshNames = (view: string) => view === 'issues' ? ['Refresh issue page', 'Refresh selected issue'] : ['Refresh'];
+export const pageRefresh = (view: string) => refreshNames(view)[0];
 export async function refresh(page: Page, view: string) {
-  const controls = page.getByTestId(`orbi-${view}`).getByRole('button', { name: 'Refresh', exact: true });
-  for (let i = 0; i < await controls.count(); i++) { const control = controls.nth(i); if (await control.isEnabled()) await control.click(); }
+  for (const name of refreshNames(view)) {
+    const controls = page.getByTestId(`orbi-${view}`).getByRole('button', { name, exact: true });
+    for (let i = 0; i < await controls.count(); i++) { const control = controls.nth(i); if (await control.isEnabled()) await control.click(); }
+  }
 }
 export async function theme(page: Page, url: string, mode: string) {
   await page.goto(url);

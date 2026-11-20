@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { test, expect, navigate, select, state, configure, refresh, assertState, cli } from './fixtures/browser';
+import { test, expect, navigate, select, state, configure, refresh, pageRefresh, assertState, cli } from './fixtures/browser';
 
 const views = ['fleet', 'issues', 'runs', 'blockers'];
 for (const view of views) {
@@ -12,7 +12,8 @@ for (const view of views) {
     await control.focus(); await page.keyboard.press('Enter');
     await expect(page.getByText(view === 'fleet' ? /Page 1\./ : view === 'issues' ? /Dependencies: no open blockers observed/ : view === 'runs' ? /Detail evidence — loaded only on selection/ : /Artifact metadata only/).first()).toBeVisible();
     await page.setViewportSize({ width: 375, height: 667 });
-    const end = page.getByTestId(`orbi-${view === 'fleet' ? 'issues' : view}`).getByRole('button', { name: 'Refresh', exact: true }).last();
+    const target = view === 'fleet' ? 'issues' : view;
+    const end = page.getByTestId(`orbi-${target}`).getByRole('button', { name: pageRefresh(target), exact: true }).last();
     await end.scrollIntoViewIfNeeded(); await expect(end).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
     expect(await page.getByRole('button', { name: /^(Retry|Requeue|Merge|Approve|Restart|Stop service)$/i }).count()).toBe(0);
@@ -115,7 +116,7 @@ test('two hosts with identical labels/IDs: selected detail/page, late result, no
   for (const socket of network.sockets) if (Number(new URL(socket.url()).port) === b.port) await socket.close();
   await expect(page.getByText(/Selected host is offline|Plugin host is offline/).first()).toBeVisible({ timeout: 30000 });
   await page.waitForTimeout(1000);
-  await expect(page.getByTestId('orbi-issues').getByRole('button', { name: 'Refresh', exact: true }).last()).toBeDisabled();
+  await expect(page.getByTestId('orbi-issues').getByRole('button', { name: pageRefresh('issues'), exact: true }).last()).toBeDisabled();
   expect((await readFile(a.calls, 'utf8')).length).toBe(beforeA);
   network.blocked.delete(b.port);
   await expect(page.getByText(/Selected host is offline|Plugin host is offline/)).toHaveCount(0, { timeout: 30000 });
