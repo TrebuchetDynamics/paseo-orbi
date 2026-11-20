@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { PluginClientContext, PluginScreenProps, PluginSidebarItemProps } from '@getpaseo/plugin/client';
 import { useHosts, useRpc } from '@getpaseo/plugin/client';
 import { SidebarRow } from '@getpaseo/plugin/client/ui';
@@ -15,9 +16,22 @@ const title = (route: string) => route === 'fleet' ? 'Overview' : route[0].toUpp
 export function Sidebar({ currentScreen, openScreen }: PluginSidebarItemProps) {
   return <SidebarRow icon="LayoutDashboard" label="Orbi" active={routes.some(route => currentScreen?.screenId === route)} onPress={() => openScreen({ screenId: 'fleet' })} />;
 }
+function ConfiguredRepositories(props: React.ComponentProps<typeof Fleet>) {
+  const [expanded, setExpanded] = useState(Boolean(props.params.deploymentId));
+  return <View style={{ gap: 8 }}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Configured repositories" accessibilityState={{ expanded }}
+      style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setExpanded(value => !value)}>
+      <Text style={{ color: props.theme.colors.foreground }}>Configured repositories</Text>
+    </Pressable>
+    {expanded && <Fleet {...props} />}
+  </View>;
+}
 export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   route: string; openScreen: PluginClientContext['openScreen'];
 }) {
+  const [setupHost, setSetupHost] = useState<string | null>(null);
+  useEffect(() => setSetupHost(null), [props.host.id]);
+  const setupExpanded = route !== 'fleet' || setupHost === props.host.id;
   const list = useRpc(deploymentsList);
   const hosts = useHosts();
   const foreground = useForeground();
@@ -45,22 +59,6 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   const surfaceKey = `${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`;
   const transport = query.observation?.state === 'available' ? 'current' : query.observation?.state ?? (connected && foreground ? 'loading' : 'unavailable');
   return <ScrollView style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }} contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 12 }}>
-    <View testID="orbi-catalog" style={{ gap: 8 }}>
-      <Text style={text}>Selected host: {props.host.label}</Text>
-      {!connected && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
-      {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
-      <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>Catalog transport: {transport}</Text>
-      <Text accessibilityRole="alert" style={text}>{query.observation?.problems.map(p => `${p.source}: ${p.code}`).join('; ') ?? ''}</Text>
-      {catalog && <Text style={text}>Catalog: {catalog.state}</Text>}
-      {catalog && catalog.state !== 'configured' && <View accessibilityLabel="Orbi setup" style={{ gap: 8 }}>
-        <Text style={text}>{catalog.state === 'unconfigured'
-          ? 'Unconfigured: ask the operator to provide an authorized JSON file through PASEO_ORBI_CONFIG and explicitly reload this plugin.'
-          : 'Invalid configuration: ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
-        <Text style={text}>Refresh only reads the current startup catalog. It does not configure authorization or reload the plugin.</Text>
-      </View>}
-      {!catalog && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}
-      <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!query.canRefresh} accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }} style={{ opacity: query.canRefresh ? 1 : 0.5 }} onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
-    </View>
     {route === 'fleet' && <HostServices
       key={surfaceKey} surfaceKey={surfaceKey}
       hostId={props.host.id} hostLabel={props.host.label}
@@ -68,6 +66,24 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       theme={props.theme} compact={props.layout.compact}
       entries={catalog?.entries ?? null} openScreen={openScreen} query={inventory}
     />}
+    <View testID="orbi-catalog" style={{ gap: 8 }}>
+      {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Repository setup" accessibilityState={{ expanded: setupExpanded }}
+        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setSetupHost(setupExpanded ? null : props.host.id)}><Text style={text}>Repository setup</Text></Pressable>}
+      {route !== 'fleet' && <Text style={text}>Selected host: {props.host.label}</Text>}
+      {!connected && route !== 'fleet' && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
+      {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
+      {(route !== 'fleet' || transport !== 'current' || !connected) && <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>{route === 'fleet' ? `Catalog: ${!connected ? 'offline' : transport}` : `Catalog transport: ${transport}`}</Text>}
+      {!!query.observation?.problems.length && <Text accessibilityRole="alert" style={text}>{query.observation.problems.map(p => `${p.source}: ${p.code}`).join('; ')}</Text>}
+      {catalog && (route !== 'fleet' || catalog.state !== 'configured' || setupExpanded) && <Text style={text}>Catalog: {catalog.state}</Text>}
+      {setupExpanded && catalog && catalog.state !== 'configured' && <View accessibilityLabel="Orbi setup" style={{ gap: 8 }}>
+        <Text style={text}>{catalog.state === 'unconfigured'
+          ? 'Unconfigured: ask the operator to provide an authorized JSON file through PASEO_ORBI_CONFIG and explicitly reload this plugin.'
+          : 'Invalid configuration: ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
+        <Text style={text}>Refresh only reads the current startup catalog. It does not configure authorization or reload the plugin.</Text>
+      </View>}
+      {!catalog && setupExpanded && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}
+      {setupExpanded && <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!query.canRefresh} accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }} style={{ opacity: query.canRefresh ? 1 : 0.5 }} onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
+    </View>
     {catalog?.state === 'configured' && <>
       <View testID="orbi-navigation" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {routes.map(next => <Pressable key={next} accessibilityRole="button" accessibilityLabel={`Open ${title(next)}`} accessibilityState={{ selected: route === next }} style={{ padding: 8, borderWidth: route === next ? 2 : 1, borderColor: props.theme.colors.foreground }} onPress={() => openScreen({ screenId: next, params: selected ? { deploymentId: selected.id } : {} })}><Text style={text}>{title(next)}</Text></Pressable>)}
@@ -79,7 +95,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         <Text style={text}>Ask the operator to repair the authorized configuration/source profile and reload this plugin.</Text>
       </View>)}
       <View testID={`orbi-${route}`} style={{ gap: 12 }}>
-        {route === 'fleet' ? <Fleet key={`${props.host.id}:${props.params.deploymentId ?? ''}`} {...props} entries={catalog.entries} observedIds={observedIds} openScreen={openScreen} connected={connected} foreground={foreground} /> : <>
+        {route === 'fleet' ? <ConfiguredRepositories key={`${props.host.id}:${props.params.deploymentId ?? ''}`} {...props} entries={catalog.entries} observedIds={observedIds} openScreen={openScreen} connected={connected} foreground={foreground} /> : <>
           <Text style={text}>{title(route)} — select a repository to browse</Text>
           {catalog.entries.filter(entry => entry.status === 'available').map(entry => <Pressable key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })}><Text style={text}>{entry.label} ({entry.repo})</Text></Pressable>)}
           {selected && (route === 'issues'

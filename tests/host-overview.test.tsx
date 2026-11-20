@@ -4,15 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { PluginClientContext, PluginScreenProps } from '@getpaseo/plugin/client';
+import type { PluginScreenProps } from '@getpaseo/plugin/client';
 import { Shell } from '../client/shell';
 import { resetHostOverviewState } from '../client/host-overview';
 import type { DeploymentCatalog } from '../shared/common';
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
-
-// Host-first Overview evidence. Every inventory value below is parsed by the
-// real services.inventory contract, so a display guess cannot pass as a
-// transported fact. Both hosts reuse the same family label and slot numbers.
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const stamp = '2026-11-19T18:00:00.000Z';
@@ -23,402 +19,368 @@ afterEach(async () => {
   host.hosts[0] = { serverId: 'host-a', label: 'Host A', status: 'online' };
   vi.useRealTimers();
 });
-
-const unit = (id: string, kind: InventoryUnit['kind'], activeState: string | null, subState: string | null, unitFileState: string | null = 'enabled'): InventoryUnit =>
-  ({ id, kind, runtime: activeState === null ? null : { loadState: 'loaded', activeState, subState }, unitFileState } as InventoryUnit);
-const family = (label: string, kind: InventoryGroup['kind'], association: InventoryGroup['association'], deploymentId: string | null, units: InventoryUnit[]): InventoryGroup =>
-  ({ label, kind, association, deploymentId, units } as InventoryGroup);
+const unit = (id: string, kind: InventoryUnit['kind'], activeState: string | null, subState: string | null, loadState = 'loaded'): InventoryUnit =>
+  ({ id, kind, runtime: activeState === null ? null : { loadState, activeState, subState }, unitFileState: 'enabled' } as InventoryUnit);
+const family = (label: string, association: InventoryGroup['association'], deploymentId: string | null, units: InventoryUnit[]): InventoryGroup =>
+  ({ label, kind: 'runner-family', association, deploymentId, units });
 const inventory = (value: Pick<ServiceInventory, 'state'> & Partial<ServiceInventory>): ServiceInventory => servicesInventory.output.parse({
-  observedAt: stamp,
-  sources: [
+  observedAt: stamp, sources: [
     { source: 'runtime', state: 'complete', observedAt: stamp, problems: [] },
     { source: 'installed', state: 'complete', observedAt: stamp, problems: [] },
-  ],
-  problems: [], groups: [], ...value,
+  ], problems: [], groups: [], ...value,
 });
-
-// Host A: one family with several simultaneous facts, scheduled-only, installed-only,
-// template-only installed names, an unsupported profile and a duplicate claim.
 const hostA = inventory({ state: 'complete', groups: [
-  family('orbi', 'runner-family', 'unmatched', null, [
-    unit('orbi@1.service', 'service', 'failed', 'failed'),
-    unit('orbi@1.timer', 'timer', 'active', 'waiting'),
-    unit('orbi@2.service', 'service', 'active', 'running'),
-    unit('orbi@2.timer', 'timer', 'active', 'waiting'),
-  ]),
-  family('orbi-aux', 'auxiliary', 'unmatched', null, [unit('orbi-aux@.service', 'service', null, null)]),
-  family('orbi-demo', 'runner-family', 'matched', 'demo', [
-    unit('orbi-demo@1.service', 'service', 'inactive', 'dead', 'disabled'),
-    unit('orbi-demo@1.timer', 'timer', 'active', 'waiting', 'disabled'),
-  ]),
-  family('orbi-core', 'runner-family', 'incompatible', null, [unit('orbi-core@1.service', 'service', 'activating', 'start')]),
-  family('orbi-clash', 'runner-family', 'ambiguous', null, [unit('orbi-clash@1.service', 'service', 'active', 'exited')]),
+  family('orbi', 'unmatched', null, [unit('orbi@1.service', 'service', 'failed', 'failed'), unit('orbi@1.timer', 'timer', 'active', 'waiting'), unit('orbi@2.service', 'service', 'active', 'running')]),
+  family('orbi-demo', 'matched', 'demo', [unit('orbi-demo@1.service', 'service', 'inactive', 'dead'), unit('orbi-demo@1.timer', 'timer', 'active', 'waiting')]),
+  family('orbi-aux', 'unmatched', null, [unit('orbi-aux@.service', 'service', null, null)]),
+  family('orbi-core', 'incompatible', null, [unit('orbi-core@1.service', 'service', 'activating', 'start')]),
+  family('orbi-clash', 'ambiguous', null, [unit('orbi-clash@1.service', 'service', 'active', 'exited')]),
 ] });
-// Host B repeats the same family label and slot with different states.
-const hostB = inventory({ state: 'complete', groups: [
-  family('orbi', 'runner-family', 'unmatched', null, [
-    unit('orbi@1.service', 'service', 'active', 'running'),
-    unit('orbi@1.timer', 'timer', 'active', 'waiting'),
-  ]),
-] });
-
-const catalog = (entries: DeploymentCatalog['entries']): DeploymentCatalog => ({ state: 'configured', problems: [], entries });
+const hostB = inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [unit('orbi@1.service', 'service', 'active', 'running')])] });
 const demo: DeploymentCatalog['entries'][number] = { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi-0.7.41-release', status: 'available', problems: [] };
-const second: DeploymentCatalog['entries'][number] = { id: 'second', label: 'Second', repo: 'Other/repository', adapter: 'orbi-0.7.41-release', status: 'available', problems: [] };
-const rejected: DeploymentCatalog['entries'][number] = { id: 'core', label: 'Core', repo: 'Other/core', adapter: 'orbi-0.7.41-release', status: 'unsupported_source_profile', problems: [{ source: 'compatibility', code: 'unsupported_source_profile' }] };
-
-type ScreenProps = PluginScreenProps & { openScreen?: PluginClientContext['openScreen'] };
-const props = (overrides: Partial<ScreenProps> = {}): ScreenProps => ({
-  theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } },
-  host: { id: 'host-a', label: 'Host A' }, layout: { compact: true, platform: 'ios' }, params: {}, ...overrides,
-} as ScreenProps);
-
+const second = { ...demo, id: 'second', label: 'Second', repo: 'Other/repository' };
+const catalog = (entries: DeploymentCatalog['entries']): DeploymentCatalog => ({ state: 'configured', problems: [], entries });
+const props = (id = 'host-a'): PluginScreenProps => ({ theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id, label: id === 'host-a' ? 'Host A' : 'Host B' }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps);
 beforeEach(() => {
   resetHostOverviewState();
-  host.readCatalog.mockReset().mockResolvedValue(catalog([demo, rejected]));
+  host.readCatalog.mockReset().mockResolvedValue(catalog([demo]));
   host.readInventory.mockReset().mockResolvedValue(inventory({ state: 'off' }));
   host.readFleet.mockReset().mockResolvedValue({ state: 'available', observedAt: stamp, lastSuccessfulAt: stamp, problems: [] });
   for (const read of [host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) read.mockClear();
 });
-
-const settle = async () => { for (let index = 0; index < 3; index++) await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
-async function render(screenProps: ScreenProps, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+const settle = async () => { for (let n = 0; n < 3; n++) await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+async function render(params: PluginScreenProps['params'] = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   cleanups.push(() => client.clear());
+  const openScreen = vi.fn();
+  const tree = (id = 'host-a', route = 'fleet') => <QueryClientProvider client={client}><Shell {...props(id)} params={params} route={route} openScreen={openScreen} /></QueryClientProvider>;
   let renderer!: ReactTestRenderer;
   vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
-  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} route="fleet" openScreen={screenProps.openScreen ?? vi.fn()} /></QueryClientProvider>); });
+  await act(async () => { renderer = create(tree()); });
   cleanups.push(async () => { await act(async () => renderer.unmount()); });
   await settle();
-  return renderer;
+  const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); };
+  const switchTo = async (id: string, route = 'fleet') => { await act(async () => renderer.update(tree(id, route))); await settle(); };
+  return { renderer, client, press, switchTo, openScreen };
 }
-const texts = (renderer: ReactTestRenderer) => renderer.root.findAllByType('Text' as any).map(node => node.children.join(''));
-const text = (renderer: ReactTestRenderer) => texts(renderer).join('\n');
+const text = (renderer: ReactTestRenderer) => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
 const row = (renderer: ReactTestRenderer, label: string) => renderer.root.findByProps({ testID: `orbi-family-${label}` });
-const rowText = (renderer: ReactTestRenderer, label: string) => row(renderer, label).findAllByType('Text' as any).map(node => node.children.join(''));
-const rowPage = (renderer: ReactTestRenderer, label: string) => rowText(renderer, label).join('\n');
+const rowPage = (renderer: ReactTestRenderer, label: string) => row(renderer, label).findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
 const repositoryActions = (renderer: ReactTestRenderer) => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.startsWith('View repository'));
 
-describe('host_first_overview', () => {
-  it('leads with this host, its observed families and their text facts before any configured repository', async () => {
-    host.readCatalog.mockResolvedValue(catalog([demo, rejected]));
+describe('compact host overview', () => {
+  it('leads with inventory, uses catalog repository titles and keeps default family text short without raw unit IDs', async () => {
     host.readInventory.mockResolvedValue(hostA);
-    const openScreen = vi.fn();
-    const renderer = await render(props({ openScreen }));
+    const { renderer, openScreen, press } = await render();
     const page = text(renderer);
-
-    expect(page).toContain('Your Linux user services — Host A');
-    expect(page).toContain('Host service check: complete');
-    expect(page).toContain(`Last check: ${stamp}`);
-    expect(page).toContain('Observed unit activity is not an active delivery.');
-    // Host services sit above the configured-repository section.
-    expect(page.indexOf('Your Linux user services')).toBeLessThan(page.indexOf('Demo (Example/project)'));
-
-    // Failed first, then running, then scheduled, then other/not loaded with label ties.
-    const order = ['orbi', 'orbi-demo', 'orbi-aux', 'orbi-clash', 'orbi-core'];
-    const at = order.map(label => texts(renderer).findIndex(value => value === label));
-    expect(at.every(index => index >= 0)).toBe(true);
-    expect(new Set(at).size).toBe(order.length);
-    expect(at).toEqual([...at].sort((left, right) => left - right));
-
-    // Text badges, not colour alone: several simultaneous facts stay visible.
-    expect(rowPage(renderer, 'orbi')).toContain('Failed');
-    expect(rowPage(renderer, 'orbi')).toContain('Running · Issue unknown');
-    expect(rowPage(renderer, 'orbi-demo')).toContain('Scheduled · no runner observed running');
+    expect(page.startsWith('Orbi · Host A\nServices: Current')).toBe(true);
+    expect(page.indexOf('Orbi · Host A')).toBeLessThan(page.indexOf('Repository setup'));
+    expect(page).toContain('5 families · 1 failed');
+    const ids = renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-')).map(node => node.props.testID);
+    expect(ids).toEqual(['orbi', 'orbi-demo', 'orbi-aux', 'orbi-clash', 'orbi-core'].map(id => `orbi-family-${id}`));
+    expect(rowPage(renderer, 'orbi')).toBe('orbi\nUnlinked\nFailed\nRunning');
+    expect(rowPage(renderer, 'orbi-demo')).toBe('Example/project\nScheduled\nView repository');
     expect(rowPage(renderer, 'orbi-aux')).toContain('Installed');
-    // active/exited and activating/start are observed but never counted as running.
-    expect(rowPage(renderer, 'orbi-clash')).toContain('Not running · Issue unknown');
-    expect(rowPage(renderer, 'orbi-core')).toContain('Not running · Issue unknown');
-    expect(rowPage(renderer, 'orbi')).not.toContain('Scheduled');
-
-    // Association copy: unit-name association is display-only; discovery is not authority.
-    expect(rowPage(renderer, 'orbi-demo')).toContain('Unit origin is not verified');
-    expect(rowPage(renderer, 'orbi')).toContain('no configured deployment claims this unit name');
-    expect(rowPage(renderer, 'orbi-core')).toContain('does not mean the runner is broken');
-    expect(rowPage(renderer, 'orbi-clash')).toContain('makes the association unique');
-
-    // One rich Fleet detail load for the default selected deployment, never every repository.
-    expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId)).toEqual(['demo']);
-    for (const read of [host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) expect(read).not.toHaveBeenCalled();
-
-    // Only the current unique authorized mapping offers the repository action.
-    const actions = repositoryActions(renderer);
-    expect(actions.map(node => node.props.accessibilityLabel)).toEqual(['View repository Demo']);
-    expect(actions[0].props.accessibilityRole).toBe('button');
-    await act(async () => actions[0].props.onPress());
+    for (const id of ['orbi-core', 'orbi-clash']) {
+      expect(rowPage(renderer, id)).toContain('Unknown / transitional');
+      expect(rowPage(renderer, id)).not.toContain('Idle');
+    }
+    for (const group of hostA.groups) {
+      expect(rowPage(renderer, group.label).length).toBeLessThan(100);
+      expect(rowPage(renderer, group.label)).not.toMatch(/@|association|configured deployment/);
+    }
+    for (const testID of ['orbi-host-services', 'orbi-catalog']) expect(renderer.root.findByProps({ testID }).findAllByProps({ accessibilityRole: 'alert' }).filter(node => !node.props.children)).toHaveLength(0);
+    expect(repositoryActions(renderer).map(node => node.props.accessibilityLabel)).toEqual(['View repository Demo']);
+    await press('View repository Demo');
     expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
+    expect(host.readFleet).not.toHaveBeenCalled();
+    expect(page).not.toContain('Fleet — read-only');
+    expect(page).not.toContain('@1.service');
+    await press('Expand orbi-core'); await press('Technical details for orbi-core');
+    expect(rowPage(renderer, 'orbi-core')).toContain('does not mean the runner is broken');
+    await press('Expand orbi-clash'); await press('Technical details for orbi-clash');
+    expect(rowPage(renderer, 'orbi-clash')).toContain('makes the association unique');
+    for (const read of [host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) expect(read).not.toHaveBeenCalled();
   });
 
-  it('expands one family in place to per-slot service and timer state with an expanded state', async () => {
-    host.readInventory.mockResolvedValue(hostA);
-    const renderer = await render(props());
-    expect(rowPage(renderer, 'orbi')).not.toContain('orbi@1.service');
+  it('pairs exact numeric slots, preserves missing/unknown/transitional states and separates technical details', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
+      unit('orbi@10.timer', 'timer', 'active', 'waiting'), unit('orbi@1.timer', 'timer', 'active', 'waiting'),
+      unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@2.service', 'service', 'active', 'exited'),
+      unit('orbi@3.service', 'service', null, null), unit('orbi@01.service', 'service', 'activating', 'start'),
+      unit('orbi@4.service', 'service', 'active', 'running'), unit('orbi@4.timer', 'timer', 'failed', 'failed'),
+      unit('orbi@.service', 'service', null, null),
+    ])] }));
+    const { renderer, press } = await render();
     const expand = renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' });
-    expect(expand.props.accessibilityRole).toBe('button');
-    expect(expand.props.accessibilityState).toEqual({ expanded: false });
-    await act(async () => expand.props.onPress()); await settle();
+    expect(expand.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
+    expect(rowPage(renderer, 'orbi')).toContain('Failed\nRunning');
+    await press('Expand orbi');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' }).props.accessibilityState.expanded).toBe(true);
     const slots = rowPage(renderer, 'orbi');
-    expect(slots).toContain('orbi@1.service: failed/failed, load loaded; unit file enabled');
-    expect(slots).toContain('orbi@1.timer: active/waiting, load loaded; unit file enabled');
-    expect(slots).toContain('orbi@2.service: active/running, load loaded; unit file enabled');
-    const collapse = renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' });
-    expect(collapse.props.accessibilityState).toEqual({ expanded: true });
-    // One family is expanded in place at a time.
-    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Expand orbi-aux' }).props.onPress()); await settle();
-    expect(rowPage(renderer, 'orbi')).not.toContain('orbi@1.service');
-    // A template declaration is an installed name, not a running service.
-    expect(rowPage(renderer, 'orbi-aux')).toContain('Installed');
-    expect(rowPage(renderer, 'orbi-aux')).toContain('orbi-aux@.service: runtime not observed; unit file enabled (template, not a running service)');
-    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi-aux' }).props.onPress()); await settle();
-    expect(rowPage(renderer, 'orbi-aux')).not.toContain('orbi-aux@.service');
+    expect(slots).toContain('Slot 1 · Idle · Timer waiting');
+    expect(slots).toContain('Slot 2 · active/exited · Timer not observed');
+    expect(slots).toContain('Slot 3 · Unknown · Timer not observed');
+    expect(slots).toContain('Slot 4 · Running · Timer failed');
+    expect(slots).toContain('Slot 01 · activating/start · Timer not observed');
+    expect(slots).toContain('Slot 10 · Service not observed · Timer waiting');
+    expect(slots).not.toContain('@');
+    expect(slots).not.toContain('Discovery is not authority');
+    await press('Technical details for orbi');
+    expect(rowPage(renderer, 'orbi')).toContain('orbi@.service: runtime not observed; unit file enabled (template, not a running service)');
+    expect(rowPage(renderer, 'orbi')).toContain('Discovery is not authority');
+    expect(rowPage(renderer, 'orbi')).toContain('Unit activity does not establish issue delivery');
+    await press('Technical details for orbi');
+    expect(rowPage(renderer, 'orbi')).not.toContain('@');
   });
 
-  it('separates a waiting timer from an inactive runner and keeps a running runner visible beside a failed timer', async () => {
-    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [
-      family('orbi-waiting', 'runner-family', 'matched', 'demo', [
-        unit('orbi-waiting@1.service', 'service', 'inactive', 'dead', 'disabled'),
-        unit('orbi-waiting@1.timer', 'timer', 'active', 'waiting'),
-      ]),
-      family('orbi-mixed', 'runner-family', 'unmatched', null, [
-        unit('orbi-mixed@1.service', 'service', 'active', 'running'),
-        unit('orbi-mixed@1.timer', 'timer', 'failed', 'failed'),
-      ]),
-    ] }));
-    const renderer = await render(props());
-    expect(rowPage(renderer, 'orbi-waiting')).toContain('Scheduled · no runner observed running');
-    expect(rowPage(renderer, 'orbi-waiting')).not.toContain('Running · Issue unknown');
-    expect(rowPage(renderer, 'orbi-mixed')).toContain('Failed');
-    expect(rowPage(renderer, 'orbi-mixed')).toContain('Running · Issue unknown');
-    // A row never invents an issue number or a timer trigger from the schedule.
-    for (const label of ['orbi-waiting', 'orbi-mixed']) expect(rowPage(renderer, label)).not.toMatch(/Last trigger|Next trigger|issue \d/i);
-    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Expand orbi-mixed' }).props.onPress()); await settle();
-    expect(rowPage(renderer, 'orbi-mixed')).toContain('orbi-mixed@1.service: active/running, load loaded; unit file enabled');
-    expect(rowPage(renderer, 'orbi-mixed')).toContain('orbi-mixed@1.timer: failed/failed, load loaded; unit file enabled');
+  it('does not infer absent counterparts from partial inventory and retains partial evidence as a success', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'partial', groups: [family('orbi', 'unmatched', null, [
+      unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@2.timer', 'timer', 'active', 'waiting'),
+    ])], problems: [{ source: 'runtime', code: 'row_limit' }] }));
+    const { renderer, press, client } = await render();
+    await press('Expand orbi');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Idle · Timer not observed');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 2 · Service not observed · Timer waiting');
+    expect(rowPage(renderer, 'orbi')).not.toMatch(/missing|not found/);
+    expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({ state: 'partial', lastSuccessfulAt: stamp });
+    host.readInventory.mockRejectedValue(new Error('failed'));
+    await press('Refresh host services');
+    expect(text(renderer)).toContain(`Last success: ${stamp}`);
+    expect(text(renderer)).toContain('Stale · current activity unknown');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 2 · Service not observed · Timer waiting');
   });
 
-  it('retains the host-scoped expanded family across an in-page remount and falls back to the Overview heading', async () => {
+  it.each(['not-found', 'error', 'unknown'])('never labels %s load as Idle at family or slot level', async loadState => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
+      unit('orbi@1.service', 'service', 'inactive', 'dead', loadState), unit('orbi@1.timer', 'timer', 'inactive', 'dead', loadState),
+    ])] }));
+    const { renderer, press } = await render();
+    expect(rowPage(renderer, 'orbi')).toContain('Unknown / transitional');
+    expect(rowPage(renderer, 'orbi')).not.toContain('Idle');
+    await press('Expand orbi');
+    expect(rowPage(renderer, 'orbi')).not.toMatch(/Idle|Timer idle/);
+    expect(rowPage(renderer, 'orbi')).toContain(loadState === 'not-found' ? 'Service not found · Timer not found' : `Load ${loadState} · inactive/dead`);
+  });
+
+  it('resolves final mixed raw/short display-name collisions to exact family labels', async () => {
+    const labels = ['orbi-12345678', 'orbi-orbi-12345678-12345678'];
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: labels.map(label => family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', 'inactive', 'dead')])) }));
+    const { renderer } = await render();
+    for (const label of labels) expect(rowPage(renderer, label)).toBe(`${label}\nUnlinked\nIdle`);
+    expect(repositoryActions(renderer)).toHaveLength(0);
+  });
+
+  it('falls back to the Overview heading when the retained expanded family disappears', async () => {
     host.readInventory.mockResolvedValue(hostA);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    cleanups.push(() => client.clear());
-    vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
-    const tree = () => <QueryClientProvider client={client}><Shell {...props()} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
-    let renderer!: ReactTestRenderer;
-    const mount = async () => { await act(async () => { renderer = create(tree()); }); await settle(); return renderer; };
-    await mount();
-    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' }).props.onPress()); await settle();
-    await act(async () => renderer.unmount());
-    // Same host/repository after in-page navigation: the family is still expanded.
-    const returned = await mount();
-    expect(returned.root.findByProps({ accessibilityLabel: 'Collapse orbi' })).toBeDefined();
-    await act(async () => renderer.unmount());
-    // Same surface but the retained family is gone: the Overview heading is the fallback target.
-    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [
-      family('orbi-demo', 'runner-family', 'matched', 'demo', [unit('orbi-demo@1.service', 'service', 'active', 'running')]),
-    ] }));
-    const fresh = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    cleanups.push(() => fresh.clear());
-    const fallbackTree = () => <QueryClientProvider client={fresh}><Shell {...props()} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
-    await act(async () => { renderer = create(fallbackTree()); }); await settle();
-    const fallback = renderer;
-    expect(fallback.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' })).toBeDefined();
-    expect(fallback.root.findAllByProps({ accessibilityLabel: 'Collapse orbi' })).toHaveLength(0);
-    expect(fallback.root.findByProps({ testID: 'orbi-overview-heading' }).props.accessibilityRole).toBe('header');
-    await act(async () => renderer.unmount());
+    const { renderer, press, switchTo } = await render();
+    await press('Expand orbi');
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: hostA.groups.filter(group => group.label !== 'orbi') }));
+    await press('Refresh host services');
+    await switchTo('host-a', 'issues');
+    await switchTo('host-a');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Collapse orbi' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' })).toBeDefined();
+    expect(renderer.root.findByProps({ testID: 'orbi-overview-heading' }).props.accessibilityRole).toBe('header');
   });
 
-  it('keeps a pending host-A observation out of host B with the same label and slot, and resets host UI state', async () => {
-    let finishA!: (value: ServiceInventory) => void;
-    host.readInventory.mockImplementationOnce(() => new Promise(resolve => { finishA = resolve as (value: ServiceInventory) => void; }));
-    host.readInventory.mockResolvedValue(hostB);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    cleanups.push(() => client.clear());
-    let renderer!: ReactTestRenderer;
-    vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
-    const tree = (screenProps: ScreenProps) => <QueryClientProvider client={client}><Shell {...screenProps} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
-    await act(async () => { renderer = create(tree(props())); });
-    cleanups.push(async () => { await act(async () => renderer.unmount()); });
-    await settle();
-    expect(text(renderer)).toContain("Reading the selected host's user services.");
+  it('shortens only known prefixes for display, disambiguates slug collisions and never invents repository links', async () => {
+    const labels = ['orbi-short-trunc-1234abcd', 'orbi-same-1234abcd', 'orbi-same-9876abcd'];
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: labels.map(label => family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', 'inactive', 'dead')])) }));
+    const { renderer, press } = await render();
+    expect(rowPage(renderer, labels[0])).toBe('short-trunc\nUnlinked\nIdle');
+    expect(rowPage(renderer, labels[1])).toBe('same · 1234abcd\nUnlinked\nIdle');
+    expect(rowPage(renderer, labels[2])).toBe('same · 9876abcd\nUnlinked\nIdle');
+    expect(repositoryActions(renderer)).toHaveLength(0);
+    expect(text(renderer)).not.toContain(labels[0]);
+    await press(`Expand ${labels[0]}`);
+    await press(`Technical details for ${labels[0]}`);
+    expect(rowPage(renderer, labels[0])).toContain(labels[0]);
+  });
 
+  it('retains one expanded family on in-page remount and resets expansion and setup on host switch', async () => {
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press, switchTo } = await render();
+    await press('Expand orbi');
+    await switchTo('host-a', 'issues');
+    await switchTo('host-a');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' })).toBeDefined();
+    await press('Expand orbi-demo');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' })).toBeDefined();
+    await press('Repository setup');
     host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
-    await act(async () => renderer.update(tree(props({ host: { id: 'host-b', label: 'Host B' } })))); await settle();
-    expect(text(renderer)).toContain('Your Linux user services — Host B');
-    expect(rowPage(renderer, 'orbi')).toContain('Running · Issue unknown');
-    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' }).props.onPress()); await settle();
-    expect(rowPage(renderer, 'orbi')).toContain('orbi@1.service: active/running, load loaded; unit file enabled');
+    host.readInventory.mockResolvedValue(hostB);
+    await switchTo('host-b');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' })).toBeDefined();
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Repository setup' }).props.accessibilityState.expanded).toBe(false);
+    await switchTo('host-a');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Repository setup' }).props.accessibilityState.expanded).toBe(false);
+    expect(renderer.root.findByProps({ testID: 'orbi-overview-heading' }).props.accessibilityRole).toBe('header');
+  });
 
-    // The cancelled host-A generation may never publish into host B or its cache key.
-    await act(async () => { finishA(hostA); }); await settle();
-    expect(text(renderer)).toContain('Your Linux user services — Host B');
+  it('keeps a cancelled pending host-A result out of host B with the same family and slot', async () => {
+    let finishA!: (value: ServiceInventory) => void;
+    host.readInventory.mockImplementationOnce(() => new Promise(resolve => { finishA = resolve as typeof finishA; })).mockResolvedValue(hostB);
+    const { renderer, client, switchTo } = await render();
+    expect(text(renderer)).toContain('Reading services…');
+    host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
+    await switchTo('host-b');
+    expect(text(renderer)).toContain('Orbi · Host B');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    await act(async () => finishA(hostA)); await settle();
     expect(text(renderer)).not.toContain('Failed');
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toBeUndefined();
-
-    // A host switch discards the previous host's expansion state.
-    host.readInventory.mockResolvedValue(hostA);
-    await act(async () => renderer.update(tree(props()))); await settle();
-    expect(text(renderer)).toContain('Your Linux user services — Host A');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' })).toBeDefined();
   });
 });
 
-describe('host_services_states', () => {
-  const renderWith = async (value: ServiceInventory, overrides: Partial<ScreenProps> = {}) => {
-    host.readInventory.mockResolvedValue(value);
-    return render(props(overrides));
-  };
-
-  it('shows the selected host, an undecided state and one reachable setup disclosure when inventory is off', async () => {
-    const renderer = await renderWith(inventory({ state: 'off', observedAt: null }));
-    const page = text(renderer);
-    expect(page).toContain('Your Linux user services — Host A');
-    expect(page).toContain('Host service check: off');
-    expect(page).toContain('undecided');
-    // Off is not an observation: no zero count, failure count or never timestamp.
-    expect(page).not.toContain('Observed unit families');
-    expect(page).not.toContain('families with failed units');
-    expect(page).not.toContain('Last check');
-    expect(page).not.toContain('last successful check');
-    expect(page).not.toContain('never');
-    // No deployment claims "not observed" and no Refresh implies it can enable access.
-    expect(page).not.toContain('Not observed in this host service check');
+describe('host states and authority', () => {
+  it('keeps off undecided, count-free and Refresh-free, with opt-in prose behind a disclosure even offline', async () => {
+    const { renderer, press, switchTo } = await render();
+    expect(text(renderer)).toContain('Service check off · activity unknown');
+    expect(text(renderer)).not.toContain('0 families');
+    expect(text(renderer)).not.toContain('Not observed in this host service check');
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
-    // One reachable disclosure carries the existing operator instructions and audience.
-    const disclosure = renderer.root.findByProps({ accessibilityLabel: 'Set up service access' });
-    expect(disclosure.props.accessibilityRole).toBe('button');
-    expect(disclosure.props.accessibilityState).toEqual({ expanded: false });
-    expect(page).not.toContain('PASEO_ORBI_HOST_INVENTORY=1');
-    await act(async () => disclosure.props.onPress()); await settle();
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Set up service access' }).props.accessibilityState).toEqual({ expanded: true });
-    const setup = text(renderer);
-    expect(setup).toContain('PASEO_ORBI_HOST_INVENTORY=1');
-    expect(setup).toContain('explicitly authorize a reload');
-    expect(setup).toContain('Connected clients on this host can then see Orbi unit names');
-    expect(setup).toContain('Refresh cannot enable access');
-    expect(setup).not.toContain('Observed unit families');
-    expect(host.readInventory).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the off state undecided and Refresh-free when the selected host goes offline', async () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    cleanups.push(() => client.clear());
-    let renderer!: ReactTestRenderer;
-    vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
-    const tree = () => <QueryClientProvider client={client}><Shell {...props()} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
-    await act(async () => { renderer = create(tree()); });
-    cleanups.push(async () => { await act(async () => renderer.unmount()); });
-    await settle();
-    host.hosts[0] = { serverId: 'host-a', label: 'Host A', status: 'offline' };
-    await act(async () => renderer.update(tree())); await settle();
-    const page = text(renderer);
-    const panel = renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
-    expect(page).toContain('Host service check: off');
-    expect(panel).toContain('Selected host is offline');
-    // Off stays undecided offline: no count, no absence claim, and no instruction
-    // to press a Refresh control the off state does not render.
-    expect(panel).not.toContain('Observed unit families');
-    expect(panel).not.toContain('No matching Orbi user units');
-    expect(panel).not.toContain('then Refresh');
+    expect(text(renderer)).not.toContain('PASEO_ORBI_HOST_INVENTORY=1');
+    await press('Set up service access');
+    expect(text(renderer)).toContain('PASEO_ORBI_HOST_INVENTORY=1');
+    expect(text(renderer)).toContain('Refresh cannot enable access');
+    expect(text(renderer)).toContain('Connected clients on this host');
+    host.hosts[0].status = 'offline';
+    await switchTo('host-a');
+    expect(text(renderer)).toContain('Offline · current activity unknown');
+    expect(text(renderer)).toContain('Service check off · activity unknown');
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
   });
 
-  it('reports no matching units only for a fresh complete empty observation', async () => {
-    const complete = await renderWith(inventory({ state: 'complete' }));
-    expect(text(complete)).toContain("No matching Orbi user units found in the selected host's user services");
+  it('claims empty only for current complete evidence and keeps stale success and safe refresh errors visible', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete' }));
+    const { renderer, press } = await render();
+    expect(text(renderer)).toContain('No Orbi units found.');
+    expect(text(renderer)).toContain('0 families · 0 failed');
     await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
-    expect(text(complete)).toContain("Showing this host's last successful observation");
-    expect(text(complete)).not.toContain('No matching Orbi user units found');
-    expect(text(complete)).not.toContain('Observed unit families');
-  });
-
-  it('reports partial results as possibly missing units with a repair step', async () => {
-    const partial = await renderWith(inventory({ state: 'partial', sources: [
-      { source: 'runtime', state: 'complete', observedAt: stamp, problems: [] },
-      { source: 'installed', state: 'unavailable', observedAt: stamp, problems: [{ source: 'installed', code: 'process_failed' }] },
-    ], problems: [{ source: 'installed', code: 'process_failed' }] }));
-    expect(text(partial)).toContain('Other units may be missing');
-    expect(text(partial)).toContain('do not treat this as empty');
-    expect(text(partial)).toContain('installed: process_failed');
-    expect(text(partial)).toContain('Ask the operator to check user systemd/DBus access on this host, then Refresh.');
-    expect(text(partial)).not.toContain('No matching Orbi user units found');
-    expect(text(partial)).not.toContain('Observed unit families');
-    // Partial host evidence is still evidence: it may be retained as a success.
-    expect(text(partial)).toContain('last successful check: ' + stamp);
-  });
-
-  it('reports denied or unavailable reads as unknown activity with a safe alert', async () => {
-    const unavailable = await renderWith(inventory({ state: 'unavailable', sources: [], problems: [{ source: 'runtime', code: 'process_failed' }, { source: 'installed', code: 'process_failed' }] }));
-    expect(text(unavailable)).toContain('Current activity on this host is unknown');
-    expect(text(unavailable)).toContain('runtime: process_failed; installed: process_failed');
-    expect(unavailable.root.findByProps({ testID: 'orbi-host-services' }).findByProps({ accessibilityRole: 'alert' }).props.children).toBe('runtime: process_failed; installed: process_failed');
-    // A denied check is never retained as this host's success, at any age.
-    expect(text(unavailable)).toContain('last successful check: never');
-    expect(text(unavailable)).not.toContain('last successful observation');
-    // ...and it never becomes per-deployment "not observed" evidence or a zero count.
-    expect(text(unavailable)).not.toContain('Not observed in this host service check');
-    expect(text(unavailable)).not.toContain('Observed in this host service check');
-    expect(text(unavailable)).not.toContain('Observed unit families');
-    await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
-    expect(text(unavailable)).toContain('Current activity on this host is unknown');
-    expect(text(unavailable)).not.toContain("Showing this host's last successful observation");
-    expect(text(unavailable)).toContain('last successful check: never');
-  });
-
-  it('shows only this host last successful observation, distinctly labelled, after a failed refresh', async () => {
-    host.readInventory.mockReset().mockResolvedValueOnce(hostA);
-    const renderer = await render(props());
-    expect(text(renderer)).toContain(`Last check: ${stamp}`);
+    expect(text(renderer)).toContain('Stale · current activity unknown');
+    expect(text(renderer)).toContain(`Last success: ${stamp}`);
+    expect(text(renderer)).not.toContain('No Orbi units found.');
+    expect(text(renderer)).not.toContain('0 families');
     host.readInventory.mockRejectedValue(new Error('SECRET raw transport error'));
-    await act(async () => { await renderer.root.findByProps({ accessibilityLabel: 'Refresh host services' }).props.onPress(); }); await settle();
-    expect(text(renderer)).toContain(`Showing this host's last successful observation from ${stamp}; current activity is unknown.`);
+    await press('Refresh host services');
     expect(text(renderer)).toContain('filesystem: refresh_failed');
-    expect(rowPage(renderer, 'orbi')).toContain('Running · Issue unknown');
     expect(text(renderer)).not.toContain('SECRET');
   });
 
-  it('disables Refresh and reads nothing while the selected host is offline', async () => {
-    host.hosts[0] = { serverId: 'host-a', label: 'Host A', status: 'offline' };
-    const renderer = await renderWith(hostA);
-    expect(text(renderer)).toContain('Selected host is offline');
-    expect(text(renderer)).toContain('current activity is unknown');
-    const refresh = renderer.root.findByProps({ accessibilityLabel: 'Refresh host services' });
-    expect(refresh.props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
-    await act(async () => refresh.props.onPress()); await settle();
+  it('retains this host families as stale after failed refresh, without current counts', async () => {
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    host.readInventory.mockRejectedValue(new Error('SECRET'));
+    await press('Refresh host services');
+    expect(text(renderer)).toContain('Stale · current activity unknown');
+    expect(text(renderer)).toContain(`Last success: ${stamp}`);
+    expect(rowPage(renderer, 'orbi')).toContain('Failed\nRunning');
+    expect(text(renderer)).not.toContain('5 families');
+  });
+
+  it.each(['partial', 'unavailable'] as const)('shows %s and problems without zero counts or absence claims', async state => {
+    host.readInventory.mockResolvedValue(inventory({ state, sources: [], problems: [{ source: 'runtime', code: 'process_failed' }] }));
+    const { renderer } = await render();
+    expect(text(renderer)).toContain(`Services: ${state}`);
+    expect(text(renderer)).toContain('runtime: process_failed');
+    expect(text(renderer)).toContain('Read failed · check systemd/DBus access.');
+    expect(text(renderer)).not.toContain('0 families');
+    expect(text(renderer)).not.toContain('No Orbi units found');
+    if (state === 'partial') expect(text(renderer)).toContain('units may be missing');
+    else {
+      expect(text(renderer)).toContain('Unavailable · current activity unknown');
+      expect(text(renderer)).not.toContain('Observed in this host service check');
+      await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
+      expect(renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join('')).join('\n')).not.toContain('Last success:');
+    }
+  });
+
+  it('disables refresh without reading another host when offline', async () => {
+    host.hosts[0].status = 'offline';
+    const { renderer, press } = await render();
+    expect(text(renderer)).toContain('Offline · current activity unknown');
+    expect(text(renderer)).toContain('Catalog: offline');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh host services' }).props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
+    await press('Refresh host services');
     expect(host.readInventory).not.toHaveBeenCalled();
   });
-});
 
-describe('host_overview_and_repository_authority', () => {
-  it.each([
-    ['unconfigured', { state: 'unconfigured', entries: [], problems: [] } as DeploymentCatalog],
-    ['invalid', { state: 'invalid', entries: [], problems: [{ source: 'config', code: 'invalid_config' }] } as DeploymentCatalog],
-  ])('keeps opted-in host inventory with a %s catalog and grants no repository detail', async (_state, catalogValue) => {
-    host.readCatalog.mockResolvedValue(catalogValue);
+  it.each(['unconfigured', 'invalid'] as const)('keeps %s visible with guidance collapsed below inventory and grants no repository authority', async state => {
+    host.readCatalog.mockResolvedValue({ state, entries: [], problems: [] });
     host.readInventory.mockResolvedValue(hostA);
-    const renderer = await render(props());
-    expect(text(renderer)).toContain('Your Linux user services — Host A');
-    expect(rowPage(renderer, 'orbi-demo')).toContain('Scheduled · no runner observed running');
-    // Missing/invalid authorization still blocks every privileged read and action.
-    expect(rowPage(renderer, 'orbi-demo')).toContain('not in the current authorized catalog');
+    const { renderer, press, switchTo } = await render();
+    expect(text(renderer)).toContain(`Catalog: ${state}`);
+    expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
+    expect(text(renderer).indexOf('Orbi · Host A')).toBeLessThan(text(renderer).indexOf('Repository setup'));
+    expect(rowPage(renderer, 'orbi-demo')).toContain('Unlinked');
     expect(repositoryActions(renderer)).toHaveLength(0);
+    await press('Expand orbi-demo'); await press('Technical details for orbi-demo');
+    expect(rowPage(renderer, 'orbi-demo')).toContain('not in the current authorized catalog');
+    await press('Repository setup');
+    expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
+    await switchTo('host-a', 'issues');
+    expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
     for (const read of [host.readFleet, host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) expect(read).not.toHaveBeenCalled();
   });
 
-  it('lists configured deployments that were not observed and loads detail only for the selected or expanded one', async () => {
+  it('keeps catalog stale/unavailable visible while setup is collapsed', async () => {
+    const { renderer, press } = await render();
+    host.readCatalog.mockRejectedValue(new Error('SECRET'));
+    await press('Repository setup');
+    await act(async () => renderer.root.findByProps({ testID: 'orbi-catalog' }).findByProps({ accessibilityLabel: 'Refresh' }).props.onPress()); await settle();
+    await press('Repository setup');
+    expect(text(renderer)).toContain('Catalog: stale');
+    expect(text(renderer)).toContain('filesystem: refresh_failed');
+    expect(text(renderer)).not.toContain('SECRET');
+  });
+
+  it('keeps initial catalog failure visible and refuses repository detail', async () => {
+    host.readCatalog.mockRejectedValue(new Error('SECRET'));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer } = await render();
+    expect(text(renderer)).toContain('Catalog: unavailable');
+    expect(text(renderer)).not.toContain('SECRET');
+    expect(repositoryActions(renderer)).toHaveLength(0);
+    expect(host.readFleet).not.toHaveBeenCalled();
+  });
+
+  it('mounts rich repositories only on expansion, stops collapsed polling and resets on host switch', async () => {
+    const { renderer, press, switchTo } = await render();
+    const disclosure = () => renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' });
+    expect(disclosure().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
+    expect(host.readFleet).not.toHaveBeenCalled();
+    await press('Configured repositories');
+    expect(disclosure().props.accessibilityState.expanded).toBe(true);
+    expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId)).toEqual(['demo']);
+    expect(text(renderer)).toContain('Fleet — read-only');
+    await press('Configured repositories');
+    expect(text(renderer)).not.toContain('Fleet — read-only');
+    const calls = host.readFleet.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
+    expect(host.readFleet).toHaveBeenCalledTimes(calls);
+    await press('Configured repositories');
+    host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
+    await switchTo('host-b');
+    expect(disclosure().props.accessibilityState.expanded).toBe(false);
+    await switchTo('host-a');
+    expect(disclosure().props.accessibilityState.expanded).toBe(false);
+  });
+
+  it('lists unobserved configured deployments, loads only one detail and preserves selected navigation', async () => {
     host.readCatalog.mockResolvedValue(catalog([demo, second]));
-    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [
-      family('orbi-second', 'runner-family', 'matched', 'second', [unit('orbi-second@1.service', 'service', 'active', 'running')]),
-    ] }));
-    const openScreen = vi.fn();
-    const renderer = await render(props({ openScreen, params: { deploymentId: 'demo' } }));
-    expect(text(renderer)).toContain('Demo (Example/project)');
-    expect(text(renderer)).toContain('Second (Other/repository)');
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi-second', 'matched', 'second', [unit('orbi-second@1.service', 'service', 'active', 'running')])] }));
+    const { renderer, press, openScreen } = await render({ deploymentId: 'demo' });
     expect(text(renderer)).toContain('Not observed in this host service check');
     expect(text(renderer)).toContain('Observed in this host service check');
     expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId)).toEqual(['demo']);
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Hide details for Demo' })).toBeDefined();
-    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Show details for Second' }).props.onPress()); await settle();
+    await press('Show details for Second');
     expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId)).toEqual(['demo', 'second']);
-    // Selected deployment parameters survive Overview -> Runs on the same host/repo.
-    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Open Runs' }).props.onPress());
+    await press('Open Runs');
     expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs', params: { deploymentId: 'demo' } });
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.accessibilityState.expanded).toBe(true);
+    await press('Configured repositories');
+    expect(text(renderer)).not.toContain('Fleet — read-only');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.accessibilityState.expanded).toBe(false);
   });
 });

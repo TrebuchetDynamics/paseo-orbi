@@ -11,13 +11,14 @@ import { useObservationQuery } from './observation';
 // when the server already validated a unique exact unit-name prefix, and the
 // client still requires that deployment to be available in the current catalog.
 
-type FamilyFact = 'failed' | 'running' | 'scheduled' | 'installed' | 'notRunning';
+type FamilyFact = 'failed' | 'running' | 'scheduled' | 'installed' | 'idle' | 'unknown';
 const familyFactText: Record<FamilyFact, string> = {
   failed: 'Failed',
-  running: 'Running · Issue unknown',
-  scheduled: 'Scheduled · no runner observed running',
+  running: 'Running',
+  scheduled: 'Scheduled',
   installed: 'Installed',
-  notRunning: 'Not running · Issue unknown',
+  idle: 'Idle',
+  unknown: 'Unknown / transitional',
 };
 
 export function useHostServicesQuery(options: { hostId: string; connected: boolean; foreground: boolean }) {
@@ -56,7 +57,7 @@ function summarizeFamily(group: InventoryGroup) {
   if (running > 0) facts.push('running');
   else if (waiting) facts.push('scheduled');
   if (group.units.length > 0 && observed.length === 0) facts.push('installed');
-  if (facts.length === 0) facts.push('notRunning');
+  if (facts.length === 0) facts.push(observed.length === group.units.length && observed.length > 0 && observed.every(unit => runtime(unit).loadState === 'loaded' && runtime(unit).activeState === 'inactive' && runtime(unit).subState === 'dead') ? 'idle' : 'unknown');
   return { facts, running };
 }
 function familyRank(group: InventoryGroup) {
@@ -106,30 +107,87 @@ const associationText = (group: InventoryGroup, entry: DeploymentCatalog['entrie
   return 'Discovered on this host only; no configured deployment claims this unit name, so repository detail is unavailable. Discovery is not authority.';
 };
 
-function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle }: {
+// These names are presentation only: never use a slug for authorization or navigation.
+const shortName = (label: string) => /^orbi-(.+)-[a-f0-9]{8}$/.exec(label)?.[1] ?? label;
+function authorizedEntry(group: InventoryGroup, entries: DeploymentCatalog['entries'] | null) {
+  const candidates = entries?.filter(candidate => candidate.id === group.deploymentId) ?? [];
+  return group.association === 'matched' && candidates.length === 1 && candidates[0].status === 'available' ? candidates[0] : null;
+}
+function displayNames(groups: InventoryGroup[], entries: DeploymentCatalog['entries'] | null) {
+  const names = new Map(groups.map(group => {
+    const collision = groups.some(other => other.label !== group.label && shortName(other.label) === shortName(group.label));
+    return [group.label, authorizedEntry(group, entries)?.repo ?? `${shortName(group.label)}${collision ? ` · ${group.label.slice(-8)}` : ''}`];
+  }));
+  // Resolve final-name collisions, including raw/short names and collisions
+  // introduced by a fallback. Exact labels are unique inventory identities.
+  for (;;) {
+    const counts = new Map<string, number>();
+    for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+    let changed = false;
+    for (const [label, name] of names) {
+      if (counts.get(name)! > 1 && name !== label) { names.set(label, label); changed = true; }
+    }
+    if (!changed) return names;
+  }
+}
+function slotState(unit: InventoryUnit | undefined, timer = false): string {
+  const prefix = timer ? 'Timer ' : '';
+  if (!unit) return timer ? 'Timer not observed' : 'Service not observed';
+  const runtime = unit.runtime;
+  if (!runtime) return `${prefix}${timer ? 'unknown' : 'Unknown'}`;
+  if (runtime.activeState === 'failed' || runtime.subState === 'failed') return `${prefix}${timer ? 'failed' : 'Failed'}`;
+  if (runtime.loadState === 'not-found') return timer ? 'Timer not found' : 'Service not found';
+  if (runtime.loadState !== 'loaded') return `${prefix}Load ${runtime.loadState} · ${runtime.activeState}/${runtime.subState}`;
+  if (runtime.activeState === 'inactive' && runtime.subState === 'dead') return timer ? 'Timer idle' : 'Idle';
+  if (runtime.activeState === 'active' && runtime.subState === (timer ? 'waiting' : 'running')) return timer ? 'Timer waiting' : 'Running';
+  return `${prefix}${runtime.activeState}/${runtime.subState}`;
+}
+function slotLines(group: InventoryGroup): string[] {
+  const slots = new Map<string, { service?: InventoryUnit; timer?: InventoryUnit }>();
+  for (const unit of group.units) {
+    const match = /^(.*)@(\d+)\.(service|timer)$/.exec(unit.id);
+    if (!match || match[1] !== group.label) continue;
+    const slot = slots.get(match[2]) ?? {};
+    slot[match[3] as 'service' | 'timer'] = unit;
+    slots.set(match[2], slot);
+  }
+  return [...slots].sort(([a], [b]) => {
+    const left = a.replace(/^0+/, '') || '0', right = b.replace(/^0+/, '') || '0';
+    return left.length - right.length || left.localeCompare(right) || a.localeCompare(b);
+  }).map(([id, slot]) => `Slot ${id} · ${slotState(slot.service)} · ${slotState(slot.timer, true)}`);
+}
+function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle, name }: {
   group: InventoryGroup; hostId: string; theme: PluginHostProps['theme'];
   entries: DeploymentCatalog['entries'] | null; openScreen: PluginClientContext['openScreen'];
-  expanded: boolean; toggle: () => void;
+  expanded: boolean; toggle: () => void; name: string;
 }) {
   const text = { color: theme.colors.foreground };
   const { facts } = summarizeFamily(group);
-  const entry = group.association === 'matched' && group.deploymentId !== null
-    ? entries?.find(candidate => candidate.id === group.deploymentId && candidate.status === 'available') ?? null
-    : null;
-  return <View testID={`orbi-family-${group.label}`} style={{ gap: 4, padding: 8, borderWidth: 1, borderColor: theme.colors.foreground }}>
-    <Text style={text}>{group.label}</Text>
-    <Text style={text}>Host unit family ({group.kind})</Text>
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {facts.map(fact => <Text key={fact} style={text}>{familyFactText[fact]}</Text>)}
-    </View>
-    <Text style={text}>{associationText(group, entry)}</Text>
-    {entry !== null && <Pressable accessibilityRole="button" accessibilityLabel={`View repository ${entry.label}`}
-      style={{ padding: 4, borderWidth: 1, borderColor: theme.colors.foreground }}
-      onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })}><Text style={text}>View repository</Text></Pressable>}
+  const entry = authorizedEntry(group, entries);
+  const [technical, setTechnical] = useState(false);
+  return <View testID={`orbi-family-${group.label}`} style={{ gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityState={{ expanded }}
-      style={{ padding: 4, borderWidth: 1, borderColor: theme.colors.foreground }}
-      onPress={toggle}><Text style={text}>{expanded ? 'Hide slots' : 'Inspect slots'}</Text></Pressable>
-    {expanded && <View style={{ gap: 2 }}>{group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={text}>{unitLine(unit)}</Text>)}</View>}
+      style={{ minHeight: 44, justifyContent: 'center' }} onPress={toggle}>
+      <Text style={{ ...text, fontSize: 16, fontWeight: '600', flexShrink: 1 }}>{name}</Text>
+    </Pressable>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 6 }}>
+      {!entry && <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Unlinked</Text>}
+      {facts.map(fact => <Text key={fact} style={{ ...text, fontSize: 12 }}>{familyFactText[fact]}</Text>)}
+    </View>
+    {entry !== null && <Pressable accessibilityRole="button" accessibilityLabel={`View repository ${entry.label}`}
+      style={{ minHeight: 44, justifyContent: 'center' }}
+      onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })}><Text style={text}>View repository</Text></Pressable>}
+    {expanded && <View style={{ gap: 2 }}>
+      {slotLines(group).map(line => <Text key={line} style={text}>{line}</Text>)}
+      <Pressable accessibilityRole="button" accessibilityLabel={`Technical details for ${group.label}`} accessibilityState={{ expanded: technical }}
+        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setTechnical(value => !value)}><Text style={text}>Technical details</Text></Pressable>
+      {technical && <View style={{ gap: 2 }}>
+        <Text style={text}>{group.label}</Text>
+        <Text style={text}>{associationText(group, entry)}</Text>
+        <Text style={text}>Unit activity does not establish issue delivery.</Text>
+        {group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={text}>{unitLine(unit)}</Text>)}
+      </View>}
+    </View>}
   </View>;
 }
 
@@ -145,6 +203,7 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   const observation = query.observation;
   const data = observation?.data ?? null;
   const families = sortFamilies(data?.groups ?? []);
+  const names = displayNames(families, entries);
   const attention = families.filter(group => summarizeFamily(group).facts.includes('failed')).length;
   const off = data?.state === 'off';
   const state = data?.state ?? (!connected || !foreground ? 'unavailable' : 'loading');
@@ -164,30 +223,26 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   const failed = (data?.problems ?? []).some(problem => ['process_failed', 'process_timeout', 'process_limit'].includes(problem.code));
   const stale = observation?.state === 'stale' && observation.lastSuccessfulAt !== null;
   const copies = [
-    current && data?.state === 'complete' && families.length === 0 ? "No matching Orbi user units found in the selected host's user services (complete check)." : '',
-    current && data?.state === 'partial' && families.length === 0 ? 'No Orbi user units confirmed on this host. Other units may be missing because at least one host source did not complete; do not treat this as empty.' : '',
-    current && data?.state === 'partial' && families.length > 0 ? 'Some host service sources did not complete; other Orbi user units may be missing on this host.' : '',
-    data?.state === 'unavailable' ? 'Current activity on this host is unknown: its user services could not be read; reads may have been denied.' : '',
-    state === 'loading' ? "Reading the selected host's user services." : '',
-    stale ? `Showing this host's last successful observation from ${observation!.lastSuccessfulAt}; current activity is unknown.` : '',
-    failed ? 'Ask the operator to check user systemd/DBus access on this host, then Refresh.' : '',
-    limited ? 'The host output exceeded the bounded reader; this is not an empty inventory.' : '',
+    current && data?.state === 'complete' && families.length === 0 ? 'No Orbi units found.' : '',
+    current && data?.state === 'partial' && families.length === 0 ? 'Partial · no units confirmed; units may be missing.' : '',
+    current && data?.state === 'partial' && families.length > 0 ? 'Partial · units may be missing.' : '',
+    data?.state === 'unavailable' ? 'Unavailable · current activity unknown.' : '',
+    state === 'loading' ? 'Reading services…' : '',
+    stale ? `Last success: ${observation!.lastSuccessfulAt}` : '',
+    failed ? 'Read failed · check systemd/DBus access.' : '',
+    limited ? 'Read limited · units may be missing.' : '',
   ].filter(Boolean);
-  const panel = { gap: 8, padding: compact ? 12 : 16, borderWidth: 1, borderColor: theme.colors.foreground };
+  const panel = { gap: compact ? 8 : 12 };
   return <View testID="orbi-host-services" style={panel}>
-    <Text accessibilityRole="header" testID="orbi-overview-heading" style={text}>{`Your Linux user services — ${hostLabel}`}</Text>
-    <Text style={text}>{off ? 'Host service check: off (nothing checked; worker and timer state is undecided)' : `Host service check: ${state}`}</Text>
-    {countEvidence && <Text style={text}>{`Observed unit families: ${families.length}; families with failed units: ${attention}. Observed unit activity is not an active delivery.`}</Text>}
-    {data !== null && !off && <Text style={text}>{`Last check: ${data.observedAt ?? 'not yet observed'}; last successful check: ${observation?.lastSuccessfulAt ?? 'never'}`}</Text>}
-    {!connected && <Text style={text}>{off
-      ? 'Selected host is offline. Host service reads are paused and current activity is unknown; reconnect this host to resume the host service check.'
-      : 'Selected host is offline. Host service reads are paused and current activity is unknown. Reconnect this host, then Refresh.'}</Text>}
+    <Text accessibilityRole="header" testID="orbi-overview-heading" style={text}>{`Orbi · ${hostLabel}`}</Text>
+    <Text style={text}>{off ? 'Service check off · activity unknown' : stale ? 'Stale · current activity unknown' : `Services: ${state === 'complete' ? 'Current' : state}`}</Text>
+    {countEvidence && <Text style={text}>{`${families.length} families · ${attention} failed`}</Text>}
+    {!connected && <Text style={text}>Offline · current activity unknown</Text>}
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}
-    <Text accessibilityRole="alert" style={text}>{problems}</Text>
+    {!!problems && <Text accessibilityRole="alert" style={text}>{problems}</Text>}
     {off ? <View style={{ gap: 8 }}>
-      <Text style={text}>Nothing was checked on this host, so no worker or timer claim can be made.</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Set up service access" accessibilityState={{ expanded: setupExpanded }}
-        style={{ padding: 4, borderWidth: 1, borderColor: theme.colors.foreground }}
+        style={{ minHeight: 44, justifyContent: 'center' }}
         onPress={() => setSetupExpanded(value => !value)}><Text style={text}>{setupExpanded ? 'Hide service access setup' : 'Set up service access'}</Text></Pressable>
       {setupExpanded && <View accessibilityLabel="Service access setup" style={{ gap: 8 }}>
         <Text style={text}>Host service inventory is not enabled on this host. The operator can opt in with PASEO_ORBI_HOST_INVENTORY=1 at plugin startup and explicitly authorize a reload.</Text>
@@ -195,10 +250,11 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
       </View>}
     </View> : <Pressable accessibilityRole="button" accessibilityLabel="Refresh host services" disabled={!query.canRefresh}
       accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }}
-      style={{ padding: 4, borderWidth: 1, borderColor: theme.colors.foreground, opacity: query.canRefresh ? 1 : 0.5 }}
+      style={{ minHeight: 44, justifyContent: 'center', opacity: query.canRefresh ? 1 : 0.5 }}
       onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
     {copies.map(copy => <Text key={copy} style={text}>{copy}</Text>)}
     {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} theme={theme} entries={entries} openScreen={openScreen}
+      name={names.get(group.label)!}
       expanded={expanded === group.label} toggle={() => setExpanded(expanded === group.label ? null : group.label)} />)}
   </View>;
 }
