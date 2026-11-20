@@ -85,7 +85,7 @@ One shared selected-host catalog owns setup and Refresh. Unconfigured or globall
 
 The consolidated navigation/setup flow has offline component/integration evidence. Installed desktop/mobile screenshots and real-client behavior remain the explicit live checks owned by #12/#13; historical fixture previews are not installed-client evidence and do not qualify this changed composition.
 
-The offline-qualified installation pin `875c69a101a102a8f14b064f0664069b5e603f4f` predates this composition: that revision registers the four routes as four separate sidebar rows (Fleet, Issues, Runs, Blockers) with Fleet as its own screen, and its Fleet screen has no host-first user-service section or single loaded detail. Current `main` exposes one **Orbi** sidebar row that opens Overview (host services first, then configured repositories) and switches views in-app. The catalog, setup/repair panel and read-only limits below apply to both revisions; the navigation and the Overview composition differ.
+The historical offline-qualified revision `875c69a101a102a8f14b064f0664069b5e603f4f` predates this composition: that revision registers the four routes as four separate sidebar rows (Fleet, Issues, Runs, Blockers) with Fleet as its own screen, and its Fleet screen has no host-first user-service section or single loaded detail. Current `main` exposes one **Orbi** sidebar row that opens Overview (host services first, then configured repositories) and switches views in-app. The catalog, setup/repair panel and read-only limits below apply to both revisions; the navigation and the Overview composition differ.
 
 ## Issues and GitHub authentication
 
@@ -210,7 +210,17 @@ The Overview screen consumes this snapshot as host evidence (`client/host-overvi
 
 ## Authorized installation (not performed here)
 
-Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's root `pluginsEnabled` switch. If absent/false, obtain separate explicit consent before enabling it; do not assume plugin installation grants that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git) with the exact offline-tested candidate commit:
+Plugins are trusted, unsandboxed host code. Obtain explicit operator approval before enabling plugins or installing. Once approved, inspect the target daemon's root `pluginsEnabled` switch. If absent/false, obtain separate explicit consent before enabling it; do not assume plugin installation grants that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git):
+
+```sh
+paseo plugin add git:TrebuchetDynamics/paseo-orbi
+paseo plugin ls
+paseo plugin logs paseo-orbi
+```
+
+Without `--ref`, Paseo installs the repository's current default HEAD (`main`) at install time, not a GitHub Release. The offline checks do not promise that every `main` commit has passed live qualification. The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An existing Git installation stays at its installed revision until the operator reviews and applies `paseo plugin update paseo-orbi`; that update checks the current default HEAD, shows the current and proposed revision and asks for approval, and declining or a failed update keeps the installed content. The daemon host needs Node 22.19.0 and Paseo `>=0.15.4 <0.16.0`; the daemon checks its version before installing or loading the plugin, and a rejected update keeps the installed revision. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
+
+**Historical offline evidence (reproducing that revision only).** Commit `875c69a101a102a8f14b064f0664069b5e603f4f` is the historical offline-tested Git candidate (Node 22.19.0; 97 tests, typecheck, boundary guard, pack inspection and isolated locked production preparation passed). It is not needed for a fresh install and is not a permanent update pin. To reproduce it deliberately:
 
 ```sh
 paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref 875c69a101a102a8f14b064f0664069b5e603f4f
@@ -218,7 +228,7 @@ paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-Commit `875c69a101a102a8f14b064f0664069b5e603f4f` is the offline-qualified Git candidate (Node 22.19.0; 97 tests, typecheck, boundary guard, pack inspection and isolated locked production preparation passed). This installation pin was added in a documentation-only follow-up; runtime/package/lock contents are unchanged. The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An initial `--ref` does not pin later ordinary updates (which follow default HEAD); inspect and authorize updates separately. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
+An initial `--ref` does not pin later ordinary updates; inspect and authorize updates separately.
 
 ### Live qualification not run
 

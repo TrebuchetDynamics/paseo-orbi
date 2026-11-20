@@ -220,7 +220,7 @@ Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/
 
 ## Install in Paseo
 
-**Prerequisite:** these steps require operator authorization and a tested implemented commit. The plugin implements four telemetry/evidence views, but has not been installed or qualified on a live host. The [operator guide installation procedure](operator-guide.md#authorized-installation-not-performed-here) owns the exact offline-tested Git pin, and its [setup section](operator-guide.md#setup) owns the startup JSON example. `PASEO_ORBI_CONFIG` must already be visible to the daemon/plugin at startup; a CLI-shell export cannot change an existing daemon's environment. Authorization/TOML/profile changes require an explicitly authorized plugin reload, not Refresh.
+**Prerequisite:** these steps require operator authorization. The plugin implements four telemetry/evidence views, but has not been installed or qualified on a live host. An ordinary Git install selects the repository's current default HEAD (`main`) at install time, not a GitHub Release, and no `main` commit is claimed to have passed live qualification. The [operator guide installation procedure](operator-guide.md#authorized-installation-not-performed-here) owns the ordinary Git install and the historical offline-tested revision, and its [setup section](operator-guide.md#setup) owns the startup JSON example. `PASEO_ORBI_CONFIG` must already be visible to the daemon/plugin at startup; a CLI-shell export cannot change an existing daemon's environment. Authorization/TOML/profile changes require an explicitly authorized plugin reload, not Refresh.
 
 ### Install through the app
 
@@ -229,7 +229,7 @@ Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/
 3. Review the trust warning in the development section. Enable **Enable plugins** only if you accept that access.
 4. Enter a source in **Plugin source**:
    - A local development directory: `/absolute/path/to/paseo-orbi`. It must exist on the daemon machine.
-   - The direct Git source (select the tested revision from the README): `git:TrebuchetDynamics/paseo-orbi`.
+   - The direct Git source: `git:TrebuchetDynamics/paseo-orbi`. This installs the current default HEAD at install time, not a GitHub Release.
    - A published registry ID, once approved. Use the exact ID shown on its listing.
 5. Select **Install plugin**.
 6. Confirm that the installed row reports `running` with no error.
@@ -241,20 +241,29 @@ The installed row provides an enable switch and a menu for settings, logs, reloa
 
 For a local development checkout, run the typecheck and installation commands in [Development and diagnostics](#development-and-diagnostics).
 
-Direct Git installation does not require registry approval. Use the exact tested revision from the README, not default HEAD:
+Direct Git installation does not require registry approval. Omit `--ref` to install the repository's current default HEAD (`main`) at install time; this ordinary install does not install a GitHub Release:
 
 ```bash
-paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref <tested-commit-sha>
+paseo plugin add git:TrebuchetDynamics/paseo-orbi
 paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-Replace `<tested-commit-sha>` with the exact offline-tested revision documented in the README. The manifest ID is `paseo-orbi`; use the actual installation ID if overridden. The initial Git reference does not pin later ordinary updates.
+The manifest ID is `paseo-orbi`; use the actual installation ID if overridden. An existing Git installation stays at its installed revision until the operator reviews and applies `paseo plugin update paseo-orbi`. That update checks the current default HEAD, shows the current and proposed revision and asks for approval; declining or a failed update keeps the installed content.
+
+To reproduce a specific revision deliberately, `--ref` accepts a branch, tag or commit for that installation only:
+
+```bash
+paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref <commit-sha>
+paseo plugin ls
+```
+
+That selector is not needed for a fresh install and is not a permanent update pin: later ordinary updates follow the default HEAD.
 
 For a remote daemon, place the global host option before the command:
 
 ```bash
-paseo --host <url> plugin add git:TrebuchetDynamics/paseo-orbi --ref <tested-commit-sha>
+paseo --host <url> plugin add git:TrebuchetDynamics/paseo-orbi
 paseo --host <url> plugin ls
 ```
 

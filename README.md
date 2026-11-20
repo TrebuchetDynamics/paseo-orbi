@@ -44,8 +44,34 @@ in your Paseo apps. Trust the code and its future updates before consenting. Get
 explicit operator approval before enabling plugins or installing, then inspect
 the target daemon's root `pluginsEnabled` switch. If it is absent or false,
 obtain separate explicit consent before enabling it — installing does not grant
-that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git)
-with the exact offline-tested commit:
+that consent. Use the [official direct-Git flow](https://paseo.sh/docs/plugins/publishing.md#share-through-github-or-git):
+
+```sh
+paseo plugin add git:TrebuchetDynamics/paseo-orbi
+paseo plugin ls
+paseo plugin logs paseo-orbi
+```
+
+Without `--ref`, Paseo installs the repository's current default HEAD (`main`)
+at install time; it does not install a GitHub Release. This is not a promise
+that every `main` commit has passed live qualification: the plugin has offline
+checks only, and live installation plus installed qualification remain
+unperformed. Require `running` in `paseo plugin ls`, open the **Orbi** entry on
+Overview and select an authorized deployment. These commands are instructions,
+not observed results.
+
+An existing Git installation stays at its installed revision until the operator
+reviews and applies `paseo plugin update paseo-orbi`. That update checks the
+current default HEAD, shows the current and proposed revision and asks for
+approval; declining or a failed update keeps the installed content.
+
+**Historical offline evidence (reproducing that revision only).** Commit
+`875c69a101a102a8f14b064f0664069b5e603f4f` is the revision of the recorded
+offline qualification run. It is not needed for a fresh install and is not a
+permanent update pin. It predates the current **Orbi** entry and host-first
+Overview: it lists Fleet, Issues, Runs and Blockers as separate sidebar rows,
+while current `main` opens one **Orbi** entry on Overview with in-app
+navigation. To reproduce that revision deliberately:
 
 ```sh
 paseo plugin add git:TrebuchetDynamics/paseo-orbi --ref 875c69a101a102a8f14b064f0664069b5e603f4f
@@ -53,13 +79,8 @@ paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-That pin predates the current **Orbi** entry and host-first Overview: it lists
-Fleet, Issues, Runs and Blockers as separate sidebar rows, while current `main`
-opens one **Orbi** entry on Overview with in-app navigation. Either way, require
-`running` in `paseo plugin ls`, open the views the installed revision lists and
-select an authorized deployment. These commands are instructions, not observed
-results. An initial `--ref` does not pin later ordinary updates, which follow
-default HEAD; inspect and authorize updates separately.
+An initial `--ref` does not pin later ordinary updates; inspect and authorize
+updates separately.
 
 ## Documentation
 
