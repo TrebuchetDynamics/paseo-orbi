@@ -41,7 +41,10 @@ return { allowed, body, code };
 }
 
 const name = basename(process.argv[1] ?? "");
-if (["gh", "systemctl", "journalctl"].includes(name)) {
+// ORBI_E2E_DELEGATED is set only by the redesign entry after it has decided its
+// own argv. Default (#12) execution never sets it, so this stand-in's allowed
+// and refused argv set is unchanged.
+if (!process.env.ORBI_E2E_DELEGATED && ["gh", "systemctl", "journalctl"].includes(name)) {
 // Ownership was acknowledged by the CJS preload before this ESM entry.
 // Calls below are telemetry only, never a signaling capability.
 const args = process.argv.slice(2);

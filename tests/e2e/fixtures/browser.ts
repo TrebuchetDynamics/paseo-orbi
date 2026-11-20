@@ -4,8 +4,8 @@ import { join, dirname } from 'node:path';
 import { command, environment, sanitize, assertListenerOwned, type Identity } from '../harness';
 import { provenance, pngSize, sha256 } from '../evidence.mjs';
 
-type LeaseHost = { initial: Identity; alias: string; profile: string; port: number; url: string; host: string; home: string; state: string; calls: string; env: NodeJS.ProcessEnv; cli: string; candidate: string; data: { authorization: string; entry: unknown } };
-type Lease = { root: string; input: { output: string; sha: string }; hosts: LeaseHost[] };
+export type LeaseHost = { initial: Identity; alias: string; profile: string; port: number; url: string; host: string; home: string; state: string; calls: string; env: NodeJS.ProcessEnv; cli: string; candidate: string; data: { authorization: string; entry: unknown } };
+export type Lease = { root: string; input: { output: string; sha: string }; hosts: LeaseHost[] };
 export async function state(host: LeaseHost, scenario: string) {
   const previous = JSON.parse(await readFile(host.state, 'utf8'));
   await writeFile(host.state, JSON.stringify({ ...previous, scenario }));

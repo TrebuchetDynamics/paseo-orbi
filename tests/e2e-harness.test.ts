@@ -9,11 +9,14 @@ import { BlockersReader } from '../server/blockers';
 import { ReadPorts } from '../server/read-ports';
 import { readFleet } from '../server/fleet';
 import { deflateSync } from 'node:zlib';
-import { approveLaunch, isolation, environment, stopOwned, boundedWait, sanitize, checkFreshPath, requireListenerOwnership, start, prepareTelemetry, type Identity, installWhenRpcReady, exposePs, cleanupInstallations, finishFailedStart, type InstallationHost } from './e2e/harness';
+import { approveLaunch, approveNativeLaunch, approveHostFirstLaunch, isolation, environment, stopOwned, boundedWait, sanitize, checkFreshPath, requireListenerOwnership, start, prepareTelemetry, type Identity, installWhenRpcReady, exposePs, cleanupInstallations, finishFailedStart, type InstallationHost } from './e2e/harness';
+import { verifyFixtureRefusal } from './e2e/host-first/proof';
 const evidenceUrl = new URL('./e2e/evidence.mjs', import.meta.url);
 const toolUrl = new URL('./e2e/fixtures/tool.mjs', import.meta.url);
 const { default: EvidenceReporter, matrix, requiredTests, validate, sha256, provenance, pngSize } = await import(evidenceUrl.href);
 const { operation } = await import(toolUrl.href);
+const { operation: hostFirstOperation, listArgs: hostFirstListArgs } = await import(new URL('./e2e/host-first/fixture.mjs', import.meta.url).href);
+const { hostFirstScreenshots, hostFirstTitles } = await import(new URL('./e2e/host-first/contract.mjs', import.meta.url).href);
 const approved = { PASEO_E2E_ENABLE_TRUSTED_PLUGINS: '1', PASEO_E2E_APPROVAL_URL: 'https://github.com/TrebuchetDynamics/paseo-orbi/issues/12#issuecomment-123', PASEO_E2E_CANDIDATE_REPO: '/candidate', PASEO_E2E_CANDIDATE_SHA: 'a'.repeat(40), PASEO_E2E_OUTPUT: '/owned/.artifacts/paseo-qualification/84360d31' };
 
 it('refuses_unapproved_or_nonisolated_launch', async () => {
@@ -711,3 +714,103 @@ it('an observed forbidden executable remains an accounting failure even if the p
     await independentStop(children); await f.registration.close();
   }
 });
+
+it('host-first approval accepts only an issue-32 receipt and no lane borrows another', async () => {
+  let effects = 0;
+  const hostFirst = { ...approved, PASEO_E2E_APPROVAL_URL: 'https://github.com/TrebuchetDynamics/paseo-orbi/issues/32#issuecomment-123' };
+  approveHostFirstLaunch(hostFirst, () => effects++); expect(effects).toBe(1);
+  for (const url of [approved.PASEO_E2E_APPROVAL_URL, 'https://github.com/TrebuchetDynamics/paseo-orbi/issues/13#issuecomment-123', 'https://example.com/yes'])
+    expect(() => approveHostFirstLaunch({ ...hostFirst, PASEO_E2E_APPROVAL_URL: url }, () => effects++)).toThrow(/approval|explicit/i);
+  expect(() => approveLaunch(hostFirst, () => effects++)).toThrow(/approval/i);
+  expect(() => approveNativeLaunch(hostFirst, () => effects++)).toThrow(/approval/i);
+  expect(effects).toBe(1);
+  expect(environment('/owned', '/owned/bin', '/owned/home')).not.toHaveProperty('PASEO_ORBI_HOST_INVENTORY');
+  await expect(makeHost('/owned', 'host-a', 'release', '/owned/candidate', '/owned/cli', 'available', [], { fixture: 'standard', inventory: true })).rejects.toThrow(/restricted/);
+});
+
+it('redesign stand-in answers exactly the two fixed inventory argv forms and refuses everything else', async () => {
+  const data = { scenario: 'available', alias: 'host-a', records: JSON.parse(await readFile(new URL('./fixtures/runs/records.json', import.meta.url), 'utf8')), guidance: JSON.parse(await readFile(new URL('./fixtures/blockers/guidance.json', import.meta.url), 'utf8')) };
+  for (const source of ['runtime', 'installed']) {
+    const result = await hostFirstOperation('systemctl', hostFirstListArgs[source], data);
+    expect(result.allowed).toBe(true); expect(result.code).toBe(0); expect(result.body).toContain('orbi-demo');
+  }
+  expect((await hostFirstOperation('systemctl', hostFirstListArgs.runtime, { ...data, alias: 'host-b' })).body).toContain('orbi-demo@4.service');
+  // A denied source is recognizable but unavailable: never merged into confirmed absence.
+  expect(await hostFirstOperation('systemctl', hostFirstListArgs.installed, { ...data, scenario: 'denied' })).toMatchObject({ allowed: true, code: 1 });
+  expect(await hostFirstOperation('systemctl', hostFirstListArgs.runtime, { ...data, scenario: 'unavailable' })).toMatchObject({ allowed: true, code: 1 });
+  expect(await hostFirstOperation('systemctl', hostFirstListArgs.runtime, { ...data, scenario: 'empty' })).toMatchObject({ allowed: true, code: 0, body: '' });
+  const properties = '--property=Id,LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainCode,ExecMainStatus,NRestarts,LastTriggerUSec,NextElapseUSecRealtime,NextElapseUSecMonotonic';
+  // The unchanged #12 show read still works; no other argv is accepted.
+  expect((await hostFirstOperation('systemctl', ['--user', 'show', 'orbi-demo@1.service', properties, '--no-pager'], data)).allowed).toBe(true);
+  for (const args of [
+    ['--user', 'list-units', '--all', '--type=service', '--plain', '--no-legend', '--no-pager', '--full', 'orbi*.service', 'orbi*.timer'],
+    [...hostFirstListArgs.runtime, '--quiet'],
+    ['--user', 'list-units', '--all', '--type=service,timer', '--plain', '--no-legend', '--no-pager', '--full', 'orbi*'],
+    ['--user', 'stop', 'orbi-demo@1.service'],
+    ['--user', 'list-unit-files', '--type=service,timer', '--no-legend', '--no-pager', '--full', 'orbi*.service'],
+    ['enable', 'orbi-demo@1.service'],
+    ['--user', 'show', 'orbi-demo@1.service', '--property=Id', '--no-pager'],
+  ]) expect((await hostFirstOperation('systemctl', args, data)).allowed).toBe(false);
+  for (const command of ['bash', 'orbi', 'git', 'npm']) expect((await hostFirstOperation(command, [], data)).allowed).toBe(false);
+  const source = await readFile(new URL('./e2e/host-first/fixture.mjs', import.meta.url), 'utf8');
+  expect(source).not.toMatch(/node:child_process|execFile|spawn\(|execSync|\/usr\/bin/);
+});
+
+it('executed redesign fixture proof answers both list forms and refuses other argv with exit 64', async () => {
+  const proof = await verifyFixtureRefusal();
+  expect(proof).toMatchObject({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, unknownArgvRefused: true, refusalExitCode: 64, fallback: false });
+}, 20000);
+
+async function hostFirstEvidence() {
+  const root = await mkdtemp(join(tmpdir(), 'orbi-host-first-evidence-')); roots.push(root);
+  const fixture = (await provenance())[0], now = '2026-11-20T00:00:00Z';
+  const manifest: any = { evidenceKind: 'host-first', status: 'pass', pluginSha: 'a'.repeat(40), dirty: false, runId: '8d0451a2', observedAt: now,
+    approvalUrl: 'https://github.com/TrebuchetDynamics/paseo-orbi/issues/32#issuecomment-123',
+    artifactUrl: 'https://github.com/TrebuchetDynamics/paseo-orbi/actions/runs/123/artifacts/456', expiresAt: '2026-12-20T00:00:00Z',
+    cleanup: { status: 'pass' }, daemonVersion: '0.15.4', appVersion: '0.15.4',
+    tests: hostFirstTitles.map((title: string, i: number) => ({ id: `host-first:${i}`, title, status: 'pass' })), screenshots: [] };
+  for (const c of hostFirstScreenshots) {
+    const bytes = png(c.viewport.width, c.viewport.height), path = `${c.id}.png`;
+    await writeFile(join(root, path), bytes);
+    manifest.screenshots.push({ ...c, path, sha256: sha256(bytes), pixelWidth: c.viewport.width, pixelHeight: c.viewport.height,
+      pluginSha: manifest.pluginSha, dirty: false, observedAt: now, hostAlias: 'host-a', state: c.state, paseoVersion: '0.15.4',
+      daemonVersion: '0.15.4', appVersion: '0.15.4', playwrightVersion: '1.65.1', browser: 'chromium', browserVersion: 'pinned-revision-test',
+      deviceScaleFactor: 1, fixture, expected: 'pass', observed: 'pass',
+      inspection: { horizontalClipping: false, scrollReachable: true, contrast: 'pass', stateVisible: true, reviewedBy: 'unit-fixture-only', at: now } });
+  }
+  await writeFile(join(root, 'fixture-proof.json'), JSON.stringify({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, refusedArgv: ['stop'], refusalExitCode: 64, unknownArgvRefused: true, fallback: false }));
+  return { root, manifest };
+}
+async function runHostFirstVerify(root: string) {
+  const verify = fileURLToPath(new URL('./e2e/host-first/verify.mjs', import.meta.url));
+  try { const { stdout } = await execFileAsync(process.execPath, [verify, root], { timeout: 15000 }); return { code: 0, stdout }; }
+  catch (error) { const detail = error as { code?: number; stdout?: string }; return { code: detail.code ?? 1, stdout: detail.stdout ?? '' }; }
+}
+it('host-first validator passes only complete inspected evidence and never turns absence into PASS', async () => {
+  const { root, manifest } = await hostFirstEvidence();
+  await writeFile(join(root, 'manifest.json'), JSON.stringify(manifest));
+  const valid = await runHostFirstVerify(root);
+  expect(valid.code, valid.stdout).toBe(0); expect(JSON.parse(valid.stdout).status).toBe('pass');
+  expect(hostFirstScreenshots).toHaveLength(10); expect(JSON.parse(valid.stdout).errors).toEqual([]);
+  const mutate = async (change: (m: any) => void) => {
+    const changed = structuredClone(manifest); change(changed);
+    await writeFile(join(root, 'manifest.json'), JSON.stringify(changed));
+    const result = await runHostFirstVerify(root);
+    expect(result.code).toBe(1); expect(JSON.parse(result.stdout).status).not.toBe('pass');
+  };
+  await mutate(m => { m.approvalUrl = 'https://github.com/TrebuchetDynamics/paseo-orbi/issues/12#issuecomment-123'; });
+  await mutate(m => { m.screenshots.pop(); });
+  await mutate(m => { m.screenshots[0].sha256 = '0'.repeat(64); });
+  await mutate(m => { m.screenshots[0].inspection = null; });
+  await mutate(m => { m.cleanup.status = 'fail'; });
+  await mutate(m => { m.tests[0].status = 'skip'; });
+  await mutate(m => { m.artifactUrl = null; });
+  await writeFile(join(root, 'manifest.json'), JSON.stringify(manifest));
+  await rm(join(root, 'fixture-proof.json'));
+  const noProof = await runHostFirstVerify(root);
+  expect(noProof.code).toBe(1); expect(JSON.parse(noProof.stdout).errors.join()).toMatch(/fixture proof/);
+  await writeFile(join(root, 'fixture-proof.json'), JSON.stringify({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, refusalExitCode: 64, unknownArgvRefused: true, fallback: false }));
+  await rm(join(root, 'manifest.json'));
+  const missing = await runHostFirstVerify(root);
+  expect(missing.code).toBe(1); expect(JSON.parse(missing.stdout).status).toBe('not_run');
+}, 30000);
