@@ -1,6 +1,6 @@
 # Installed Paseo qualification
 
-This is the offline-delivered harness for epic #1, after #7's independent offline/package gate. **No installed browser run, screenshots, native qualification or live Orbi success is claimed by #11.** Saved execution issue #12 owns the browser run; #13 owns named native targets/access and applicable consent. Earlier fixture galleries/mock RN tests do not qualify an installation. No generated image is automatically a visual-regression baseline.
+This is the offline-delivered harness for epic #1, after #7's independent offline/package gate. **No installed browser run, screenshots, native qualification or live Orbi success is claimed by #11.** Saved execution issue #12 owns the browser run; #13 owns the Linux-only native lane described below, with iOS and Android explicitly deferred. Earlier fixture galleries/mock RN tests do not qualify an installation. No generated image is automatically a visual-regression baseline.
 
 ## User journey and permission gate
 
@@ -114,7 +114,7 @@ The validator writes `validation.json`, exits nonzero for partial/failed/missing
 
 ## Separate native and live gates
 
-Browser emulation is **not native-app evidence**. #13 must name compatible desktop/iOS/Android targets, access, versions and applicable consent first. Native uses a distinct `evidenceKind: "native"` envelope with all three required slots:
+Browser emulation is **not native-app evidence**. #13 selects Linux desktop only; iOS/Android slots are preserved as owner-deferred `not_run` entries so no matrix is silently shrunk. Native uses a distinct `evidenceKind: "native"` envelope with all three required slots:
 
 ```json
 {"id":"ios-pending","platform":"ios","targetClass":"simulator","osVersion":"unknown","paseoVersion":"unknown","status":"not_run","missingInput":"Exact missing compatible iOS simulator access and owner consent"}
@@ -122,7 +122,47 @@ Browser emulation is **not native-app evidence**. #13 must name compatible deskt
 
 Allowed platform values: desktop/ios/android; targetClass: physical/simulator/emulator; target status: pass/fail/not_run. Unknown versions are permitted only for not_run with exact missingInput. Each passing target requires eight baseline PNGs (four views × light/dark, available). Case IDs are `<targetId>-<view>-available-<theme>`; cases record targetId, view/theme/scenario, actual PNG pixel width/height, path/hash/time, plugin provenance, daemon/app/tool versions, synthetic fixture provenance and inspection. Native cases must **not** invent CSS viewports or deviceScaleFactor. Common manifest status is pass/fail/partial. All three targets must pass for full-native PASS; missing/failed/partial targets exit nonzero with a usable report. Simulators remain labeled simulators, never physical proof. Native validation neither applies nor waives the browser matrix.
 
-#7's offline distinction and the [README](../../README.md)'s plus the [operator guide](../operator-guide.md)'s live installation/privacy/trust cautions remain unchanged. This guide delivers tooling for #11 only; #12 owns browser execution after explicit disposable-daemon trusted-plugin consent, and #13 separately requires named native targets/access and applicable consent. Never run `test:e2e` against a user/default profile. Real Orbi/GitHub telemetry, provider/auth behavior, physical accessibility, user-host lifecycle and upstream product regression remain separately authorized live work, not claims this synthetic installed harness can make.
+#7's offline distinction and the [README](../../README.md)'s plus the [operator guide](../operator-guide.md)'s live installation/privacy/trust cautions remain unchanged. This guide delivers tooling for #11 only; #12 owns browser execution after explicit disposable-daemon trusted-plugin consent, and #13 owns the Linux native lane with iOS/Android deferred and unclaimed. Never run `test:e2e` against a user/default profile. Real Orbi/GitHub telemetry, provider/auth behavior, physical accessibility, user-host lifecycle and upstream product regression remain separately authorized live work, not claims this synthetic installed harness can make.
+
+## Linux native Electron lane (issue #13)
+
+Owner decisions recorded on issue #13 select **Linux desktop only**, with iOS and Android explicitly deferred, assistant-operated desktop automation, a separate compatible app/profile and test-only plugin enablement on a dedicated disposable daemon ([native trust receipt](https://github.com/TrebuchetDynamics/paseo-orbi/issues/13#issuecomment-6909863490)). No production app/profile/daemon, `/opt/Paseo` change, sudo, system package or relay scope is granted. Mobile results stay `not_run`; the historical three-platform matrix above is preserved as provenance, not as current scope.
+
+Files: `tests/e2e/native/fixture.ts` (owned profile/display/app acquisition, Playwright fixture, capture), `tests/e2e/native/linux.spec.ts` (real renderer journeys), `tests/e2e/native/playwright.config.ts`, `tests/e2e/native/verify.mjs` (Linux-integrity wrapper) and the offline seam tests in `tests/e2e-native.test.ts`. The lane reuses `tests/e2e/harness.ts`'s `makeHost`, fixture ports, `prepareCandidate`, `startHosts`, ownership-aware `release` and the merged #12 detached-process/identity repair; it adds no second process design, dependency or production build step.
+
+### Isolation and launch contract
+
+- Pinned `Paseo-x86_64.AppImage` 0.15.4 (`sha256:a35de13bb9642e75e418c2906ef54ab24c5364140645199d2cf2d9ef3d5c7797`, re-checked against `gh api repos/getpaseo/paseo/releases/tags/v0.15.4`) is downloaded only into owned storage, hash-verified before execution, then extracted with `--appimage-extract`. The extracted `squashfs-root/Paseo.bin` is launched directly through Playwright 1.65.1 `_electron.launch` with `chromiumSandbox: true`; the packaging wrapper and Playwright's default no-sandbox behaviour are refused. No installed-app downgrade or substitute revision.
+- `PASEO_ELECTRON_USER_DATA_DIR` points at a fresh owned directory before startup and the single-instance lock stays enabled (`PASEO_DISABLE_SINGLE_INSTANCE_LOCK` is never set). `<userData>/desktop-settings.json` is written with the exact pinned document `{"version":1,"settings":{"daemon":{"manageBuiltInDaemon":false,"keepRunningAfterQuit":false}},"migrations":{"legacyRendererSettingsImported":true,"daemonStopOnQuitDefaultApplied":true}}`, so the app manages no built-in daemon and imports no legacy renderer settings; omitted `releaseChannel`/`notifications` take their pinned schema defaults.
+- Electron receives its own owned `HOME`/`XDG_*`/`PASEO_HOME`/`TMPDIR`, distinct from both fixture daemon homes, plus an allowlisted environment. `SHELL` is an owned 0700 wrapper executing `/bin/bash --noprofile --norc "$@"`, so personal shell files cannot restore secrets or settings, and no inherited `GH_TOKEN`/`PASEO_HOST`/provider/auth variable reaches the app.
+- One worker owns one `/usr/bin/Xvfb` display (`:N`, 1920x1080x24, `-nolisten tcp`); an existing display socket is refused rather than attached. Startup is bounded to 60 seconds inside the existing 20-minute ceiling. Owned daemon, display and app identities share one cleanup lifecycle: proven `pid`+`pgid`+start identity, bounded TERM/KILL only for owned groups, `electronApp.close()` for the app, and closed-port/no-owned-process verification. Unknown descendants, PID reuse or an unaccounted group member remain cleanup failures, never permission for broad kills.
+- Journeys drive the actual `paseo://app` renderer and the real Add Host/direct-loopback UI to the two owned fixture daemons, including identical labels/IDs (selection isolation), keyboard activation, nested scrolling, light/dark, refresh/error/stale, a never-listened-on loopback endpoint for disconnect/reconnect without fallback, window background/foreground, and test-only reload/disable/re-enable/remove/reinstall. No relay, LAN, real agent or model call is used; only actual test-window pixels are captured.
+
+### Commands (Linux, Node 22.19.0)
+
+```sh
+timeout 60 npm run typecheck
+timeout 60 npx --no-install vitest run tests/e2e-native.test.ts
+timeout 60 npm run test:e2e:unit
+timeout 60 npm run test:e2e:typecheck
+timeout 60 npx --no-install playwright test -c tests/e2e/native/playwright.config.ts --list
+timeout 240 npm test
+timeout 60 npm run test:boundaries
+```
+
+Offline commands never start a GUI, daemon or display. The real native run takes the same explicit inputs as the browser lane, but `PASEO_E2E_APPROVAL_URL` must be an **issue #13** comment; an issue-12 approval is rejected for this lane:
+
+```sh
+export PASEO_E2E_APPROVAL_URL='https://github.com/TrebuchetDynamics/paseo-orbi/issues/13#issuecomment-<owner-comment-id>'
+timeout --signal=TERM --kill-after=30 1230 npx --no-install playwright test -c tests/e2e/native/playwright.config.ts
+node tests/e2e/native/verify.mjs "$PASEO_E2E_OUTPUT"
+```
+
+### Evidence and honest result
+
+Automatic capture writes `receipt.json` with `evidenceKind: "native"`, one `desktop-linux-xvfb` target classed `emulator` with explicit Xvfb provenance, and `ios`/`android` slots `not_run` with owner-deferred reasons. Eight baseline captures (`desktop-linux-xvfb-<view>-available-<theme>`) plus detail/error/stale/disconnected cases are written as `.shot.json` with actual PNG width/height, SHA-256, plugin SHA, app/daemon/tool versions, fixture provenance, observation time and `inspection: null`. The desktop target stays `fail` and the manifest stays `partial` until the execution owner inspects every image and records inspection, the exact artifact URL and the expiry; the raw full-native validator result stays nonzero.
+
+`node tests/e2e/native/verify.mjs <downloaded-dir>` is the Linux-integrity wrapper. It first requires the structural facts (native kind, partial status, exactly one passing `emulator` desktop target with Xvfb provenance, both mobile slots `not_run` with owner-deferred reasons, then real PNG/hash/dimension/provenance checks) and only then requires the complete validator error set to be exactly the two known full-native diagnostics. Missing, malformed, hash-mismatched or extra-diagnostic Linux evidence fails closed with exit 1. Exit 0 means **Linux image integrity only** — not journeys, not visual inspection, not physical-display coverage and not full-native PASS.
 
 ## Verified contracts
 
@@ -158,3 +198,15 @@ Cleanup receipt is **FAIL**: `Unaccounted owned descendant; refusing broad kill`
 `timeout 60 npm run test:e2e:verify -- <explicit-output>` exited **1** (missing `manifest.json`, as global setup never produced a lease); no passing/inspected manifest was fabricated. `timeout 60 node tests/e2e/evidence.mjs --check-upload <explicit-output>` exited **0**, indicating upload safety only, not qualification or actual upload. Workflow dispatch, sanitized remote upload/download/readback/hash agreement and 30-day retention were **NOT_RUN**; no workflow/artifact/expiration link exists. Original failed evidence remains unchanged. No remote screenshot-save claim is made.
 
 **Next required decision:** authorize/review a narrowly scoped solution for pinned Paseo’s detached terminal-worker ownership accounting and identity-safe cleanup of the retained run, without weakening PID-reuse/unknown-descendant refusal. Stop live execution until that blocker is resolved. A future qualification requires another committed candidate, fresh homes/ports/output, all functional/image/cleanup gates and actual artifact publication/readback. Full issue acceptance is unmet; these bounded repairs and offline tests do not close the qualification gate. Native-device and genuine Orbi/GitHub source-data qualification remain unmet. Evidence publication must name the actual workflow run/artifact with verified download/readback and 30-day retention; no local path is a remotely accessible artifact link.
+
+## Execution results — issue #13 native Linux lane
+
+Receipt: [native trusted-plugin consent for the disposable daemon](https://github.com/TrebuchetDynamics/paseo-orbi/issues/13#issuecomment-6909863490), recorded together with the owner's Linux-only scope and explicit iOS/Android deferral on issue #13. They authorize nothing on the existing app/profile/daemon, no production maintenance and no mobile target.
+
+### Offline implementation — verified; native execution NOT_RUN
+
+`tests/e2e-native.test.ts` delivers seven injected-seam regressions before any Paseo launch: the issue-13 approval lane (an issue-12 receipt, a missing flag, a non-owned output and an inherited environment are all refused before any effect), the exact pinned `desktop-settings.json` document with both migrations applied, an allowlisted owned environment whose `SHELL` is the 0700 `--noprofile --norc` wrapper and whose `PATH` excludes `/usr/bin`, AppImage digest refusal before execution with extraction bound to the verified file and `squashfs-root/Paseo.bin`, display ownership (missing Xvfb and an existing socket are refused), a sandboxed bounded launch that closes a partial launch (including the aggregated close failure), failed-start teardown through the shared ownership-aware `release` with PID-reuse/unaccounted-group refusal intact, and the `verify.mjs` contract (structure-first, then exactly the two known full-native diagnostics; missing/not_run desktop, malformed, hash-mismatched, extra-diagnostic and validator-throw cases all fail closed). The documented wrapper command is executed as a real child process in both the accepting and rejecting directions.
+
+Local offline runs used Node v26.8.2 — the agent host has no Node 22.19.0, no `/usr/bin/Xvfb` and no display — so the lane's own Node 22.19.0 requirement is exercised through its injectable runtime seam, and CI (Node 22.19.0) stays the delivery authority. `npm run typecheck`, `npm run test:e2e:typecheck`, `npx --no-install playwright test -c tests/e2e/native/playwright.config.ts --list` (6 tests, no global setup) and `npx --no-install vitest run tests/e2e-native.test.ts` (7 tests) exited 0. `npm run test:e2e:unit` shows one failure that already fails at the delivery base `784bf7c` on this host (`isolated_runtime_exposes_only_required_ps` expects `PATH` without `/usr/bin`, but the local Node binary lives in `/usr/bin`); it is untouched here.
+
+**Every real native gate is NOT_RUN:** AppImage acquisition/extraction, Xvfb readiness, Chromium sandbox operation in the extracted bundle, packaged Electron inspector attachment, the six renderer journeys, and all native PNGs. No native image, artifact URL, download/hash readback or 30-day retention exists. The desktop target remains `fail`, iOS/Android remain `not_run` with owner-deferred reasons, the manifest remains `partial`, and full-native PASS is not claimed. Linux desktop qualification remains unproven until an approved execution supplies exact inputs and the image inspection, cleanup and readback gates pass.
