@@ -186,10 +186,14 @@ function slotLines(group: InventoryGroup): string[] {
     return severity(left) - severity(right) || compareSlots(leftId, rightId);
   }).map(([id, slot]) => `Slot ${id} · ${slotState(slot.service)} · ${slotState(slot.timer, true)}`);
 }
-function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle, name, showUnlinked }: {
+function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle, name, showUnlinked, lastSeen }: {
   group: InventoryGroup; hostId: string; theme: PluginHostProps['theme'];
   entries: DeploymentCatalog['entries'] | null; openScreen: PluginClientContext['openScreen'];
   expanded: boolean; toggle: () => void; name: string; showUnlinked: boolean;
+  // Set only when the whole snapshot is retained after a failed refresh or a
+  // disconnect. It lives on the row so the retained facts never read as current
+  // once the header has scrolled away.
+  lastSeen: string | null;
 }) {
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
@@ -202,6 +206,7 @@ function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle
   // This row is one accessibility element, so its visible status text is not
   // exposed on its own: the disclosure carries it as the accessible hint.
   const description = [
+    ...(lastSeen === null ? [] : [`Last seen ${lastSeen}`]),
     ...(failure === null ? [] : [failure]),
     ...status.map(fact => familyFactText[fact]),
     ...(entry || !showUnlinked ? [] : ['Unlinked']),
@@ -213,6 +218,7 @@ function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle
       <View style={{ flexShrink: 1, gap: 4 }}>
         <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {lastSeen !== null && <Text testID={`orbi-last-seen-${group.label}`} style={secondary}>{`Last seen ${lastSeen}`}</Text>}
           {failure !== null && <Text style={secondary}>{failure}</Text>}
           {status.map(fact => <Text key={fact} style={secondary}>{familyFactText[fact]}</Text>)}
           {showUnlinked && !entry && <Text style={secondary}>Unlinked</Text>}
@@ -274,6 +280,9 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   const limited = (data?.problems ?? []).some(problem => ['malformed_record', 'read_limit', 'row_limit'].includes(problem.code));
   const failed = (data?.problems ?? []).some(problem => ['process_failed', 'process_timeout', 'process_limit'].includes(problem.code));
   const stale = observation?.state === 'stale' && observation.lastSuccessfulAt !== null;
+  // Retained rows keep their last observed facts, labelled per row; no count or
+  // absence claim survives a failed refresh or disconnect.
+  const lastSeen = stale ? observation!.lastSuccessfulAt : null;
   const copies = [
     current && data?.state === 'complete' && families.length === 0 ? 'No Orbi units found.' : '',
     current && data?.state === 'partial' && families.length === 0 ? 'Partial · no units confirmed; units may be missing.' : '',
@@ -288,7 +297,7 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   return <View testID="orbi-host-services" style={panel}>
     <Text accessibilityRole="header" testID="orbi-overview-heading" style={text}>{`${hostLabel} · Fleet`}</Text>
     <Text style={text}>{off ? 'Service check off · activity unknown' : stale ? 'Stale · current activity unknown' : `Services: ${state === 'complete' ? 'Current' : state}`}</Text>
-    {countEvidence && families.length > 0 && <Text testID="orbi-attention-count" style={text}>{`${attention} of ${families.length} groups ${attention === 1 ? 'needs' : 'need'} attention`}</Text>}
+    {countEvidence && families.length > 0 && <Text testID="orbi-attention-count" style={text}>{`${attention} of ${families.length} ${data?.state === 'partial' ? 'observed ' : ''}groups ${attention === 1 ? 'needs' : 'need'} attention`}</Text>}
     {!connected && <Text style={text}>Offline · current activity unknown</Text>}
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}
     {!!problems && <Text accessibilityRole="alert" style={text}>{problems}</Text>}
@@ -317,7 +326,7 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
       </View>}
     </View>}
     {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} theme={theme} entries={entries} openScreen={openScreen}
-      name={names.get(group.label)!} showUnlinked={!unconfigured}
+      name={names.get(group.label)!} showUnlinked={!unconfigured} lastSeen={lastSeen}
       expanded={expanded === group.label} toggle={() => setExpanded(expanded === group.label ? null : group.label)} />)}
   </View>;
 }
