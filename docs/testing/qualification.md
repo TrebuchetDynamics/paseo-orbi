@@ -237,3 +237,81 @@ Receipt: [native trusted-plugin consent for the disposable daemon](https://githu
 Local offline runs used Node v26.8.2 — the agent host has no Node 22.19.0, no `/usr/bin/Xvfb` and no display — so the lane's own Node 22.19.0 requirement is exercised through its injectable runtime seam, and CI (Node 22.19.0) stays the delivery authority. `npm run typecheck`, `npm run test:e2e:typecheck`, `npx --no-install playwright test -c tests/e2e/native/playwright.config.ts --list` (6 tests, no global setup) and `npx --no-install vitest run tests/e2e-native.test.ts` (7 tests) exited 0. `npm run test:e2e:unit` shows one failure that already fails at the delivery base `784bf7c` on this host (`isolated_runtime_exposes_only_required_ps` expects `PATH` without `/usr/bin`, but the local Node binary lives in `/usr/bin`); it is untouched here.
 
 **Every real native gate is NOT_RUN:** AppImage acquisition/extraction, Xvfb readiness, Chromium sandbox operation in the extracted bundle, packaged Electron inspector attachment, the six renderer journeys, and all native PNGs. No native image, artifact URL, download/hash readback or 30-day retention exists. The desktop target remains `fail`, iOS/Android remain `not_run` with owner-deferred reasons, the manifest remains `partial`, and full-native PASS is not claimed. Linux desktop qualification remains unproven until an approved execution supplies exact inputs and the image inspection, cleanup and readback gates pass.
+
+## Host Overview qualification lane (issue #32)
+
+**Offline harness delivered; every installed host-first gate is NOT_RUN.** This lane qualifies the host-first Overview of an installed Paseo independently of repository shortcuts. It does not replace the #12 browser matrix (42 cases), the #13 native lane, or the #31 shortcut qualification. The safety dependency is #62's merged offline ownership repair; actual live teardown still needs its own run, so a later live attempt must first confirm the identity-safe cleanup receipt for its committed candidate.
+
+Files: `tests/e2e/host-first/fixture.mjs` (redesign-only stand-in), `contract.mjs` (titles and image cases), `fixtures.ts` (journey helpers, capture metadata), `proof.ts` (executed stand-in safety proof), `harness.ts` (opt-in global setup), `overview.spec.ts` (journeys and captures), `playwright.config.ts` and `verify.mjs` (separate validator). The shared #12 fixture, its 73 declarations, its 42 mandatory images and `tests/e2e/evidence.mjs` are unchanged; this lane never weakens them.
+
+### Permission and prerequisite gate
+
+The lane requires **all** of: an owner comment on issue #32 recording separate consent for this expanded trusted-plugin test with host inventory enabled on disposable loopback daemons, `PASEO_E2E_ENABLE_TRUSTED_PLUGINS=1`, the exact committed candidate repository/SHA, a fresh `.artifacts/paseo-qualification/<run-id>` output and `PASEO_E2E_APPROVAL_URL` matching `https://github.com/TrebuchetDynamics/paseo-orbi/issues/32#issuecomment-<id>`. A #12 or #13 receipt is refused by `approveHostFirstLaunch`, and the #32 receipt is refused by the #12 and #13 lanes. A URL, flag or author is not semantic proof; the execution owner must read and verify the recorded instruction. Missing permission or prerequisite is **NOT_RUN**, never PASS.
+
+### Synthetic inventory boundary
+
+The redesign stand-in accepts exactly the two fixed `systemctl` argv forms issued by `server/read-ports.ts` `hostInventory()` — `--user list-units --all --type=service,timer --plain --no-legend --no-pager --full 'orbi*.service' 'orbi*.timer'` and `--user list-unit-files --type=service,timer --no-legend --no-pager --full 'orbi*.service' 'orbi*.timer'` — plus the unchanged #12 `show`/`journalctl`/`gh` reads. Any other argv exits 64 with `Fixture command refused: unrecognized read operation`; nothing is executed, forwarded or resolved from the real binary, and the fixture module imports no process-spawning capability. The delegation seam added to the shared stand-in only suppresses its own entry when the redesign entry sets `ORBI_E2E_DELEGATED`; #12 never sets it, so that fixture's allowed/refused argv set is unchanged. Delegated reads resolve the unchanged #12 tool at `<root>/fixtures/tool.mjs`: `installStandin` writes that file only for host-first hosts, and the executed proof runs the same layout, so a shim whose delegation cannot resolve fails the fixture gate instead of a journey. `PASEO_ORBI_HOST_INVENTORY=1` is added only to the two redesign fixture daemon environments, is startup-only, and is asserted absent from every #12 host. Two synthetic hosts share an identical family label but different slot facts so a host switch cannot carry rows across; no real service inventory, personal host or real `systemctl` call is involved.
+
+### Journeys (automated assertions, all NOT_RUN)
+
+| Journey | What is running? | How certain? | Where next? | Result |
+| --- | --- | --- | --- | --- |
+| failed timer beside a running service; starting/active-exited vs running | family facts `Failed`/`Running` and per-slot text | text states, not color | slots expand under the family | NOT_RUN |
+| unique repository drill-down, keyboard expand/technical detail/return | running family with `View repository` | `Matches configured deployment … by unit name` (display-only) | Issues for the authorized repository; heading/retained row on return | NOT_RUN |
+| no configured repository | discovered family, `Unlinked` | `Discovered on this host only …` | no repository detail offered | NOT_RUN |
+| inventory off with authorized repository | `Service check off · activity unknown` | no observation claimed | setup copy names `PASEO_ORBI_HOST_INVENTORY=1`; catalog still navigable | NOT_RUN |
+| unsupported source profile | family may run | `incompatible`, not a broken runner | detail refused, operator repair | NOT_RUN |
+| partial/denied read | confirmed runtime families only | `Partial · units may be missing.` + `installed: process_failed` | refresh/repair, never a zero count | NOT_RUN |
+| same-label host switch | selected host's slots | identical labels, host identity decides | no stale carryover | NOT_RUN |
+| late host-switch response; offline with and without same-host history | selected host only; unknown when offline | delayed read discarded; neither case claims absence | reconnect/refresh | NOT_RUN |
+
+Operator-walkthrough answers to the same three questions are separate and **NOT_RUN**; no novice participant result is claimed or implied. The six reported synthetic concept conditions are design input, not screenshots and not a passed installed run.
+
+### Capture and inspection contract
+
+Chromium at deviceScaleFactor 1: Overview at 375×667, 768×1024 and 1920×1080 in light and dark (6), plus four distinct states: compact expanded slots at 375 light, unconfigured/missing-config detail refusal at 1920 light, partial/denied read at 375 dark and a long mobile family name with reachable status/actions at 375 light (**10 mandatory images**, no substitutes). Each `.shot.json` names the covered state, host alias, Paseo/daemon/app/Playwright/browser versions, plugin SHA, fixture profile/hash, viewport, actual PNG dimensions, SHA-256 and `inspection: null`. Automatic capture cannot bless its own image; the execution owner must view each PNG and record `horizontalClipping`, `scrollReachable`, `contrast`, `touchTargets`, `focus`, `stateVisible`, reviewer and time — the labels/wrapping, tap-target, keyboard-focus and contrast checks in both themes. Clipping, wrong host, hidden actions, misleading status, private content, missing/hash-mismatched images or uninspected images keep the result partial/fail.
+
+### Commands (Node 22.19.0, from the repository root)
+
+Offline (safe, no daemon/browser):
+
+```sh
+timeout 60 npm run typecheck
+timeout 60 npm run test:e2e:typecheck
+timeout 60 npx --no-install vitest run tests/e2e-harness.test.ts
+timeout 60 npx --no-install playwright test -c tests/e2e/host-first/playwright.config.ts --list
+```
+
+Approved live run (only after the issue-32 receipt and the locked runtime/browser setup are verified):
+
+```sh
+export PASEO_E2E_CANDIDATE_REPO='/absolute/canonical/repository'
+export PASEO_E2E_CANDIDATE_SHA='<40-lowercase-hex-committed-SHA>'
+export PASEO_E2E_OUTPUT='/absolute/worker/.artifacts/paseo-qualification/<run-id>'
+export PASEO_E2E_APPROVAL_URL='https://github.com/TrebuchetDynamics/paseo-orbi/issues/32#issuecomment-<owner-comment-id>'
+export PASEO_E2E_ENABLE_TRUSTED_PLUGINS=1
+timeout --signal=TERM --kill-after=30 1230 npx --no-install playwright test -c tests/e2e/host-first/playwright.config.ts
+node tests/e2e/host-first/verify.mjs "$PASEO_E2E_OUTPUT"
+```
+
+Both commands must exit 0 and the operator's per-image inspection, cleanup receipt, sanitized upload, artifact download/hash readback and 30-day expiration must pass. A green list/typecheck or a synthetic PNG is not an installed result.
+
+### Evidence and validation
+
+Global setup executes the stand-in before any daemon, in the layout a launched host receives, and writes `fixture-proof.json` (`refusalExitCode: 64`, both fixed list argv answered, one delegated read answered, `fallback: false`) beside the receipt and shots. The Playwright reporter writes `manifest.json` with `evidenceKind: "host-first"`, `status: "partial"`, test outcomes, shots and the ownership-aware `cleanup` receipt. `tests/e2e/host-first/verify.mjs` is a **separate** validator: it requires the issue-32 approval URL, exact clean candidate SHA, approved Actions artifact URL and 30-day expiry, passing cleanup, every declared journey and exactly the 10 declared images with matching state/host/version/dimensions/hash, completed inspection and the executed fixture proof. A missing manifest, approval, prerequisite, image, hash, cleanup or inspection yields `not_run`/`partial`/`fail` with a nonzero exit; it never returns PASS. It does not apply or waive the #12 matrix.
+
+### Result (offline delivery only)
+
+| Gate | Result | Missing input / note |
+| --- | --- | --- |
+| Offline typecheck, typecheck of the lane, listing, harness unit tests | delivered via the repository's own commands | the live gates below stay open |
+| Issue-32 expanded-inventory consent and dispatching-owner verification | NOT_RUN | no recorded owner instruction for this expanded trusted test |
+| Installed Paseo 0.15.4 candidate with locked runtime/browsers | NOT_RUN | no authorized candidate, disposable daemons or browser acquisition |
+| Eight automated Overview journeys | NOT_RUN | they execute only inside the approved live run |
+| 10 mandatory images and per-image inspection | NOT_RUN | captured 0/10, inspected 0 |
+| Ownership-aware cleanup receipt | NOT_RUN | #62 repair merged offline; live teardown unproven |
+| Sanitized upload, download/hash readback, 30-day retention | NOT_RUN | no run/artifact/expiration link |
+| Operator walkthrough / novice participants | NOT_RUN | no participants; not claimed |
+| Native Linux lane (#13) | NOT_RUN | unchanged; browser viewports are not native proof |
+
+Exclusions: no modification of historical PR #22 or reuse of failed output/old SHA; no service control, real `systemctl`/journald enumeration, operator data, credentials, symlinks, personal host or production operation; no shortcut RPC, alias fixture, repository-shortcut screenshot or #31 dependency; no substitution for #12's evidence, #13's native requirements or #23's matched-version matrix. A later live run requires a fresh committed candidate, fresh homes/ports/output and its own approval; this section records preparation, not qualification.

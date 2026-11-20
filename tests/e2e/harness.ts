@@ -13,8 +13,8 @@ import { fixture } from '../helpers/fixtures';
 
 const exec = promisify(execFile);
 export type Inputs = { repo: string; sha: string; output: string; approval: string };
-const approvalUrl = (issue: 12 | 13) => new RegExp(`^https://github\\.com/TrebuchetDynamics/paseo-orbi/issues/${issue}#issuecomment-\\d+$`);
-function explicit(env: NodeJS.ProcessEnv, issue: 12 | 13, message: string): Inputs {
+const approvalUrl = (issue: 12 | 13 | 32) => new RegExp(`^https://github\\.com/TrebuchetDynamics/paseo-orbi/issues/${issue}#issuecomment-\\d+$`);
+function explicit(env: NodeJS.ProcessEnv, issue: 12 | 13 | 32, message: string): Inputs {
   if (env.PASEO_E2E_ENABLE_TRUSTED_PLUGINS !== '1' || !approvalUrl(issue).test(env.PASEO_E2E_APPROVAL_URL ?? '')) throw new Error(message);
   const repo = env.PASEO_E2E_CANDIDATE_REPO ?? '', sha = env.PASEO_E2E_CANDIDATE_SHA ?? '', output = env.PASEO_E2E_OUTPUT ?? '';
   if (!isAbsolute(repo) || resolve(repo) !== repo || !/^[0-9a-f]{40}$/.test(sha) || !isAbsolute(output) || resolve(output) !== output || !output.includes('/.artifacts/paseo-qualification/') || output === repo || output.startsWith(repo + '/node_modules/'))
@@ -27,6 +27,12 @@ export function approveLaunch(env: NodeJS.ProcessEnv, effect: (input: Inputs) =>
 }
 export function approveNativeLaunch(env: NodeJS.ProcessEnv, effect: (input: Inputs) => unknown) {
   return effect(explicit(env, 13, 'Owner approval required on execution issue #13. Read and verify the Linux native trusted-plugin consent before setting the approval URL and flag.'));
+}
+// #32 has its own expanded-inventory consent. An issue-12/13 receipt never
+// authorizes real systemctl inventory reads, and this receipt never authorizes
+// the #12 browser matrix or the #13 native lane.
+export function approveHostFirstLaunch(env: NodeJS.ProcessEnv, effect: (input: Inputs) => unknown) {
+  return effect(explicit(env, 32, 'Owner approval required on planning issue #32. Read and verify the separate expanded-inventory trusted-plugin consent before setting the approval URL and flag.'));
 }
 export function isolation(root: string, home: string, host: string, owned: boolean, fresh: boolean) {
   if (!isAbsolute(root) || !home.startsWith(root + '/') || resolve(home) !== home || !owned || !fresh || !/^tcp:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(host) || Number(host.split(':').at(-1)) > 65535)
@@ -245,7 +251,10 @@ export function managementArgs(args: string[], candidate: string) {
   if (exact(['ls', '--json']) || exact(['ls', 'paseo-orbi', '--json']) || ['remove', 'reload', 'enable', 'disable'].some(op => exact([op, 'paseo-orbi']))) return args;
   throw new Error('Qualification management command refused: exact candidate-directory installation and fixed paseo-orbi operations only');
 }
-export async function createRegistration(input: { root: string; home: string; directory: string; env: NodeJS.ProcessEnv; specs: ProcessSpec[]; startupDeadline: number; runtime?: string; esbuild?: string }) {
+// Fixture choice is captured before launch so the registration scanner validates
+// argv against the exact stand-in that host was given. #12 keeps the standard tool.
+export type FixtureLane = 'standard' | 'host-first';
+export async function createRegistration(input: { root: string; home: string; directory: string; env: NodeJS.ProcessEnv; specs: ProcessSpec[]; startupDeadline: number; runtime?: string; esbuild?: string; fixture?: FixtureLane }) {
   registrationRuntime();
   if (input.env.PASEO_ORBI_E2E_OWNER !== input.root || input.env.PASEO_HOME !== input.home || await realpath(input.root) !== input.root || await realpath(input.home) !== input.home || !input.directory.startsWith(input.root + '/') || resolve(input.directory) !== input.directory) throw new Error('Registration requires canonical owned host invariants');
   await mkdir(input.directory, { mode: 0o700 });
@@ -383,9 +392,9 @@ export async function createRegistration(input: { root: string; home: string; di
       await verify();
       const args = await validateProcess(actual, spec);
       if (spec.role === 'fixture') {
-        const { operation } = await import(new URL('./fixtures/tool.mjs', import.meta.url).href);
+        const { operation } = await import(new URL(input.fixture === 'host-first' ? './host-first/fixture.mjs' : './fixtures/tool.mjs', import.meta.url).href);
         const data = JSON.parse(protocol.read(env.ORBI_E2E_STATE!, 65536));
-        if (!operation(spec.entry.split('/').at(-1), args, data).allowed) throw new Error('Fixture argv refused');
+        if (!(await operation(spec.entry.split('/').at(-1), args, data)).allowed) throw new Error('Fixture argv refused');
       }
       if (spec.role === 'ps' && !psArguments(parentCapture!.spec.role, args)) throw new Error('ps parent/argv pair refused');
       if (spec.role === 'terminal-worker' && spec.args === 'worker' && args[1] !== parentCapture?.args[2]) throw new Error('Worker launch record mismatch');
@@ -466,19 +475,35 @@ export async function pinnedProcessSpecs(home: string, bin: string, cli: string,
   return { specs, runtime, esbuild };
 }
 export type Host = Awaited<ReturnType<typeof makeHost>>;
-export async function makeHost(root: string, alias: string, profile: 'release' | 'installed', candidate: string, cli: string, mode: 'available' | 'unconfigured', retained: unknown[] = []) {
+export type HostOptions = { fixture?: FixtureLane; inventory?: boolean };
+// Installs the exact stand-in layout a launched host must have, so the executable
+// proof can exercise the same paths: shims live in <bin>, and the redesign shim's
+// own relative import resolves the unchanged #12 tool at <root>/fixtures/tool.mjs.
+export async function installStandin(root: string, bin: string, lane: FixtureLane) {
+  const standin = await readFile(new URL(lane === 'host-first' ? './host-first/fixture.mjs' : './fixtures/tool.mjs', import.meta.url), 'utf8');
+  if (lane === 'host-first') {
+    await mkdir(join(root, 'fixtures'), { recursive: true, mode: 0o700 });
+    await writeFile(join(root, 'fixtures', 'tool.mjs'), await readFile(new URL('./fixtures/tool.mjs', import.meta.url)));
+  }
+  for (const name of ['gh', 'systemctl', 'journalctl']) { const path = join(bin, name); await writeFile(path, `#!${process.execPath}\n${standin}`); await chmod(path, 0o700); }
+}
+export async function makeHost(root: string, alias: string, profile: 'release' | 'installed', candidate: string, cli: string, mode: 'available' | 'unconfigured', retained: unknown[] = [], options: HostOptions = {}) {
+  const fixtureLane = options.fixture ?? 'standard';
+  // The expanded inventory capability is startup-only and exists solely on the
+  // redesign stand-in; it is never added to a #12/#13 host or a default environment.
+  if (options.inventory && fixtureLane !== 'host-first') throw new Error('Host inventory opt-in is restricted to the host-first lane');
   registrationRuntime();
   if (await realpath(candidate) !== candidate || !isAbsolute(candidate)) throw new Error('Candidate must be canonical absolute directory');
   const home = join(root, alias); await mkdir(home);
   const bin = join(root, `${alias}-bin`); await mkdir(bin);
   await symlink(process.execPath, join(bin, 'node'));
   const { data, registry, calls, state, setState } = await prepareTelemetry(root, alias, profile);
-  const standin = await readFile(new URL('./fixtures/tool.mjs', import.meta.url), 'utf8');
-  for (const name of ['gh', 'systemctl', 'journalctl']) { const path = join(bin, name); await writeFile(path, `#!${process.execPath}\n${standin}`); await chmod(path, 0o700); }
+  await installStandin(root, bin, fixtureLane);
   const port = await reservePort();
   const host = `tcp://127.0.0.1:${port.port}`;
   const env: NodeJS.ProcessEnv = { ...environment(root, bin, home), PASEO_LISTEN: `127.0.0.1:${port.port}`, PASEO_WEB_UI_ENABLED: 'true', PASEO_RELAY_ENABLED: 'false',
     PASEO_ORBI_CONFIG: data.authorization, ORBI_E2E_REGISTRY: registry, ORBI_E2E_CALLS: calls, ORBI_E2E_STATE: state };
+  if (options.inventory) env.PASEO_ORBI_HOST_INVENTORY = '1';
   if (mode === 'unconfigured') delete env.PASEO_ORBI_CONFIG;
   const startup = { deadline: Date.now() + 60000 }, shutdown = { deadline: Infinity };
   let log = '';
@@ -503,7 +528,7 @@ export async function makeHost(root: string, alias: string, profile: 'release' |
     await writeFile(join(home, 'config.json'), JSON.stringify({ version: 1, daemon: { listen: env.PASEO_LISTEN, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false }, browserTools: { enabled: false }, usage: { enabled: false }, enableTerminalAgentHooks: false }, agents: { resumeOnStartup: false, metadataGeneration: { providers: [] } }, features: { webUi: { enabled: true }, dictation: { enabled: false }, voiceMode: { enabled: false } }, pluginsEnabled: true }));
     const directory = join(root, `${alias}-registration`);
     const pinned = await pinnedProcessSpecs(home, bin, cli, directory);
-    const registration = await createRegistration({ root, home, directory, env, ...pinned, startupDeadline: performance.now() + Math.max(0, startup.deadline - Date.now()) });
+    const registration = await createRegistration({ root, home, directory, env, ...pinned, fixture: fixtureLane, startupDeadline: performance.now() + Math.max(0, startup.deadline - Date.now()) });
     handle.registration = registration; handle.daemonEnv = registration.env;
     await port.release();
     if (!(await portClosed(port.port))) throw new Error('Occupied/unowned port; refusing launch');
@@ -590,10 +615,10 @@ export async function prepareCandidate(input: Pick<Inputs, 'repo' | 'sha'>, root
   if (JSON.stringify(manifest.build) !== JSON.stringify([['npm', 'ci', '--omit=dev', '--ignore-scripts']])) throw new Error('Unreviewed preparation command');
   return { candidate, sha };
 }
-// Both lanes consume the same fixture hosts, ports and identity-safe accounting.
-export async function startHosts(hosts: Host[], root: string, candidate: string, cli: string, mode: 'available' | 'unconfigured' = 'available') {
+// All lanes consume the same fixture hosts, ports and identity-safe accounting.
+export async function startHosts(hosts: Host[], root: string, candidate: string, cli: string, mode: 'available' | 'unconfigured' = 'available', lane: 'browser' | 'host-first' = 'browser', inventory = true) {
   for (const [alias, profile] of [['host-a', 'release'], ['host-b', 'installed']] as const) {
-    const host = await makeHost(root, alias, profile, candidate, cli, mode, hosts);
+    const host = await makeHost(root, alias, profile, candidate, cli, mode, hosts, lane === 'host-first' ? { fixture: 'host-first', inventory } : {});
     const deadline = host.startup.deadline;
     await boundedWait(async () => {
       await host.registration?.collect();
@@ -655,8 +680,10 @@ export async function release(input: Pick<Inputs, 'output' | 'repo'>, root: stri
   return report;
 }
 
-export async function start(env = process.env, mode: 'available' | 'unconfigured' = 'available') {
-  let input!: Inputs; approveLaunch(env, value => { input = value; }); // no effects before approval
+export async function start(env = process.env, mode: 'available' | 'unconfigured' = 'available', lane: 'browser' | 'host-first' = 'browser', inventory = true) {
+  let input!: Inputs;
+  // Exact approval lane chosen before any effect; default stays the #12 browser lane.
+  (lane === 'host-first' ? approveHostFirstLaunch : approveLaunch)(env, value => { input = value; });
   registrationRuntime();
   // Every existing output ancestor must be canonical. mkdir is exclusive: never reuse evidence/runtime state.
   await checkFreshPath(input.output);
@@ -669,8 +696,8 @@ export async function start(env = process.env, mode: 'available' | 'unconfigured
   try {
     const isolated = await setupEnvironment(root);
     const { candidate, sha } = await prepareCandidate(input, root, isolated);
-    await writeFile(join(input.output, 'receipt.json'), JSON.stringify({ approval: input.approval, candidate: '[EXACT_COMMITTED_ARCHIVE]', evidenceKind: 'browser', pluginSha: sha, dirty: false, nodeVersion: process.version, daemonVersion: '0.15.4', appVersion: '0.15.4', playwrightVersion: '1.65.1', observedAt: new Date().toISOString() }, null, 2));
-    await startHosts(hosts, root, candidate, cli, mode);
+    await writeFile(join(input.output, 'receipt.json'), JSON.stringify({ approval: input.approval, candidate: '[EXACT_COMMITTED_ARCHIVE]', evidenceKind: lane === 'host-first' ? 'host-first' : 'browser', pluginSha: sha, dirty: false, nodeVersion: process.version, daemonVersion: '0.15.4', appVersion: '0.15.4', playwrightVersion: '1.65.1', observedAt: new Date().toISOString() }, null, 2));
+    await startHosts(hosts, root, candidate, cli, mode, lane, inventory);
     return { input, root, hosts, cleanup };
   } catch (error) {
     const primary = new Error(sanitize(diagnostic(error), [root, input.repo, input.output]));
