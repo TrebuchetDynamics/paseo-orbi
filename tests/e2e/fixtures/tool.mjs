@@ -42,8 +42,8 @@ return { allowed, body, code };
 
 const name = basename(process.argv[1] ?? "");
 if (["gh", "systemctl", "journalctl"].includes(name)) {
-const fields = readFileSync(`/proc/${process.pid}/stat`, 'utf8').split(') ').at(-1).split(' ');
-appendFileSync(process.env.ORBI_E2E_REGISTRY, JSON.stringify({ pid: process.pid, ppid: Number(fields[1]), pgid: Number(fields[2]), start: fields[19] }) + '\n');
+// Ownership was acknowledged by the CJS preload before this ESM entry.
+// Calls below are telemetry only, never a signaling capability.
 const args = process.argv.slice(2);
 const data = JSON.parse(readFileSync(process.env.ORBI_E2E_STATE, 'utf8'));
 const { allowed, body, code } = operation(name, args, data);

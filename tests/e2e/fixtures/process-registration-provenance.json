@@ -1,0 +1,50 @@
+{
+  "serverVersion": "0.15.4",
+  "serverArchiveSha256": "c6fed3d03ec403521a4c949dcfce90a6d92dfac2c2002ce83f85c49dc45be4a2",
+  "serverIntegrity": "sha512-LB0WwgQKXlq+OsUwReBgFUQfy25QC3FRNuKSyIqR7P/wpE2yIv4S0QXQbZ1vckLSv5wOrNhSct0eOi/T+fnRYQ==",
+  "nodeVersion": "22.19.0",
+  "esbuildVersion": "0.25.12",
+  "sources": {
+    "@getpaseo/cli/bin/paseo": "2b761f40e5a6416e4aaa733f38a47d5a4639b42cc1f88fc060256d2c4ed8cf94",
+    "@getpaseo/cli/dist/commands/daemon/local-daemon.js": "9f60e5ddedeebd6ea7a493af8306ea63569a21f7319b7bce1f3726894b0366f7",
+    "@getpaseo/server/dist/scripts/supervisor-entrypoint.js": "935ea7f386cb464f1aacd111901370b7c7b11ef4c9e6a1ce5fe378dee78cd3bb",
+    "@getpaseo/server/dist/scripts/supervisor.js": "74f7acb138c4f7f5cde25546f0d6b4865c21fa9b418ffc044f36ab27b82677c4",
+    "@getpaseo/server/dist/src/server/daemon-instance.js": "59e47c7842a4da6c507e537d3b7c474c73895c457bbef19f4ee6b3896bf7cad5",
+    "@getpaseo/server/dist/src/server/config-environment.js": "350bb69cf7d4d16ddf5ca11610f5b1202b0cc13fed968ca9667f3912ae8e7113",
+    "@getpaseo/server/dist/server/server/daemon-worker.js": "c010bef70008cc3b00c100abddf345dd5fff896aa9d9aa6ace6a74fe6c087bb5",
+    "@getpaseo/server/dist/server/server/plugins/plugin-process.js": "08976e11deaf32fa1faf8f6b7154124952dc0ad973ddbb36eba77eecdd83ffdf",
+    "@getpaseo/server/dist/server/server/plugins/runtime.js": "908804bb291f37c2b02f756dfbaba46dd2942daa7044f399ca131ab03a826574",
+    "@getpaseo/server/dist/server/server/plugins/index.js": "e62cc83a8c29a9adc42a02ae696e9575d4ebc95f4f7f3ccb7af98e4252003304",
+    "@getpaseo/server/dist/server/server/plugins/compiler-worker.js": "aa377b333da04785d0b2869fe3d0cde94c912c0363e1068ed2dcad17e59ec863",
+    "@getpaseo/server/dist/server/server/paseo-env.js": "376ef21a79563a728c048821ae0ab7abbd70e103024bcf6df421887dcff71609",
+    "@getpaseo/server/dist/server/terminal/terminal-worker-runtime.js": "5a6660632139c638da303cdc04ff3bc12ce161412af7135fba107e851eaf471b",
+    "@getpaseo/server/dist/server/terminal/terminal-worker-launch.js": "deafac64b963ba920017e320fb5023559d68e0f2ad8fc82d591daed0d398bcd7",
+    "@getpaseo/server/dist/server/terminal/terminal-worker-process.js": "787e8d6b29550f47697206204e35018e75c554f5051d25188dc67ab69247a391",
+    "@getpaseo/server/dist/server/terminal/terminal-worker-processes.js": "7028401c2a1e3fe81d96544eeade546f82c15185b823df65f6c6644da22f1441",
+    "@getpaseo/server/dist/server/server/managed-processes/managed-processes.js": "12653a89bd2c679bf68c38146abce4bea3b5b4e7f4c6f2a8366973df87c71c92",
+    "@getpaseo/server/dist/server/terminal-worker/terminal-worker.mjs": "bdcd1e46afe37c2ffdb96980c8c40672d37e49c1afcf8556ec190b934602f9ab",
+    "esbuild/lib/main.js": "0d1241812c443111d39475dfc66836003e9ef8b87e54d990dd67df29d20010e1"
+  },
+  "contracts": {
+    "runtimeName": "sha256(bundle bytes + node-pty/package.json bytes + `${platform}-${arch}`).slice(0,12), prefixed by sanitized paseoVersion + hyphen",
+    "launcherReadinessMs": 15000,
+    "outerLaunchMs": 20000,
+    "ackWithinExistingReadinessMs": 5000,
+    "psIdentityParents": [
+      "daemon",
+      "terminal-worker"
+    ],
+    "psLinuxTableParents": [
+      "terminal-worker"
+    ],
+    "esbuildServiceArgs": [
+      "--service=0.25.12",
+      "--ping"
+    ],
+    "nodeDocs": [
+      "https://nodejs.org/download/release/v22.19.0/docs/api/cli.html",
+      "https://nodejs.org/download/release/v22.19.0/docs/api/process.html#processexecvefile-args-env"
+    ]
+  },
+  "nodePtyPackageSha256": "f4a19bbc7cf4c2e35c081e6a18a3d11d21c54c2f3cc25bfe48142742a781b71d"
+}

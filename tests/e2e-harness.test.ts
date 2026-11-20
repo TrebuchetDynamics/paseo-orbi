@@ -295,3 +295,418 @@ it('generated browser telemetry reaches all real adapters with successful/empty/
     } finally { processPort.mockRestore(); ports.dispose(); }
   }
 });
+
+// Synthetic programs only: exercise the real pre-entry boundary, not a prefilled ledger.
+import { spawn, execFile as execFileCallback } from 'node:child_process';
+import { promisify } from 'node:util';
+import { once } from 'node:events';
+import { createHash } from 'node:crypto';
+import fsPromises, { mkdir, chmod, readdir } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { createRegistration, type ProcessSpec, identity, ownedProcesses, managementArgs, psArguments, registrationRuntime, release, lease, makeHost, type Host } from './e2e/harness';
+const execFileAsync = promisify(execFileCallback);
+const fixtures = fileURLToPath(new URL('./e2e/fixtures/', import.meta.url));
+const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
+async function registrationFixture(esm = false, startupMs = 10000) {
+  const root = await mkdtemp(join(tmpdir(), 'orbi-registration-')); roots.push(root);
+  const home = join(root, 'home'); await mkdir(home);
+  const worker = join(root, esm ? 'terminal-worker.mjs' : 'application.cjs');
+  await writeFile(worker, esm ? `import ${JSON.stringify(join(fixtures, 'process-registration-worker.cjs'))};` : await readFile(join(fixtures, 'process-registration-worker.cjs')));
+  const launcher = join(fixtures, 'process-registration-launcher.cjs');
+  const env = { ...environment(root, root, home), ORBI_TEST_WORKER: worker, ORBI_TEST_MARKER: join(root, 'entered') };
+  const specs: ProcessSpec[] = [
+    { role: 'root', entry: worker, digest: digest(await readFile(worker)), args: [] },
+  ];
+  const registration = await createRegistration({ root, home, directory: join(root, 'registration'), env, specs, startupDeadline: performance.now() + startupMs, esbuild: join(root, 'generated-esbuild') });
+  return { root, home, env, specs, registration, worker, launcher };
+}
+async function independentStop(children: { pid?: number; captured: Identity | null }[]) {
+  // Captured directly from synthetic spawn / fixture PID pipe, independent of admission ledger.
+  for (const child of children) if (child.pid) {
+    const p = await identity(child.pid);
+    if (p && child.captured && p.start === child.captured.start && p.pgid === child.captured.pgid && p.pgid === child.pid && p.pgid !== (await identity(process.pid))?.pgid) {
+      try { process.kill(-p.pgid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  }
+  await boundedWait(async () => !(await Promise.all(children.map(c => c.pid ? identity(c.pid) : null))).some(Boolean), 2000);
+}
+it.each([{ esm: false, threadPreload: false }, { esm: false, threadPreload: true }, { esm: true, threadPreload: false }, { esm: true, threadPreload: true }])('preload gates CJS/ESM application and import hooks before ack; threads never register ($esm / $threadPreload)', async ({ esm, threadPreload }) => {
+  const f = await registrationFixture(esm), children: { pid?: number; captured: Identity | null }[] = [];
+  const hook = join(f.root, 'hook.mjs'); await writeFile(hook, `import {appendFileSync} from 'node:fs'; appendFileSync(process.env.ORBI_TEST_MARKER,'import\\n');`);
+  // Exact execArgv is part of independent spawn provenance, including the ordering hook.
+  f.specs[0].nodeArgs = ['--import', hook];
+  Object.assign(f.registration.env, { ORBI_TEST_THREAD_PRELOAD: threadPreload ? '1' : '0', ORBI_TEST_PRELOAD: f.registration.preload, ORBI_TEST_THREAD_RESULT: join(f.root, 'thread-result') });
+  await f.registration.configure(f.specs);
+  const child = spawn(process.execPath, ['--import', hook, f.worker], { env: f.registration.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  try {
+    await f.registration.captureRoot(child);
+    await boundedWait(async () => (await readdir(f.registration.directory)).some(n => /^slot-/.test(n)), 1000);
+    await expect(readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).rejects.toThrow();
+    await f.registration.collect();
+    await boundedWait(async () => { try { return (await readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).includes('thread') && !!(await readFile(join(f.root, 'thread-result'), 'utf8')); } catch { return false; } }, 2000);
+    await f.registration.collect();
+    expect(await readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).toBe('import\napplication\nthread\n');
+    expect(f.registration.ledger).toHaveLength(1);
+    expect(await readFile(join(f.root, 'thread-result'), 'utf8')).toBe(join(f.root, 'generated-esbuild'));
+  } finally { await independentStop(children); await f.registration.close(); }
+});
+it('native exec gates preserve PID/start/PGID and standard stdin/stdout without spawning', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const target = join(f.root, 'synthetic-native');
+  await execFileAsync('/usr/bin/cc', [join(fixtures, 'process-registration-native.c'), '-o', target], { timeout: 10000 });
+  const gate = join(f.root, 'esbuild');
+  await writeFile(gate, `#!${process.execPath}\nrequire(${JSON.stringify(join(fixtures, 'native-exec-gate.cjs'))});\n`); await chmod(gate, 0o700);
+  f.specs[0] = { role: 'root', entry: gate, digest: digest(await readFile(gate)), args: ['--service=0.25.12', '--ping'], native: { target, digest: digest(await readFile(target)) } };
+  await f.registration.configure(f.specs);
+  const child = spawn(process.execPath, [gate, '--service=0.25.12', '--ping'], { env: f.registration.env, detached: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] }); children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  let stdout = '', stderr = ''; child.stdout!.on('data', data => { stdout += String(data); }); child.stderr!.on('data', data => { stderr += String(data); });
+  try {
+    const initial = await f.registration.captureRoot(child);
+    f.registration.service();
+    await boundedWait(async () => { await f.registration.collect(); return (await readdir(f.registration.directory)).some(n => /^slot-/.test(n)); }, 2000);
+    child.stdin!.write('identity-and-stdio\n');
+    await boundedWait(async () => stdout.includes('identity-and-stdio'), 2000);
+    expect(await identity(child.pid!)).toEqual(initial);
+    expect(stdout).toBe('identity-and-stdio\n');
+    expect(stderr).toContain('native-stderr');
+    await f.registration.verify();
+    await f.registration.close();
+    // Model execve occurring between readlink(exe) and stat(exe): the first
+    // observation names Node, the next metadata read already names the target.
+    f.registration.ledger[0].nativeObserved = false;
+    const originalReadlink = fsPromises.readlink;
+    const observation = vi.spyOn(fsPromises, 'readlink').mockImplementationOnce((async () => process.execPath) as typeof originalReadlink);
+    syncBuiltinESMExports();
+    try {
+      await expect(f.registration.verify()).resolves.toBeUndefined();
+      expect(f.registration.ledger[0].nativeObserved).toBe(true);
+    } finally { observation.mockRestore(); syncBuiltinESMExports(); }
+  } finally { await independentStop(children); await f.registration.close(); }
+});
+
+it('captures detached worker before launcher exits, retains history across reparenting, and escalates cleanup from the captured ledger', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const childFile = join(f.root, 'child');
+  Object.assign(f.registration.env, { ORBI_TEST_CHILD: childFile, ORBI_TEST_RESIST: '1', ORBI_TEST_THREAD_PRELOAD: '1', ORBI_TEST_PRELOAD: f.registration.preload });
+  const launcherDigest = digest(await readFile(f.launcher));
+  const specs: ProcessSpec[] = ['root', 'supervisor', 'daemon', 'terminal-launcher'].map(role => ({ role: role as ProcessSpec['role'], entry: f.launcher, digest: launcherDigest, args: [role] }));
+  specs.push({ role: 'terminal-worker', entry: f.worker, digest: digest(await readFile(f.worker)), args: [] });
+  await f.registration.configure(specs);
+  const child = spawn(process.execPath, [f.launcher, 'root'], { env: f.registration.env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] }); children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  let stderr = ''; child.stderr.on('data', b => { stderr += b; });
+  try {
+    await f.registration.captureRoot(child); f.registration.service();
+    await boundedWait(async () => { try { const pid = Number(await readFile(childFile, 'utf8')); if (!children.some(c => c.pid === pid)) children.push({ pid, captured: await identity(pid) }); } catch { /* not spawned yet */ } await f.registration.collect(); return f.registration.ledger.length === 5; }, 4000);
+    const worker = f.registration.ledger.find(c => c.spec.role === 'terminal-worker')!;
+    expect(worker.identity.ppid).not.toBe(1); expect(worker.identity.pgid).toBe(worker.identity.pid);
+    await boundedWait(async () => !(await identity(child.pid!)), 2000);
+    expect((await identity(worker.identity.pid))?.ppid).not.toBe(worker.identity.ppid);
+    expect(stderr).not.toContain('refused');
+    await f.registration.running();
+    const deadline = Number(process.hrtime.bigint()) / 1e6 + 4000;
+    await f.registration.shutdown(deadline);
+    const signals: string[] = [];
+    await stopOwned([], {
+      table: async () => (await Promise.all(f.registration.ledger.map(c => identity(c.identity.pid)))).filter((p): p is Identity => !!p),
+      reconcile: async () => { await f.registration.collect(); return f.registration.ledger.map(c => c.identity); },
+      validate: group => f.registration.verify(group), deadline,
+      signal: (pgid, signal) => { signals.push(signal); process.kill(-pgid, signal); }, sleep: ms => new Promise(ok => setTimeout(ok, ms)),
+    });
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']); expect(await identity(worker.identity.pid)).toBeNull();
+    expect(f.registration.ledger).toHaveLength(5); // no record recycling
+  } finally {
+    try { const pid = Number(await readFile(childFile, 'utf8')); if (!children.some(c => c.pid === pid)) children.push({ pid, captured: await identity(pid) }); } catch { /* no child */ }
+    await independentStop(children); await f.registration.close();
+  }
+}, 10000);
+
+it('closed ps parent/argv table, candidate-only management boundary and runtime prerequisite refuse every other role/form', () => {
+  const one = ['-ww', '-p', '123', '-o', 'lstart=', '-o', 'command='];
+  const table = ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'sid=', '-o', 'lstart='];
+  for (const role of ['root', 'supervisor', 'daemon', 'plugin', 'terminal-launcher', 'terminal-worker', 'fixture', 'npm']) {
+    expect(psArguments(role, one)).toBe(['daemon', 'terminal-worker'].includes(role));
+    expect(psArguments(role, table)).toBe(role === 'terminal-worker');
+    for (const args of [[], [...one, '--forest'], one.map(a => a === '123' ? '-1' : a), table.filter(a => a !== 'sid=')]) expect(psArguments(role, args)).toBe(false);
+  }
+  for (const args of [['ls', '--json'], ['ls', 'paseo-orbi', '--json'], ['install', '/owned/candidate', '--id', 'paseo-orbi'], ...['remove', 'reload', 'enable', 'disable'].map(op => [op, 'paseo-orbi'])]) expect(managementArgs(args, '/owned/candidate')).toEqual(args);
+  for (const args of [['install', '@x/y', '--id', 'paseo-orbi'], ['install', '/owned/candidate/../candidate', '--id', 'paseo-orbi'], ['install', '/owned/candidate', '--id', 'paseo-orbi', '--path', '.'], ['install', '/owned/candidate', '--id', 'paseo-orbi', '--ref', 'main'], ['update', 'paseo-orbi'], ['remove', 'other'], ['ls'], ['ls', '--json', '--host', 'elsewhere']]) expect(() => managementArgs(args, '/owned/candidate')).toThrow(/refused/);
+  expect(() => registrationRuntime('v24.0.0')).toThrow(/22.19.0/);
+  expect(() => registrationRuntime('v22.19.0', 'linux', undefined)).not.toThrow(); // default uses actual supported API
+  expect(() => registrationRuntime('v22.19.0', 'linux', null)).toThrow(/execve/);
+});
+
+it.each(['denial', 'timeout', 'nonce', 'digest', 'dead-collector', 'wrong-home', 'wrong-content', 'wrong-role', 'npm'])('pre-entry failure %s never runs application code', async mode => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const env = { ...f.registration.env };
+  if (mode === 'wrong-home') env.PASEO_HOME = '/wrong';
+  if (mode === 'wrong-content') await writeFile(f.worker, '// changed\n' + await readFile(f.worker, 'utf8'));
+  if (mode === 'wrong-role') { f.specs[0].role = 'plugin'; await f.registration.configure(f.specs); }
+  if (mode === 'npm') { env.ORBI_TEST_WORKER = '/npm'; f.specs[0].entry += '-npm'; await f.registration.configure(f.specs); }
+  if (mode === 'dead-collector') {
+    const config = JSON.parse(await readFile(join(f.registration.directory, 'config.json'), 'utf8'));
+    config.collector.start = 'reused'; await chmod(join(f.registration.directory, 'config.json'), 0o600); await writeFile(join(f.registration.directory, 'config.json'), JSON.stringify(config));
+  }
+  const child = spawn(process.execPath, [f.worker], { env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] }); children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  let stderr = ''; child.stderr.on('data', b => { stderr += b; });
+  const exited = once(child, 'exit');
+  try {
+    if (!['wrong-home', 'wrong-content', 'wrong-role', 'npm', 'dead-collector'].includes(mode)) await f.registration.captureRoot(child);
+    if (['denial', 'nonce', 'digest'].includes(mode)) {
+      let slot = '';
+      await boundedWait(async () => { slot = (await readdir(f.registration.directory)).find(n => /^slot-/.test(n)) ?? ''; return !!slot && await readFile(join(f.registration.directory, slot, 'request')).then(() => true, () => false); }, 2000);
+      if (mode === 'denial') await writeFile(join(f.registration.directory, 'failure'), 'deliberate admission denial');
+      else {
+        const bytes = await readFile(join(f.registration.directory, slot, 'request'), 'utf8'), request = JSON.parse(bytes);
+        await writeFile(join(f.registration.directory, slot, 'ack'), JSON.stringify({ session: request.session, identity: request.identity, nonce: mode === 'nonce' ? 'wrong' : request.nonce, digest: mode === 'digest' ? 'wrong' : digest(bytes) }));
+      }
+    } else if (mode === 'wrong-home') await expect(f.registration.captureRoot(child)).rejects.toThrow(/invariant/);
+    // A failed capture never grants a lease; the synthetic finally cleanup is independent.
+    if (['wrong-home', 'wrong-role'].includes(mode)) await f.registration.shutdown(Number(process.hrtime.bigint()) / 1e6 + 50);
+    if (mode === 'timeout') await f.registration.shutdown(Number(process.hrtime.bigint()) / 1e6 + 100);
+    await boundedWait(async () => child.exitCode !== null, mode === 'timeout' ? 1000 : 6000);
+    await exited;
+    expect(stderr).toMatch(/Process registration refused/);
+    await expect(readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).rejects.toThrow();
+  } finally { await independentStop(children); await f.registration.close(); }
+}, 9000);
+
+it.each(['malformed', 'partial', 'oversized', 'marker-only', 'parent-reused', 'forged-root', 'wrong-edge', 'conflict', 'missing-history', 'overflow'])('collector rejects %s records as sticky failures without retrospective enrollment', async mode => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const child = spawn(process.execPath, [f.worker], { env: f.registration.env, detached: true, stdio: 'ignore' });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  try {
+    await f.registration.captureRoot(child);
+    let slot = '';
+    await boundedWait(async () => { slot = (await readdir(f.registration.directory)).find(n => /^slot-/.test(n)) ?? ''; return !!slot && await readFile(join(f.registration.directory, slot, 'request')).then(() => true, () => false); }, 2000);
+    const requestPath = join(f.registration.directory, slot, 'request'), bytes = await readFile(requestPath, 'utf8'), request = JSON.parse(bytes);
+    if (mode === 'malformed') await writeFile(requestPath, '{');
+    if (mode === 'partial') { await rm(requestPath); await writeFile(requestPath + '.tmp', '{'); await f.registration.shutdown(Number(process.hrtime.bigint()) / 1e6 - 1); }
+    if (mode === 'oversized') await writeFile(requestPath, 'x'.repeat(4097));
+    if (mode === 'marker-only') await writeFile(requestPath, JSON.stringify(request.identity));
+    if (mode === 'parent-reused') { request.parent.start = 'reused'; await writeFile(requestPath, JSON.stringify(request)); }
+    if (mode === 'forged-root') { request.identity = await identity(process.pid); request.parent = await identity(process.ppid); await writeFile(requestPath, JSON.stringify(request)); }
+    if (mode === 'wrong-edge') { request.role = 'terminal-worker'; await writeFile(requestPath, JSON.stringify(request)); }
+    if (mode === 'conflict' || mode === 'missing-history') {
+      await f.registration.collect();
+      if (mode === 'conflict') { request.nonce = 'f'.repeat(32); await writeFile(requestPath, JSON.stringify(request)); }
+      else await rm(join(f.registration.directory, slot), { recursive: true });
+    }
+    if (mode === 'overflow') await mkdir(join(f.registration.directory, 'slot-256'));
+    await expect(f.registration.collect()).rejects.toThrow();
+    await expect(f.registration.collect()).rejects.toThrow();
+    expect(f.registration.errors).toHaveLength(1);
+    expect(f.registration.ledger).toHaveLength(1); // only independently captured actual spawn
+    if (!['conflict', 'missing-history'].includes(mode)) await expect(readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).rejects.toThrow();
+  } finally { await independentStop(children); await f.registration.close(); }
+});
+
+it('five-second missing collector-service deadline is fixed and prevents entry', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const child = spawn(process.execPath, [f.worker], { env: f.registration.env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  let stderr = ''; child.stderr.on('data', b => { stderr += b; });
+  const start = performance.now();
+  try {
+    await f.registration.captureRoot(child);
+    await boundedWait(async () => child.exitCode !== null, 6000);
+    expect(performance.now() - start).toBeLessThan(6000);
+    expect(stderr).toMatch(/five-second\/phase admission deadline/);
+    await expect(readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).rejects.toThrow();
+  } finally { await independentStop(children); await f.registration.close(); }
+}, 8000);
+
+it('a dead launcher before admission cannot be recovered from worker JSON or markers', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const childFile = join(f.root, 'child');
+  Object.assign(f.registration.env, { ORBI_TEST_CHILD: childFile, ORBI_TEST_PARENT_EARLY_EXIT: '1' });
+  const d = digest(await readFile(f.launcher));
+  const specs: ProcessSpec[] = ['root', 'supervisor', 'daemon', 'terminal-launcher'].map(role => ({ role: role as ProcessSpec['role'], entry: f.launcher, digest: d, args: [role] }));
+  specs.push({ role: 'terminal-worker', entry: f.worker, digest: digest(await readFile(f.worker)), args: [] });
+  await f.registration.configure(specs);
+  const child = spawn(process.execPath, [f.launcher, 'root'], { env: f.registration.env, detached: true, stdio: 'ignore' });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  try {
+    await f.registration.captureRoot(child);
+    await boundedWait(async () => {
+      try { const pid = Number(await readFile(childFile, 'utf8')); if (!children.some(c => c.pid === pid)) children.push({ pid, captured: await identity(pid) }); } catch { /* not launched */ }
+      try { await f.registration.collect(); } catch { return true; }
+      return false;
+    }, 3000);
+    expect(f.registration.errors.join()).toMatch(/ancestry|role edge/);
+    expect(f.registration.ledger.some(c => c.spec.role === 'terminal-worker')).toBe(false);
+    await expect(readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).rejects.toThrow();
+  } finally {
+    try { const pid = Number(await readFile(childFile, 'utf8')); if (!children.some(c => c.pid === pid)) children.push({ pid, captured: await identity(pid) }); } catch { /* no child */ }
+    await independentStop(children); await f.registration.close();
+  }
+});
+
+it('actual harness PGID is refused and accounting errors do not authorize signaling an unsafe group or extend the fixed budget', async () => {
+  const self = (await identity(process.pid))!, signal = vi.fn();
+  await expect(stopOwned([self], { table: async () => [self], signal, sleep: async () => {} })).rejects.toThrow(/Unsafe process group/);
+  expect(signal).not.toHaveBeenCalled();
+  const p = { pid: 1001, ppid: 1, pgid: 1001, start: '10' };
+  let clock = 0, calls = 0;
+  await expect(stopOwned([], { table: async () => [p], reconcile: async () => { calls++; clock += 10; return [p]; }, signal, sleep: async ms => { clock += ms; }, deadline: 20, now: () => clock })).rejects.toThrow(/deadline|survived/);
+  expect(signal).not.toHaveBeenCalled(); expect(calls).toBeLessThan(10);
+});
+
+it('producer capacity is bounded to 256 immutable slots and exhaustion prevents application entry', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  for (let i = 0; i < 256; i++) await mkdir(join(f.registration.directory, `slot-${i}`));
+  const child = spawn(process.execPath, [f.worker], { env: f.registration.env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  let stderr = ''; child.stderr.on('data', b => { stderr += b; });
+  try {
+    await boundedWait(async () => child.exitCode !== null, 2000);
+    expect(stderr).toMatch(/capacity exhausted/);
+    expect((await readdir(f.registration.directory)).filter(n => /^slot-/.test(n))).toHaveLength(256);
+    await expect(readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).rejects.toThrow();
+    await expect(f.registration.collect()).rejects.toThrow(/capacity/);
+  } finally { await independentStop(children); await f.registration.close(); }
+});
+
+it.each([false, true])('shared release deletes evidence/runtime only after complete accounting (corrupt=%s)', async corrupt => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const output = await mkdtemp(join(tmpdir(), 'orbi-cleanup-report-')); roots.push(output);
+  const registry = join(f.root, 'reads'); await writeFile(registry, '');
+  const child = spawn(process.execPath, [f.worker], { env: f.registration.env, detached: true, stdio: 'ignore' });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  const port = await (await import('./e2e/harness')).reservePort(); await port.release();
+  const dataCleanup = vi.fn(async () => {});
+  const host = { alias: 'host-a', host: `tcp://127.0.0.1:${port.port}`, home: f.home, port: port.port, initial: await f.registration.captureRoot(child),
+    startup: { deadline: Infinity }, shutdown: { deadline: Infinity }, registration: f.registration, env: f.env, registry, installation: 'never-attempted', cliCall: vi.fn(),
+    log: () => 'synthetic host log', data: { cleanup: dataCleanup }, child, daemonEnv: f.registration.env } as unknown as Host;
+  try {
+    f.registration.service();
+    await boundedWait(async () => { await f.registration.collect(); try { return !!(await readFile(f.env.ORBI_TEST_MARKER!)); } catch { return false; } }, 2000);
+    const serialized = lease({ root: f.root, input: { repo: '/candidate', sha: 'a'.repeat(40), output, approval: approved.PASEO_E2E_APPROVAL_URL }, hosts: [host] });
+    expect(serialized.hosts[0].env.NODE_OPTIONS).toBeUndefined(); expect(serialized.hosts[0].env.ORBI_PROCESS_CONFIG).toBeUndefined();
+    expect(JSON.stringify(serialized)).not.toContain('--require=');
+    if (corrupt) {
+      const slot = (await readdir(f.registration.directory)).find(n => /^slot-/.test(n))!;
+      await writeFile(join(f.registration.directory, slot, 'request'), 'corrupt');
+      await expect(release({ output, repo: '/candidate' }, f.root, [host])).rejects.toThrow(/runtime trees retained/);
+      expect((await readFile(join(output, 'cleanup.json'), 'utf8'))).toMatch(/Conflicting|registration/);
+      expect(await readdir(f.root)).toContain('registration');
+      expect(dataCleanup).not.toHaveBeenCalled();
+    } else {
+      expect((await release({ output, repo: '/candidate' }, f.root, [host])).status).toBe('pass');
+      await expect(readdir(f.root)).rejects.toThrow(); expect(dataCleanup).toHaveBeenCalledOnce();
+    }
+    expect(await identity(child.pid!)).toBeNull();
+    expect(host.cliCall).not.toHaveBeenCalled();
+  } finally { await independentStop(children); await f.registration.close(); }
+}, 10000);
+
+it('partial host is retained before initialization can fail, without any PID-only lease or daemon preload in management env', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orbi-partial-host-')); roots.push(root);
+  const candidate = join(root, 'candidate'); await mkdir(candidate);
+  const hosts: Host[] = [];
+  await expect(makeHost(root, 'host-a', 'release', candidate, join(root, 'missing-cli'), 'available', hosts)).rejects.toThrow();
+  expect(hosts).toHaveLength(1);
+  expect(hosts[0].child).toBeNull(); expect(hosts[0].initial).toBeNull(); expect(hosts[0].installation).toBe('never-attempted');
+  expect(hosts[0].env.NODE_OPTIONS).toBeUndefined();
+  expect(await readdir(join(root, 'host-a-bin'))).not.toContain('npm');
+  const output = await mkdtemp(join(tmpdir(), 'orbi-partial-report-')); roots.push(output);
+  expect((await release({ output, repo: '/candidate' }, root, hosts)).status).toBe('pass');
+  const f = await registrationFixture();
+  await expect(f.registration.captureRoot({ pid: 2147483647 } as never)).rejects.toThrow(/no PID-only signaling/);
+  expect(f.registration.ledger).toHaveLength(0); await f.registration.close();
+});
+
+it('worker JSON, nonempty terminal lists and legacy marker-only fixture records only discover/refuse; they never enroll', async () => {
+  const f = await registrationFixture();
+  const registry = join(f.root, 'reads'); await writeFile(registry, JSON.stringify(await identity(process.pid)));
+  const host = { home: f.home, registry, registration: f.registration } as Host;
+  await expect(ownedProcesses([host], f.root)).rejects.toThrow(/marker-only/);
+  expect(f.registration.ledger).toHaveLength(0);
+  await writeFile(registry, ''); await mkdir(join(f.home, 'terminal-worker'));
+  const path = join(f.home, 'terminal-worker', 'test.json');
+  await writeFile(path, JSON.stringify({ pid: process.pid, secret: 'worker-secret-must-not-be-logged', terminals: [] }));
+  await expect(ownedProcesses([host], f.root)).rejects.toThrow(/no retrospective enrollment/);
+  await writeFile(path, JSON.stringify({ terminals: [{ pid: process.pid }] }));
+  await expect(ownedProcesses([host], f.root)).rejects.toThrow(/terminal programs/);
+  await writeFile(path, 'worker-secret-must-not-be-logged');
+  await expect(ownedProcesses([host], f.root)).rejects.toThrow('Malformed/oversized upstream worker discovery record (contents withheld)');
+  await f.registration.close();
+});
+
+it('contending plugin publishers get distinct immutable slots and retain in-place Node IPC with execArgv empty', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const childFile = join(f.root, 'children');
+  Object.assign(f.registration.env, { ORBI_TEST_CHILD: childFile, ORBI_TEST_FANOUT: '8' });
+  const specs: ProcessSpec[] = ['root', 'supervisor', 'daemon'].map(role => ({ role: role as ProcessSpec['role'], entry: f.launcher, digest: '', args: [role] }));
+  for (const spec of specs) spec.digest = digest(await readFile(f.launcher));
+  specs.push({ role: 'plugin', entry: f.worker, digest: digest(await readFile(f.worker)), args: [] });
+  await f.registration.configure(specs);
+  const child = spawn(process.execPath, [f.launcher, 'root'], { env: f.registration.env, detached: true, stdio: 'ignore' });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  const discover = async () => { try { for (const pid of JSON.parse(await readFile(childFile, 'utf8'))) if (!children.some(c => c.pid === pid)) children.push({ pid, captured: await identity(pid) }); } catch { /* not yet written */ } };
+  try {
+    await f.registration.captureRoot(child); f.registration.service();
+    await boundedWait(async () => { await discover(); await f.registration.collect(); return f.registration.ledger.length === 11; }, 4000);
+    await boundedWait(async () => !(await identity(child.pid!)), 2000);
+    expect((await readdir(f.registration.directory)).filter(n => /^slot-/.test(n))).toHaveLength(11);
+    expect(f.registration.ledger.filter(c => c.spec.role === 'plugin')).toHaveLength(8);
+    expect(f.registration.errors).toEqual([]);
+  } finally { await discover(); await independentStop(children); await f.registration.close(); }
+}, 8000);
+
+it('actual collector death prevents application entry even with a fresh immutable request', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const childFile = join(f.root, 'dead-collector-child'), errorFile = join(f.root, 'dead-collector-error');
+  const collector = spawn(process.execPath, [f.launcher, 'collector-exit'], { detached: true, stdio: 'ignore', env: { ...f.env, ORBI_TEST_PROCESS_CONFIG: f.registration.env.ORBI_PROCESS_CONFIG, ORBI_TEST_CHILD: childFile, ORBI_TEST_ERROR: errorFile } });
+  children.push({ pid: collector.pid, captured: collector.pid ? await identity(collector.pid) : null });
+  try {
+    await boundedWait(async () => { try { const pid = Number(await readFile(childFile, 'utf8')); if (!children.some(c => c.pid === pid)) children.push({ pid, captured: await identity(pid) }); return true; } catch { return false; } }, 2000);
+    await boundedWait(async () => { try { return (await readFile(errorFile, 'utf8')).includes('Process registration refused'); } catch { return false; } }, 2000);
+    expect(await identity(collector.pid!)).toBeNull();
+    await expect(readFile(f.env.ORBI_TEST_MARKER!, 'utf8')).rejects.toThrow();
+  } finally { await independentStop(children); await f.registration.close(); }
+});
+
+it('running admissions do not inherit an expired startup deadline, and shutdown never renews its fixed deadline', async () => {
+  const f = await registrationFixture(false, -1), children: { pid?: number; captured: Identity | null }[] = [];
+  const controlPath = join(f.registration.directory, 'control');
+  // Transition is collector-owned, and is not a reset of any child admission timer.
+  await f.registration.running();
+  const child = spawn(process.execPath, [f.worker], { env: f.registration.env, detached: true, stdio: 'ignore' });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  try {
+    await f.registration.captureRoot(child); f.registration.service();
+    await boundedWait(async () => { await f.registration.collect(); try { return !!(await readFile(f.env.ORBI_TEST_MARKER!)); } catch { return false; } }, 2000);
+    const fixed = Number(process.hrtime.bigint()) / 1e6 + 100;
+    await f.registration.shutdown(fixed); await f.registration.shutdown(fixed + 10000);
+    expect(JSON.parse(await readFile(controlPath, 'utf8')).deadline).toBe(fixed);
+  } finally { await independentStop(children); await f.registration.close(); }
+});
+
+it('an observed forbidden executable remains an accounting failure even if the process exits during validation', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const child = spawn(process.execPath, [f.worker], { env: f.registration.env, detached: true, stdio: 'ignore' });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  let observation: ReturnType<typeof vi.spyOn> | undefined;
+  try {
+    await f.registration.captureRoot(child);
+    await boundedWait(async () => { await f.registration.collect(); try { return !!(await readFile(f.env.ORBI_TEST_MARKER!)); } catch { return false; } }, 2000);
+    const original = fsPromises.readlink;
+    observation = vi.spyOn(fsPromises, 'readlink').mockImplementation((async (...args: Parameters<typeof original>) => {
+      if (args[0] === `/proc/${child.pid}/exe`) {
+        // Deterministically model the kernel observation followed by exit, without
+        // racing a real unapproved executable or granting it cleanup authority.
+        await independentStop(children);
+        return '/unapproved-executable';
+      }
+      return original(...args);
+    }) as typeof original);
+    syncBuiltinESMExports();
+    await expect(f.registration.collect()).rejects.toThrow('Unapproved executable transition');
+    await expect(f.registration.collect()).rejects.toThrow('Unapproved executable transition');
+    expect(f.registration.errors).toHaveLength(1);
+  } finally {
+    observation?.mockRestore(); syncBuiltinESMExports();
+    await independentStop(children); await f.registration.close();
+  }
+});
