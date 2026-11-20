@@ -125,6 +125,14 @@ it('four_views_read_only_journey', async () => {
   // semantics and adds no discovered family or repository action.
   expect(host.readInventory).toHaveBeenCalledTimes(1);
   expect(text()).toContain('Host service check: off');
+  expect(text()).toContain('undecided');
+  expect(text()).not.toContain('Observed unit families');
+  expect(text()).not.toContain('last successful check');
+  expect(text().indexOf('Your Linux user services')).toBeLessThan(text().indexOf('Demo (Example/project)'));
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+  await press('Set up service access');
+  expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');
+  expect(text()).toContain('Connected clients on this host can then see Orbi unit names');
   expect(text()).not.toContain('View repository');
   partial = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();

@@ -141,11 +141,22 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
 }) {
   const text = { color: theme.colors.foreground };
   const [expanded, setExpanded] = useExpandedFamily(surfaceKey);
+  const [setupExpanded, setSetupExpanded] = useState(false);
   const observation = query.observation;
   const data = observation?.data ?? null;
   const families = sortFamilies(data?.groups ?? []);
   const attention = families.filter(group => summarizeFamily(group).facts.includes('failed')).length;
+  const off = data?.state === 'off';
   const state = data?.state ?? (!connected || !foreground ? 'unavailable' : 'loading');
+  // Only fresh evidence may publish counts, and only a fresh complete empty
+  // check may publish absence. Off/loading, unavailable, stale and offline are
+  // undecided, not empty.
+  const evidence = data !== null && (data.state === 'complete' || data.state === 'partial');
+  const current = evidence && connected && foreground
+    && (observation?.state === 'available' || observation?.state === 'partial');
+  // A partial check with no confirmed rows may be missing units; it never
+  // publishes a zero count that could read as an empty host.
+  const countEvidence = current && (families.length > 0 || data?.state === 'complete');
   const inventoryProblems = (data?.problems ?? []).map(problem => `${problem.source}: ${problem.code}`);
   const transportProblems = observation?.problems.map(problem => `${problem.source}: ${problem.code}`) ?? [];
   const problems = [...inventoryProblems, ...transportProblems].join('; ');
@@ -153,10 +164,9 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   const failed = (data?.problems ?? []).some(problem => ['process_failed', 'process_timeout', 'process_limit'].includes(problem.code));
   const stale = observation?.state === 'stale' && observation.lastSuccessfulAt !== null;
   const copies = [
-    data?.state === 'off' ? 'Host service inventory is not enabled on this host. The operator can opt in with PASEO_ORBI_HOST_INVENTORY=1 at plugin startup and explicitly authorize a reload.' : '',
-    data?.state === 'complete' && families.length === 0 ? "No matching Orbi user units found in the selected host's user services (complete check)." : '',
-    data?.state === 'partial' && families.length === 0 ? 'No Orbi user units confirmed on this host. Other units may be missing because at least one host source did not complete; do not treat this as empty.' : '',
-    data?.state === 'partial' && families.length > 0 ? 'Some host service sources did not complete; other Orbi user units may be missing on this host.' : '',
+    current && data?.state === 'complete' && families.length === 0 ? "No matching Orbi user units found in the selected host's user services (complete check)." : '',
+    current && data?.state === 'partial' && families.length === 0 ? 'No Orbi user units confirmed on this host. Other units may be missing because at least one host source did not complete; do not treat this as empty.' : '',
+    current && data?.state === 'partial' && families.length > 0 ? 'Some host service sources did not complete; other Orbi user units may be missing on this host.' : '',
     data?.state === 'unavailable' ? 'Current activity on this host is unknown: its user services could not be read; reads may have been denied.' : '',
     state === 'loading' ? "Reading the selected host's user services." : '',
     stale ? `Showing this host's last successful observation from ${observation!.lastSuccessfulAt}; current activity is unknown.` : '',
@@ -166,16 +176,27 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   const panel = { gap: 8, padding: compact ? 12 : 16, borderWidth: 1, borderColor: theme.colors.foreground };
   return <View testID="orbi-host-services" style={panel}>
     <Text accessibilityRole="header" testID="orbi-overview-heading" style={text}>{`Your Linux user services — ${hostLabel}`}</Text>
-    <Text style={text}>{`Host service check: ${state}`}</Text>
-    <Text style={text}>{`Observed unit families: ${families.length}; families with failed units: ${attention}. Observed unit activity is not an active delivery.`}</Text>
-    <Text style={text}>{`Last check: ${data?.observedAt ?? 'not yet observed'}; last successful check: ${observation?.lastSuccessfulAt ?? 'never'}`}</Text>
-    {!connected && <Text style={text}>Selected host is offline. Host service reads are paused and current activity is unknown. Reconnect this host, then Refresh.</Text>}
+    <Text style={text}>{off ? 'Host service check: off (nothing checked; worker and timer state is undecided)' : `Host service check: ${state}`}</Text>
+    {countEvidence && <Text style={text}>{`Observed unit families: ${families.length}; families with failed units: ${attention}. Observed unit activity is not an active delivery.`}</Text>}
+    {data !== null && !off && <Text style={text}>{`Last check: ${data.observedAt ?? 'not yet observed'}; last successful check: ${observation?.lastSuccessfulAt ?? 'never'}`}</Text>}
+    {!connected && <Text style={text}>{off
+      ? 'Selected host is offline. Host service reads are paused and current activity is unknown; reconnect this host to resume the host service check.'
+      : 'Selected host is offline. Host service reads are paused and current activity is unknown. Reconnect this host, then Refresh.'}</Text>}
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}
     <Text accessibilityRole="alert" style={text}>{problems}</Text>
-    <Pressable accessibilityRole="button" accessibilityLabel="Refresh host services" disabled={!query.canRefresh}
+    {off ? <View style={{ gap: 8 }}>
+      <Text style={text}>Nothing was checked on this host, so no worker or timer claim can be made.</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Set up service access" accessibilityState={{ expanded: setupExpanded }}
+        style={{ padding: 4, borderWidth: 1, borderColor: theme.colors.foreground }}
+        onPress={() => setSetupExpanded(value => !value)}><Text style={text}>{setupExpanded ? 'Hide service access setup' : 'Set up service access'}</Text></Pressable>
+      {setupExpanded && <View accessibilityLabel="Service access setup" style={{ gap: 8 }}>
+        <Text style={text}>Host service inventory is not enabled on this host. The operator can opt in with PASEO_ORBI_HOST_INVENTORY=1 at plugin startup and explicitly authorize a reload.</Text>
+        <Text style={text}>Connected clients on this host can then see Orbi unit names. No other host is read. Refresh cannot enable access or reload this plugin.</Text>
+      </View>}
+    </View> : <Pressable accessibilityRole="button" accessibilityLabel="Refresh host services" disabled={!query.canRefresh}
       accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }}
       style={{ padding: 4, borderWidth: 1, borderColor: theme.colors.foreground, opacity: query.canRefresh ? 1 : 0.5 }}
-      onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
+      onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
     {copies.map(copy => <Text key={copy} style={text}>{copy}</Text>)}
     {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} theme={theme} entries={entries} openScreen={openScreen}
       expanded={expanded === group.label} toggle={() => setExpanded(expanded === group.label ? null : group.label)} />)}
