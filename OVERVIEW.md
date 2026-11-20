@@ -2,7 +2,7 @@
 
 The single **Orbi** sidebar entry opens **Overview**, with internal **Overview · Issues · Runs · Blockers** navigation on the selected Paseo host. Existing four screen IDs and deployment links remain supported:
 
-- Overview (Fleet): host-scoped user service families (failed/running/scheduled/installed, expandable per slot), configured deployments, one selected detail with user timers/services, recorded health and capacity. Occupancy and active delivery counts remain unknown.
+- Overview (Fleet): selected host name, failed-first host-scoped service groups with an attention count (**1 of 9 groups needs attention**) and each collapsed row naming its first failed slot/unit kind (**Slot 3 · Worker failed**) plus a remaining count, expandable per numeric slot behind one minimum-44px row disclosure with **Unit details** separate; configured deployments, one selected detail with user timers/services, recorded health and capacity. Occupancy and active delivery counts remain unknown.
 - Issues: repository lifecycle pages, source labels, trusted structured reports and on-demand dependency evidence.
 - Runs: attributed run/session metadata, limited activity kinds, scoped lifecycle events and observed PR-head checks. Retained issue history is separate from active membership.
 - Blockers: reported failure/wait guidance, source attribution and stat-only artifact presence, size and modification time. Recovery remains Orbi/operator-owned.

@@ -37,10 +37,21 @@ const hostA = inventory({ state: 'complete', groups: [
   family('orbi-clash', 'ambiguous', null, [unit('orbi-clash@1.service', 'service', 'active', 'exited')]),
 ] });
 const hostB = inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [unit('orbi@1.service', 'service', 'active', 'running')])] });
+const nineGroups = (worker: 'failed' | 'idle' | 'running', timer: 'waiting' | 'failed', extraRunning = true) => inventory({ state: 'complete', groups: [
+  family('orbi', 'unmatched', null, [
+    unit('orbi@3.service', 'service', worker === 'failed' ? 'failed' : worker === 'idle' ? 'inactive' : 'active', worker === 'failed' ? 'failed' : worker === 'idle' ? 'dead' : 'running'),
+    unit('orbi@3.timer', 'timer', timer === 'failed' ? 'failed' : 'active', timer),
+    ...(extraRunning ? [unit('orbi@4.service', 'service', 'active', 'running')] : []),
+  ]),
+  ...Array.from({ length: 8 }, (_, index) => {
+    const label = `orbi-g${index + 1}`;
+    return family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', index === 0 ? 'activating' : 'inactive', index === 0 ? 'start' : 'dead')]);
+  }),
+] });
 const demo: DeploymentCatalog['entries'][number] = { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi-0.7.41-release', status: 'available', problems: [] };
 const second = { ...demo, id: 'second', label: 'Second', repo: 'Other/repository' };
 const catalog = (entries: DeploymentCatalog['entries']): DeploymentCatalog => ({ state: 'configured', problems: [], entries });
-const props = (id = 'host-a'): PluginScreenProps => ({ theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id, label: id === 'host-a' ? 'Host A' : 'Host B' }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps);
+const props = (id = 'host-a'): PluginScreenProps => ({ theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id, label: host.hosts.find(item => item.serverId === id)?.label ?? (id === 'host-a' ? 'Host A' : 'Host B') }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps);
 beforeEach(() => {
   resetHostOverviewState();
   host.readCatalog.mockReset().mockResolvedValue(catalog([demo]));
@@ -65,7 +76,9 @@ async function render(params: PluginScreenProps['params'] = {}) {
 }
 const text = (renderer: ReactTestRenderer) => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
 const row = (renderer: ReactTestRenderer, label: string) => renderer.root.findByProps({ testID: `orbi-family-${label}` });
-const rowPage = (renderer: ReactTestRenderer, label: string) => row(renderer, label).findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+const rowPage = (renderer: ReactTestRenderer, label: string) => row(renderer, label).findAllByType('Text' as any)
+  .filter(node => !String(node.props.testID ?? '').startsWith('orbi-chevron-'))
+  .map(node => node.children.join('')).join('\n');
 const repositoryActions = (renderer: ReactTestRenderer) => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.startsWith('View repository'));
 
 describe('compact host overview', () => {
@@ -73,13 +86,13 @@ describe('compact host overview', () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, openScreen, press } = await render();
     const page = text(renderer);
-    expect(page.startsWith('Orbi · Host A\nServices: Current')).toBe(true);
-    expect(page.indexOf('Orbi · Host A')).toBeLessThan(page.indexOf('Repository setup'));
-    expect(page).toContain('5 families · 1 failed');
+    expect(page.startsWith('Host A · Fleet\nServices: Current')).toBe(true);
+    expect(page.indexOf('Host A · Fleet')).toBeLessThan(page.indexOf('Repository setup'));
+    expect(page).toContain('1 of 5 groups needs attention');
     const ids = renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-')).map(node => node.props.testID);
     expect(ids).toEqual(['orbi', 'orbi-demo', 'orbi-aux', 'orbi-clash', 'orbi-core'].map(id => `orbi-family-${id}`));
-    expect(rowPage(renderer, 'orbi')).toBe('orbi\nUnlinked\nFailed\nRunning');
-    expect(rowPage(renderer, 'orbi-demo')).toBe('Example/project\nScheduled\nView repository');
+    expect(rowPage(renderer, 'orbi')).toBe('orbi\nSlot 1 · Worker failed\nRunning\nTimer waiting\nUnlinked');
+    expect(rowPage(renderer, 'orbi-demo')).toBe('Example/project\nIdle\nTimer waiting\nView repository');
     expect(rowPage(renderer, 'orbi-aux')).toContain('Installed');
     for (const id of ['orbi-core', 'orbi-clash']) {
       expect(rowPage(renderer, id)).toContain('Unknown / transitional');
@@ -96,14 +109,14 @@ describe('compact host overview', () => {
     expect(host.readFleet).not.toHaveBeenCalled();
     expect(page).not.toContain('Fleet — read-only');
     expect(page).not.toContain('@1.service');
-    await press('Expand orbi-core'); await press('Technical details for orbi-core');
+    await press('Expand orbi-core'); await press('Unit details for orbi-core');
     expect(rowPage(renderer, 'orbi-core')).toContain('does not mean the runner is broken');
-    await press('Expand orbi-clash'); await press('Technical details for orbi-clash');
+    await press('Expand orbi-clash'); await press('Unit details for orbi-clash');
     expect(rowPage(renderer, 'orbi-clash')).toContain('makes the association unique');
     for (const read of [host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) expect(read).not.toHaveBeenCalled();
   });
 
-  it('pairs exact numeric slots, preserves missing/unknown/transitional states and separates technical details', async () => {
+  it('pairs exact numeric slots, preserves missing/unknown/transitional states and separates unit details', async () => {
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
       unit('orbi@10.timer', 'timer', 'active', 'waiting'), unit('orbi@1.timer', 'timer', 'active', 'waiting'),
       unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@2.service', 'service', 'active', 'exited'),
@@ -113,8 +126,11 @@ describe('compact host overview', () => {
     ])] }));
     const { renderer, press } = await render();
     const expand = renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' });
-    expect(expand.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
-    expect(rowPage(renderer, 'orbi')).toContain('Failed\nRunning');
+    expect(expand.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+    expect(expand.props.style({ pressed: false })).toMatchObject({ minHeight: 44, opacity: 1 });
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 4 · Timer failed');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    expect(rowPage(renderer, 'orbi')).toContain('Timer waiting');
     await press('Expand orbi');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' }).props.accessibilityState.expanded).toBe(true);
     const slots = rowPage(renderer, 'orbi');
@@ -122,15 +138,16 @@ describe('compact host overview', () => {
     expect(slots).toContain('Slot 2 · active/exited · Timer not observed');
     expect(slots).toContain('Slot 3 · Unknown · Timer not observed');
     expect(slots).toContain('Slot 4 · Running · Timer failed');
+    expect(slots.indexOf('Slot 4 · Running · Timer failed')).toBeLessThan(slots.indexOf('Slot 1 · Idle · Timer waiting'));
     expect(slots).toContain('Slot 01 · activating/start · Timer not observed');
     expect(slots).toContain('Slot 10 · Service not observed · Timer waiting');
     expect(slots).not.toContain('@');
     expect(slots).not.toContain('Discovery is not authority');
-    await press('Technical details for orbi');
+    await press('Unit details for orbi');
     expect(rowPage(renderer, 'orbi')).toContain('orbi@.service: runtime not observed; unit file enabled (template, not a running service)');
     expect(rowPage(renderer, 'orbi')).toContain('Discovery is not authority');
     expect(rowPage(renderer, 'orbi')).toContain('Unit activity does not establish issue delivery');
-    await press('Technical details for orbi');
+    await press('Unit details for orbi');
     expect(rowPage(renderer, 'orbi')).not.toContain('@');
   });
 
@@ -145,7 +162,7 @@ describe('compact host overview', () => {
     expect(rowPage(renderer, 'orbi')).not.toMatch(/missing|not found/);
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({ state: 'partial', lastSuccessfulAt: stamp });
     host.readInventory.mockRejectedValue(new Error('failed'));
-    await press('Refresh host services');
+    await press('Refresh services');
     expect(text(renderer)).toContain(`Last success: ${stamp}`);
     expect(text(renderer)).toContain('Stale · current activity unknown');
     expect(rowPage(renderer, 'orbi')).toContain('Slot 2 · Service not observed · Timer waiting');
@@ -167,7 +184,7 @@ describe('compact host overview', () => {
     const labels = ['orbi-12345678', 'orbi-orbi-12345678-12345678'];
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: labels.map(label => family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', 'inactive', 'dead')])) }));
     const { renderer } = await render();
-    for (const label of labels) expect(rowPage(renderer, label)).toBe(`${label}\nUnlinked\nIdle`);
+    for (const label of labels) expect(rowPage(renderer, label)).toBe(`${label}\nIdle\nUnlinked`);
     expect(repositoryActions(renderer)).toHaveLength(0);
   });
 
@@ -176,7 +193,7 @@ describe('compact host overview', () => {
     const { renderer, press, switchTo } = await render();
     await press('Expand orbi');
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: hostA.groups.filter(group => group.label !== 'orbi') }));
-    await press('Refresh host services');
+    await press('Refresh services');
     await switchTo('host-a', 'issues');
     await switchTo('host-a');
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Collapse orbi' })).toHaveLength(0);
@@ -188,13 +205,13 @@ describe('compact host overview', () => {
     const labels = ['orbi-short-trunc-1234abcd', 'orbi-same-1234abcd', 'orbi-same-9876abcd'];
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: labels.map(label => family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', 'inactive', 'dead')])) }));
     const { renderer, press } = await render();
-    expect(rowPage(renderer, labels[0])).toBe('short-trunc\nUnlinked\nIdle');
-    expect(rowPage(renderer, labels[1])).toBe('same · 1234abcd\nUnlinked\nIdle');
-    expect(rowPage(renderer, labels[2])).toBe('same · 9876abcd\nUnlinked\nIdle');
+    expect(rowPage(renderer, labels[0])).toBe('short-trunc\nIdle\nUnlinked');
+    expect(rowPage(renderer, labels[1])).toBe('same · 1234abcd\nIdle\nUnlinked');
+    expect(rowPage(renderer, labels[2])).toBe('same · 9876abcd\nIdle\nUnlinked');
     expect(repositoryActions(renderer)).toHaveLength(0);
     expect(text(renderer)).not.toContain(labels[0]);
     await press(`Expand ${labels[0]}`);
-    await press(`Technical details for ${labels[0]}`);
+    await press(`Unit details for ${labels[0]}`);
     expect(rowPage(renderer, labels[0])).toContain(labels[0]);
   });
 
@@ -225,7 +242,7 @@ describe('compact host overview', () => {
     expect(text(renderer)).toContain('Reading services…');
     host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
     await switchTo('host-b');
-    expect(text(renderer)).toContain('Orbi · Host B');
+    expect(text(renderer)).toContain('Host B · Fleet');
     expect(rowPage(renderer, 'orbi')).toContain('Running');
     await act(async () => finishA(hostA)); await settle();
     expect(text(renderer)).not.toContain('Failed');
@@ -233,13 +250,99 @@ describe('compact host overview', () => {
   });
 });
 
+describe('compact first-screen triage', () => {
+  it('names the selected host, attention count, first failed slot and remaining failures before any other group', async () => {
+    host.hosts[0].label = 'BlueBlack';
+    host.readInventory.mockResolvedValue(nineGroups('failed', 'failed'));
+    const { renderer, press } = await render();
+    const page = text(renderer);
+    expect(renderer.root.findByProps({ testID: 'orbi-overview-heading' }).props.children).toBe('BlueBlack · Fleet');
+    expect(page).toContain('1 of 9 groups needs attention');
+    const refresh = renderer.root.findByProps({ accessibilityLabel: 'Refresh services' });
+    expect(refresh.props).toMatchObject({ accessibilityRole: 'button', disabled: false, accessibilityState: { disabled: false, busy: false } });
+    expect(refresh.findAllByType('Text' as any).map(node => node.children.join('')).join('')).toBe('Refresh services');
+    // Nine distinct groups, failed group first: the first row is the affected one.
+    expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'))
+      .map(node => node.props.testID)).toEqual(['orbi', 'orbi-g1', 'orbi-g2', 'orbi-g3', 'orbi-g4', 'orbi-g5', 'orbi-g6', 'orbi-g7', 'orbi-g8']
+      .map(label => `orbi-family-${label}`));
+    const disclosure = renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' });
+    expect(disclosure.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+    expect(disclosure.findAllByType('Text' as any).map(node => node.children.join('')).join('\n')).toContain('Slot 3 · Worker failed · +1 more');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 3 · Worker failed · +1 more');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    // Proxy for "visible before scrolling" in the compact renderer: the first
+    // failure is above every later group and below only the header controls.
+    const lines = page.split('\n');
+    expect(lines.indexOf('BlueBlack · Fleet')).toBe(0);
+    expect(lines.indexOf('1 of 9 groups needs attention')).toBeLessThan(lines.indexOf('Refresh services'));
+    expect(lines.indexOf('Refresh services')).toBeLessThan(lines.indexOf('Slot 3 · Worker failed · +1 more'));
+    expect(lines.indexOf('Slot 3 · Worker failed · +1 more')).toBeLessThan(lines.indexOf('orbi-g1'));
+    // The row is one accessibility element, so its visible status is announced too.
+    expect(disclosure.props.accessibilityHint).toBe('Slot 3 · Worker failed · +1 more · Running · Unlinked');
+    // The full row is one 44-unit disclosure with pressed feedback and a chevron.
+    expect(disclosure.props.style({ pressed: false })).toMatchObject({ minHeight: 44, opacity: 1 });
+    expect(disclosure.props.style({ pressed: true }).opacity).toBeLessThan(1);
+    expect(renderer.root.findByProps({ testID: 'orbi-chevron-orbi' }).props.children).toBe('▸');
+    expect(disclosure.findAllByProps({ accessibilityLabel: 'Unit details for orbi' })).toHaveLength(0);
+    // One tap expands numeric slot detail; Unit details stays a separate control.
+    await press('Expand orbi');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' }).props.accessibilityState.expanded).toBe(true);
+    expect(renderer.root.findByProps({ testID: 'orbi-chevron-orbi' }).props.children).toBe('▾');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 3 · Failed · Timer failed');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 4 · Running · Timer not observed');
+    const details = renderer.root.findByProps({ accessibilityLabel: 'Unit details for orbi' });
+    expect(details.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+    expect(details.props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
+    expect(disclosure.findAllByProps({ accessibilityLabel: 'Unit details for orbi' })).toHaveLength(0);
+    await press('Unit details for orbi');
+    expect(rowPage(renderer, 'orbi')).toContain('orbi@3.service: failed/failed');
+    // Refresh services rereads inventory only, never the repository catalog.
+    await press('Refresh services');
+    expect(host.readInventory).toHaveBeenCalledTimes(2);
+    expect(host.readCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps worker and timer facts independent with Timer waiting and preserves transitional states', async () => {
+    host.readInventory.mockResolvedValue(nineGroups('idle', 'waiting', false));
+    const { renderer, press } = await render();
+    expect(text(renderer)).toContain('0 of 9 groups need attention');
+    expect(rowPage(renderer, 'orbi')).toContain('Idle');
+    expect(rowPage(renderer, 'orbi')).toContain('Timer waiting');
+    expect(rowPage(renderer, 'orbi')).not.toContain('Scheduled');
+    expect(rowPage(renderer, 'orbi')).not.toContain('Running');
+    expect(rowPage(renderer, 'orbi-g1')).toContain('Unknown / transitional');
+    host.readInventory.mockResolvedValue(nineGroups('running', 'waiting', false));
+    await press('Refresh services');
+    // Only the worker fact moves; the timer stays waiting.
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    expect(rowPage(renderer, 'orbi')).toContain('Timer waiting');
+    expect(rowPage(renderer, 'orbi')).not.toContain('Idle');
+    expect(rowPage(renderer, 'orbi-g1')).toContain('Unknown / transitional');
+  });
+
+  it('keeps a transitional or not-observed worker out of an Idle summary', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [
+      family('orbi', 'unmatched', null, [unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@2.service', 'service', 'active', 'exited')]),
+      family('orbi-unobserved', 'unmatched', null, [unit('orbi-unobserved@1.service', 'service', 'inactive', 'dead'), unit('orbi-unobserved@2.service', 'service', null, null)]),
+    ] }));
+    const { renderer } = await render();
+    // One idle worker does not let the group claim Idle while another worker is
+    // transitional or not observed.
+    for (const label of ['orbi', 'orbi-unobserved']) {
+      expect(rowPage(renderer, label)).toContain('Unknown / transitional');
+      expect(rowPage(renderer, label)).not.toContain('Idle');
+      expect(renderer.root.findByProps({ accessibilityLabel: `Expand ${label}` }).props.accessibilityHint).toBe('Unknown / transitional · Unlinked');
+    }
+  });
+});
+
 describe('host states and authority', () => {
   it('keeps off undecided, count-free and Refresh-free, with opt-in prose behind a disclosure even offline', async () => {
     const { renderer, press, switchTo } = await render();
     expect(text(renderer)).toContain('Service check off · activity unknown');
-    expect(text(renderer)).not.toContain('0 families');
+    expect(text(renderer)).not.toContain('groups need attention');
     expect(text(renderer)).not.toContain('Not observed in this host service check');
-    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
     expect(text(renderer)).not.toContain('PASEO_ORBI_HOST_INVENTORY=1');
     await press('Set up service access');
     expect(text(renderer)).toContain('PASEO_ORBI_HOST_INVENTORY=1');
@@ -249,13 +352,14 @@ describe('host states and authority', () => {
     await switchTo('host-a');
     expect(text(renderer)).toContain('Offline · current activity unknown');
     expect(text(renderer)).toContain('Service check off · activity unknown');
-    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
   });
 
   it('replaces former unit names with the undecided off state when revocation is received', async () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, client } = await render();
-    expect(rowPage(renderer, 'orbi')).toContain('Failed\nRunning');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Worker failed');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
     expect(rowPage(renderer, 'orbi-demo')).toContain('Example/project');
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({ lastSuccessfulAt: stamp });
     // Monitoring is revoked on the host; the next background check receives off.
@@ -267,7 +371,7 @@ describe('host states and authority', () => {
     // Former rows are gone rather than retained as stale evidence.
     expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'))).toHaveLength(0);
     expect(text(renderer)).not.toMatch(/orbi-demo|orbi@|Example\/project|Failed|Running/);
-    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({
       state: 'available', lastSuccessfulAt: null, data: { state: 'off', groups: [] },
     });
@@ -280,14 +384,14 @@ describe('host states and authority', () => {
     host.readInventory.mockResolvedValue(inventory({ state: 'complete' }));
     const { renderer, press } = await render();
     expect(text(renderer)).toContain('No Orbi units found.');
-    expect(text(renderer)).toContain('0 families · 0 failed');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
     expect(text(renderer)).toContain('Stale · current activity unknown');
     expect(text(renderer)).toContain(`Last success: ${stamp}`);
     expect(text(renderer)).not.toContain('No Orbi units found.');
-    expect(text(renderer)).not.toContain('0 families');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     host.readInventory.mockRejectedValue(new Error('SECRET raw transport error'));
-    await press('Refresh host services');
+    await press('Refresh services');
     expect(text(renderer)).toContain('filesystem: refresh_failed');
     expect(text(renderer)).not.toContain('SECRET');
   });
@@ -296,11 +400,12 @@ describe('host states and authority', () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press } = await render();
     host.readInventory.mockRejectedValue(new Error('SECRET'));
-    await press('Refresh host services');
+    await press('Refresh services');
     expect(text(renderer)).toContain('Stale · current activity unknown');
     expect(text(renderer)).toContain(`Last success: ${stamp}`);
-    expect(rowPage(renderer, 'orbi')).toContain('Failed\nRunning');
-    expect(text(renderer)).not.toContain('5 families');
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Worker failed');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
   });
 
   it.each(['partial', 'unavailable'] as const)('shows %s and problems without zero counts or absence claims', async state => {
@@ -309,7 +414,7 @@ describe('host states and authority', () => {
     expect(text(renderer)).toContain(`Services: ${state}`);
     expect(text(renderer)).toContain('runtime: process_failed');
     expect(text(renderer)).toContain('Read failed · check systemd/DBus access.');
-    expect(text(renderer)).not.toContain('0 families');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     expect(text(renderer)).not.toContain('No Orbi units found');
     if (state === 'partial') expect(text(renderer)).toContain('units may be missing');
     else {
@@ -325,8 +430,8 @@ describe('host states and authority', () => {
     const { renderer, press } = await render();
     expect(text(renderer)).toContain('Offline · current activity unknown');
     expect(text(renderer)).toContain('Catalog: offline');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh host services' }).props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
-    await press('Refresh host services');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh services' }).props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
+    await press('Refresh services');
     expect(host.readInventory).not.toHaveBeenCalled();
   });
 
@@ -336,10 +441,10 @@ describe('host states and authority', () => {
     const { renderer, press, switchTo } = await render();
     expect(text(renderer)).toContain(`Catalog: ${state}`);
     expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
-    expect(text(renderer).indexOf('Orbi · Host A')).toBeLessThan(text(renderer).indexOf('Repository setup'));
+    expect(text(renderer).indexOf('Host A · Fleet')).toBeLessThan(text(renderer).indexOf('Repository setup'));
     expect(rowPage(renderer, 'orbi-demo')).toContain('Unlinked');
     expect(repositoryActions(renderer)).toHaveLength(0);
-    await press('Expand orbi-demo'); await press('Technical details for orbi-demo');
+    await press('Expand orbi-demo'); await press('Unit details for orbi-demo');
     expect(rowPage(renderer, 'orbi-demo')).toContain('not in the current authorized catalog');
     await press('Repository setup');
     expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
