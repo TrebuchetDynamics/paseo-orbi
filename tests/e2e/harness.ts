@@ -1,7 +1,8 @@
+import { constants } from 'node:fs';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, readFile, writeFile, realpath, lstat, readdir, rm, chmod, symlink, readlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, realpath, lstat, readdir, rm, chmod, symlink, readlink, access } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
 import { fixture } from '../helpers/fixtures';
@@ -87,6 +88,81 @@ export function sanitize(text: string, roots: string[] = []) {
 export async function command(file: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, timeout = 60000) {
   return (await exec(file, args, { env, cwd, timeout, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' })).stdout;
 }
+export type InstallationHost = {
+  alias: string; host: string; installation: 'never-attempted' | 'uncertain' | 'confirmed';
+  cliCall: (...args: string[]) => Promise<string>;
+};
+function pluginList(text: string): { id: string }[] {
+  const rows = JSON.parse(text);
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row.id !== 'string')) throw new Error('Invalid plugin list response');
+  return rows;
+}
+function diagnostic(error: unknown) {
+  const detail = error as { stderr?: string; stdout?: string } | null;
+  return sanitize([String(error), detail?.stderr, detail?.stdout].filter(Boolean).join('\n'));
+}
+export async function exposePs(bin: string, effects = { access, symlink }) {
+  try { await effects.access('/usr/bin/ps', constants.X_OK); }
+  catch { throw new Error('Missing runtime prerequisite: executable /usr/bin/ps required before daemon launch'); }
+  await effects.symlink('/usr/bin/ps', join(bin, 'ps'));
+}
+export async function installWhenRpcReady(host: InstallationHost & { candidate: string; startup: { deadline: number } }, sleep: (ms: number) => Promise<void> = pause, now = Date.now) {
+  const remaining = host.startup.deadline - now();
+  if (remaining <= 0) throw new Error('60-second host startup deadline exceeded');
+  await boundedWait(async () => {
+    if (now() >= host.startup.deadline) throw new Error('60-second host startup deadline exceeded');
+    try { pluginList(await host.cliCall('ls', '--json')); return true; }
+    catch (error) {
+      // Pinned CLI's pre-ready WebSocket upgrade rejection, not arbitrary 503s/refusals.
+      const stderr = (error as { stderr?: string })?.stderr ?? '';
+      let response: { code?: string; message?: string } | undefined;
+      try { response = JSON.parse(stderr).error; } catch { /* non-JSON failures are not startup readiness */ }
+      if (response?.code === 'DAEMON_UNREACHABLE' && response.message === `Cannot connect to daemon at ${host.host}: Unexpected server response: 503`) return false;
+      throw error;
+    }
+  }, remaining, sleep, now);
+  if (now() >= host.startup.deadline) throw new Error('60-second host startup deadline exceeded');
+  host.installation = 'uncertain'; // never automatically retry a possibly server-side install
+  await host.cliCall('install', host.candidate, '--id', 'paseo-orbi');
+  host.installation = 'confirmed';
+}
+export async function cleanupInstallations<T extends InstallationHost>(hosts: T[], effects: {
+  snapshot: () => Promise<Identity[]>; stop: (owned: Identity[]) => Promise<void>;
+  verify: (owned: Identity[]) => Promise<void>; log: (host: T) => Promise<void>;
+}) {
+  const errors: string[] = [], removals: { host: string; state: T['installation']; operation: string; diagnostic?: string }[] = [];
+  let owned: Identity[] = [];
+  try { owned = await effects.snapshot(); } catch (error) { errors.push(diagnostic(error)); }
+  for (const host of hosts) {
+    const removal = { host: host.alias, state: host.installation, operation: 'not-attempted', diagnostic: undefined as string | undefined };
+    removals.push(removal);
+    try {
+      if (host.installation !== 'never-attempted') {
+        removal.operation = 'unresolved';
+        if (host.installation === 'uncertain' && !pluginList(await host.cliCall('ls', '--json')).some(row => row.id === 'paseo-orbi')) {
+          // This observation is neither a remove success nor proof an in-flight install stopped.
+          removal.operation = 'absent-after-uncertain';
+        } else {
+          await host.cliCall('remove', 'paseo-orbi'); removal.operation = 'removed';
+        }
+      }
+    } catch (error) {
+      removal.diagnostic = diagnostic(error);
+      errors.push(`Removal unresolved: ${host.alias}: ${removal.diagnostic}`);
+    }
+    try { await effects.log(host); } catch (error) { errors.push(diagnostic(error)); }
+  }
+  // Always account for processes again, even after an empty list or removal error.
+  // A failed ownership snapshot is not permission to signal unknown processes.
+  try { owned = [...owned, ...await effects.snapshot()]; await effects.stop(owned); } catch (error) { errors.push(diagnostic(error)); }
+  try { await effects.verify(owned); } catch (error) { errors.push(diagnostic(error)); }
+  return { errors, removals };
+}
+export async function finishFailedStart(primary: unknown, cleanup: () => Promise<void>): Promise<never> {
+  try { await cleanup(); }
+  catch (secondary) { throw new AggregateError([primary, secondary], `Startup failed: ${String(primary)}; cleanup failed: ${String(secondary)}`); }
+  throw primary;
+}
 export async function prepareTelemetry(root: string, alias: string, profile: 'release' | 'installed') {
   const data = await fixture(profile, root); // existing pinned source data, no engine execution
   const registry = join(root, `${alias}-reads.jsonl`), calls = join(root, `${alias}-calls.jsonl`), state = join(root, `${alias}-state.json`);
@@ -110,7 +186,8 @@ async function makeHost(root: string, alias: string, profile: 'release' | 'insta
   const home = join(root, alias); await mkdir(home);
   const bin = join(root, `${alias}-bin`); await mkdir(bin);
   await symlink(process.execPath, join(bin, 'node'));
-  // npm's absolute script is used for preparation; only node and strict fixture tools are exposed to the daemon.
+  // npm's absolute script is used for preparation; expose only the required ps identity reader, not system PATH.
+  await exposePs(bin);
   const npm = await realpath(join(dirname(process.execPath), 'npm')); await symlink(npm, join(bin, 'npm'));
   const { data, registry, calls, state, setState } = await prepareTelemetry(root, alias, profile);
   const standin = await readFile(new URL('./fixtures/tool.mjs', import.meta.url), 'utf8');
@@ -138,7 +215,7 @@ async function makeHost(root: string, alias: string, profile: 'release' | 'insta
     if (remaining <= 0) throw new Error('60-second host startup deadline exceeded');
     return command(process.execPath, [cli, '--host', host, 'plugin', ...args], env, candidate, Math.min(10000, remaining));
   };
-  const handle = { alias, profile, home, state, cli, candidate, startup, port: port.port, url: `http://127.0.0.1:${port.port}`, host, data, env, registry, calls, initial, setState, cliCall,
+  const handle = { installation: 'never-attempted' as InstallationHost['installation'], alias, profile, home, state, cli, candidate, startup, port: port.port, url: `http://127.0.0.1:${port.port}`, host, data, env, registry, calls, initial, setState, cliCall,
     log: () => sanitize(log, [root, data.root]),
   };
   return handle;
@@ -197,24 +274,28 @@ export async function start(env = process.env, mode: 'available' | 'unconfigured
   const npm = await realpath(join(dirname(process.execPath), 'npm'));
   const cli = resolve('tests/e2e/runtime/node_modules/@getpaseo/cli/bin/paseo');
   const cleanup = async () => {
-    const errors: string[] = [];
-    let owned: Identity[] = [];
-    try { owned = await ownedProcesses(hosts, root); } catch (e) { errors.push(String(e)); }
-    for (const host of hosts) {
-      host.startup.deadline = Infinity;
-      try { await host.cliCall('remove', 'paseo-orbi'); } catch { errors.push(`Removal failed: ${host.alias}`); }
-      await writeFile(join(input.output, `${host.alias}.log`), host.log());
+    for (const host of hosts) host.startup.deadline = Infinity;
+    const result = await cleanupInstallations(hosts, {
+      snapshot: () => ownedProcesses(hosts, root), stop: stopOwned,
+      log: host => writeFile(join(input.output, `${host.alias}.log`), host.log()),
+      verify: async owned => {
+        const failures: string[] = [];
+        for (const host of hosts) if (!(await portClosed(host.port))) failures.push(`Owned port still listening: ${host.alias}`);
+        const table = await processTable();
+        if (owned.some(p => table.some(q => same(p, q)))) failures.push('Owned subprocess remains after cleanup');
+        // Re-scan the owner marker after termination, including ambiguous-absent installs.
+        if ((await ownedProcesses(hosts, root)).some(p => table.some(q => same(p, q)))) failures.push('Owned descendant remains after cleanup');
+        if (failures.length) throw new Error(failures.join('; '));
+      },
+    });
+    const report = { status: result.errors.length ? 'fail' : 'pass', ...result };
+    if (result.errors.length) {
+      await writeFile(join(input.output, 'cleanup.json'), sanitize(JSON.stringify(report), [root, input.repo, input.output]));
+      throw new Error('Ownership-aware cleanup failed; runtime trees retained for investigation. Inspect cleanup.json for removal and process diagnostics.');
     }
-    try { owned = [...owned, ...await ownedProcesses(hosts, root)]; await stopOwned(owned); } catch (e) { errors.push(String(e)); }
-    for (const host of hosts) {
-      if (!(await portClosed(host.port))) errors.push(`Owned port still listening: ${host.alias}`);
-      const table = await processTable();
-      if (owned.some(p => table.some(q => same(p, q)))) errors.push('Owned subprocess remains after cleanup');
-    }
-    if (errors.length) { await writeFile(join(input.output, 'cleanup.json'), JSON.stringify({ status: 'fail', errors: errors.map(e => sanitize(e, [root])) })); throw new Error('Ownership-aware cleanup failed; runtime trees retained for investigation.'); }
     for (const host of hosts) await host.data.cleanup();
     await rm(root, { recursive: true });
-    await writeFile(join(input.output, 'cleanup.json'), JSON.stringify({ status: 'pass' }));
+    await writeFile(join(input.output, 'cleanup.json'), JSON.stringify(report));
   };
   try {
     const sha = (await command('/usr/bin/git', ['-C', input.repo, 'rev-parse', '--verify', `${input.sha}^{commit}`], isolated, root)).trim();
@@ -238,14 +319,15 @@ export async function start(env = process.env, mode: 'available' | 'unconfigured
         const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 1000);
         try { return (await fetch(`${host.url}/api/health`, { signal: controller.signal })).ok; } catch { return false; } finally { clearTimeout(timer); }
       }, Math.max(1, deadline - Date.now()));
-      await host.cliCall('install', candidate, '--id', 'paseo-orbi');
+      await installWhenRpcReady(host);
       await boundedWait(async () => { const rows = JSON.parse(await host.cliCall('ls', 'paseo-orbi', '--json')); return rows.length === 1 && rows[0].id === 'paseo-orbi' && rows[0].status === 'running'; }, Math.max(1, deadline - Date.now()));
       host.startup.deadline = Infinity;
     }
     return { input, root, hosts, cleanup };
   } catch (error) {
-    await writeFile(join(input.output, 'startup.log'), sanitize(String(error), [root, input.repo, input.output]));
-    await cleanup(); throw error;
+    const primary = new Error(sanitize(diagnostic(error), [root, input.repo, input.output]));
+    await writeFile(join(input.output, 'startup.log'), primary.message);
+    return finishFailedStart(primary, cleanup);
   }
 }
 

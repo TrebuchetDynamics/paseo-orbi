@@ -9,7 +9,7 @@ import { BlockersReader } from '../server/blockers';
 import { ReadPorts } from '../server/read-ports';
 import { readFleet } from '../server/fleet';
 import { deflateSync } from 'node:zlib';
-import { approveLaunch, isolation, environment, stopOwned, boundedWait, sanitize, checkFreshPath, requireListenerOwnership, start, prepareTelemetry, type Identity } from './e2e/harness';
+import { approveLaunch, isolation, environment, stopOwned, boundedWait, sanitize, checkFreshPath, requireListenerOwnership, start, prepareTelemetry, type Identity, installWhenRpcReady, exposePs, cleanupInstallations, finishFailedStart, type InstallationHost } from './e2e/harness';
 const evidenceUrl = new URL('./e2e/evidence.mjs', import.meta.url);
 const toolUrl = new URL('./e2e/fixtures/tool.mjs', import.meta.url);
 const { default: EvidenceReporter, matrix, requiredTests, validate, sha256, provenance, pngSize } = await import(evidenceUrl.href);
@@ -54,6 +54,91 @@ it('bounded startup wait and detached simulated read child cleanup use explicit 
   await expect(stopOwned([daemon], { table: async () => [daemon], signal, sleep: async () => { sleeps++; } })).rejects.toThrow(/survived/);
   expect(sleeps).toBe(40);
 });
+function lifecycleHost(installation: InstallationHost['installation'] = 'never-attempted') {
+  return { alias: 'host-a', host: 'tcp://127.0.0.1:1234', candidate: '/owned/candidate', startup: { deadline: 60000 }, installation, cliCall: vi.fn(async (..._args: string[]) => '[]') };
+}
+const notReady = () => Object.assign(new Error('command failed'), { stderr: JSON.stringify({ error: { code: 'DAEMON_UNREACHABLE', message: 'Cannot connect to daemon at tcp://127.0.0.1:1234: Unexpected server response: 503', details: 'Check the selected endpoint and credentials. SSH transport does not install or start the daemon.' } }) + '\n' });
+it('waits_for_rpc_ready_before_install', async () => {
+  // HTTP health has already passed: only an unfiltered RPC list proves readiness.
+  const host = lifecycleHost(); let now = 59800;
+  host.cliCall.mockRejectedValueOnce(notReady()).mockResolvedValueOnce('[]').mockResolvedValueOnce('installed');
+  await installWhenRpcReady(host, async ms => { now += ms; }, () => now);
+  expect(host.cliCall.mock.calls).toEqual([['ls', '--json'], ['ls', '--json'], ['install', '/owned/candidate', '--id', 'paseo-orbi']]);
+  expect(host.installation).toBe('confirmed'); expect(now).toBeLessThanOrEqual(60000);
+});
+it('RPC readiness shares the startup deadline and never retries refusal or a mutating install', async () => {
+  const host = lifecycleHost(); let now = 59800;
+  host.cliCall.mockRejectedValue(notReady());
+  await expect(installWhenRpcReady(host, async ms => { now += ms; }, () => now)).rejects.toThrow(/deadline/);
+  expect(host.cliCall.mock.calls.every(args => args.join(' ') === 'ls --json')).toBe(true);
+  expect(host.cliCall.mock.calls.length).toBeLessThanOrEqual(3); expect(now).toBe(60000);
+  expect(host.installation).toBe('never-attempted');
+  for (const failure of [new Error('ECONNREFUSED'), Object.assign(new Error('failed'), { stderr: 'Error: permission denied' }), ...[{ code: 'AUTH_FAILED', message: 'Cannot connect to daemon at tcp://127.0.0.1:1234: Unexpected server response: 503' }, { code: 'DAEMON_UNREACHABLE', message: 'Cannot connect to daemon at tcp://127.0.0.1:9999: Unexpected server response: 503' }].map(error => Object.assign(new Error('failed'), { stderr: JSON.stringify({ error }) }))]) {
+    const refused = lifecycleHost(); refused.cliCall.mockRejectedValue(failure);
+    await expect(installWhenRpcReady(refused, async () => {}, () => 0)).rejects.toBe(failure); expect(refused.cliCall).toHaveBeenCalledTimes(1);
+  }
+  const malformed = lifecycleHost(); malformed.cliCall.mockResolvedValue('{}');
+  await expect(installWhenRpcReady(malformed, async () => {}, () => 0)).rejects.toThrow(/list/); expect(malformed.installation).toBe('never-attempted');
+  const ambiguous = lifecycleHost(); const failure = new Error('install timed out');
+  ambiguous.cliCall.mockResolvedValueOnce('[]').mockRejectedValueOnce(failure);
+  await expect(installWhenRpcReady(ambiguous, async () => {}, () => 0)).rejects.toBe(failure);
+  expect(ambiguous.cliCall).toHaveBeenCalledTimes(2); expect(ambiguous.installation).toBe('uncertain');
+});
+it('isolated_runtime_exposes_only_required_ps', async () => {
+  const access = vi.fn(async () => {}), link = vi.fn(async () => {});
+  const before = environment('/owned', '/owned/bin', '/owned/home');
+  await exposePs('/owned/bin', { access, symlink: link });
+  expect(access).toHaveBeenCalledWith('/usr/bin/ps', 1);
+  expect(link.mock.calls).toEqual([['/usr/bin/ps', '/owned/bin/ps']]);
+  expect(environment('/owned', '/owned/bin', '/owned/home')).toEqual(before);
+  expect(before.PATH).not.toMatch(/(?:^|:)(?:\/usr\/bin|\/bin)(?:$|:)/);
+  link.mockClear(); access.mockRejectedValue(new Error('ENOENT'));
+  await expect(exposePs('/owned/bin', { access, symlink: link })).rejects.toThrow(/prerequisite.*\/usr\/bin\/ps/i);
+  expect(link).not.toHaveBeenCalled(); // missing prerequisite creates no ps link; no daemon is launched by this seam
+});
+function cleanupSeams() {
+  return { snapshot: vi.fn(async () => [] as Identity[]), stop: vi.fn(async (_owned: Identity[]) => {}), verify: vi.fn(async (_owned: Identity[]) => {}), log: vi.fn(async (_host: InstallationHost) => {}) };
+}
+it('failed_install_cleanup_preserves_primary_error', async () => {
+  const host = lifecycleHost('uncertain');
+  host.cliCall.mockResolvedValueOnce('[{"id":"paseo-orbi","status":"running"}]').mockRejectedValueOnce(Object.assign(new Error('command failed'), { stderr: 'removal rejected TOKEN_SECRET_CANARY' }));
+  const effects = cleanupSeams(); const result = await cleanupInstallations([host], effects);
+  expect(host.cliCall.mock.calls).toEqual([['ls', '--json'], ['remove', 'paseo-orbi']]);
+  expect(result.errors.join()).toMatch(/removal rejected/);
+  expect(result.errors.join()).not.toContain('TOKEN_SECRET_CANARY');
+  expect(effects.stop).toHaveBeenCalled(); expect(effects.verify).toHaveBeenCalled();
+  const primary = new Error('Unexpected server response: 503'), secondary = new Error(result.errors.join());
+  try { await finishFailedStart(primary, async () => { throw secondary; }); throw new Error('expected failure'); }
+  catch (error) { expect(error).toBeInstanceOf(AggregateError); expect((error as AggregateError).errors).toEqual([primary, secondary]); expect(String(error)).toMatch(/503.*removal rejected/s); }
+  await expect(finishFailedStart(primary, async () => {})).rejects.toBe(primary);
+});
+it('cleanup distinguishes never-attempted, ambiguous absent/present, confirmed and unverifiable without waiving teardown', async () => {
+  for (const state of ['never-attempted', 'uncertain', 'confirmed'] as const) {
+    const host = lifecycleHost(state), effects = cleanupSeams();
+    const result = await cleanupInstallations([host], effects);
+    expect(result.errors).toEqual([]);
+    expect(result.removals[0].operation).toBe(state === 'never-attempted' ? 'not-attempted' : state === 'uncertain' ? 'absent-after-uncertain' : 'removed');
+    expect(host.cliCall.mock.calls).toEqual(state === 'never-attempted' ? [] : state === 'uncertain' ? [['ls', '--json']] : [['remove', 'paseo-orbi']]);
+    expect(effects.snapshot).toHaveBeenCalledTimes(2); expect(effects.stop).toHaveBeenCalled(); expect(effects.verify).toHaveBeenCalled();
+  }
+  const present = lifecycleHost('uncertain'); present.cliCall.mockResolvedValue('[{"id":"paseo-orbi"}]');
+  expect((await cleanupInstallations([present], cleanupSeams())).removals[0].operation).toBe('removed');
+  for (const response of ['unreachable', '{}']) {
+    const host = lifecycleHost('uncertain'), effects = cleanupSeams();
+    if (response === 'unreachable') host.cliCall.mockRejectedValue(new Error('endpoint unavailable')); else host.cliCall.mockResolvedValue(response);
+    const result = await cleanupInstallations([host], effects);
+    expect(result.errors.join()).toMatch(/unresolved/i); expect(result.removals[0].operation).toBe('unresolved');
+    expect(effects.stop).toHaveBeenCalled(); expect(effects.verify).toHaveBeenCalled();
+  }
+  const host = lifecycleHost('uncertain'), effects = cleanupSeams();
+  effects.verify.mockRejectedValue(new Error('Owned port still listening'));
+  expect((await cleanupInstallations([host], effects)).errors.join()).toMatch(/still listening/);
+  effects.snapshot.mockRejectedValue(new Error('Unaccounted owned descendant'));
+  effects.stop.mockClear();
+  expect((await cleanupInstallations([host], effects)).errors.join()).toMatch(/Unaccounted/);
+  expect(effects.stop).not.toHaveBeenCalled();
+});
+
 it('strict stand-ins allow only actual ReadPorts GET/show/journal argv and never forward arbitrary commands', async () => {
   const data = { scenario: 'available', alias: 'host-a', records: JSON.parse(await readFile(new URL('./fixtures/runs/records.json', import.meta.url), 'utf8')), guidance: JSON.parse(await readFile(new URL('./fixtures/blockers/guidance.json', import.meta.url), 'utf8')) };
   const gh = ['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', 'repos/Example/project/issues?state=open&sort=updated&direction=desc&per_page=100&page=1'];
