@@ -301,7 +301,8 @@ import { spawn, execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
-import { mkdir, chmod, readdir } from 'node:fs/promises';
+import fsPromises, { mkdir, chmod, readdir } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createRegistration, type ProcessSpec, identity, ownedProcesses, managementArgs, psArguments, registrationRuntime, release, lease, makeHost, type Host } from './e2e/harness';
 const execFileAsync = promisify(execFileCallback);
@@ -370,6 +371,17 @@ it('native exec gates preserve PID/start/PGID and standard stdin/stdout without 
     expect(stdout).toBe('identity-and-stdio\n');
     expect(stderr).toContain('native-stderr');
     await f.registration.verify();
+    await f.registration.close();
+    // Model execve occurring between readlink(exe) and stat(exe): the first
+    // observation names Node, the next metadata read already names the target.
+    f.registration.ledger[0].nativeObserved = false;
+    const originalReadlink = fsPromises.readlink;
+    const observation = vi.spyOn(fsPromises, 'readlink').mockImplementationOnce((async () => process.execPath) as typeof originalReadlink);
+    syncBuiltinESMExports();
+    try {
+      await expect(f.registration.verify()).resolves.toBeUndefined();
+      expect(f.registration.ledger[0].nativeObserved).toBe(true);
+    } finally { observation.mockRestore(); syncBuiltinESMExports(); }
   } finally { await independentStop(children); await f.registration.close(); }
 });
 
@@ -669,4 +681,32 @@ it('running admissions do not inherit an expired startup deadline, and shutdown 
     await f.registration.shutdown(fixed); await f.registration.shutdown(fixed + 10000);
     expect(JSON.parse(await readFile(controlPath, 'utf8')).deadline).toBe(fixed);
   } finally { await independentStop(children); await f.registration.close(); }
+});
+
+it('an observed forbidden executable remains an accounting failure even if the process exits during validation', async () => {
+  const f = await registrationFixture(), children: { pid?: number; captured: Identity | null }[] = [];
+  const child = spawn(process.execPath, [f.worker], { env: f.registration.env, detached: true, stdio: 'ignore' });
+  children.push({ pid: child.pid, captured: child.pid ? await identity(child.pid) : null });
+  let observation: ReturnType<typeof vi.spyOn> | undefined;
+  try {
+    await f.registration.captureRoot(child);
+    await boundedWait(async () => { await f.registration.collect(); try { return !!(await readFile(f.env.ORBI_TEST_MARKER!)); } catch { return false; } }, 2000);
+    const original = fsPromises.readlink;
+    observation = vi.spyOn(fsPromises, 'readlink').mockImplementation((async (...args: Parameters<typeof original>) => {
+      if (args[0] === `/proc/${child.pid}/exe`) {
+        // Deterministically model the kernel observation followed by exit, without
+        // racing a real unapproved executable or granting it cleanup authority.
+        await independentStop(children);
+        return '/unapproved-executable';
+      }
+      return original(...args);
+    }) as typeof original);
+    syncBuiltinESMExports();
+    await expect(f.registration.collect()).rejects.toThrow('Unapproved executable transition');
+    await expect(f.registration.collect()).rejects.toThrow('Unapproved executable transition');
+    expect(f.registration.errors).toHaveLength(1);
+  } finally {
+    observation?.mockRestore(); syncBuiltinESMExports();
+    await independentStop(children); await f.registration.close();
+  }
 });

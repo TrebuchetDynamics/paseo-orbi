@@ -316,24 +316,29 @@ export async function createRegistration(input: { root: string; home: string; di
       if (!p) continue; // retained historical ownership; zombies cannot execute
       if (!same(p, captured.identity)) throw new Error('PID reuse: cleanup identity mismatch');
       try {
-        const exe = await readlink(`/proc/${p.pid}/exe`);
+        let exe = await readlink(`/proc/${p.pid}/exe`);
         if (exe === node && !captured.nativeObserved) {
           const current = await stat(`/proc/${p.pid}/exe`);
-          if (current.dev !== nodeStat.dev || current.ino !== nodeStat.ino || current.size !== nodeStat.size || current.mtimeMs !== nodeStat.mtimeMs || current.ctimeMs !== nodeStat.ctimeMs) throw new Error('Runtime executable changed');
-        } else if (captured.spec.native && exe === captured.spec.native.target) {
+          if (current.dev !== nodeStat.dev || current.ino !== nodeStat.ino || current.size !== nodeStat.size || current.mtimeMs !== nodeStat.mtimeMs || current.ctimeMs !== nodeStat.ctimeMs) {
+            // execve may happen between the two /proc reads. Reobserve only the
+            // one permitted transition, then validate native content/argv below.
+            exe = await readlink(`/proc/${p.pid}/exe`);
+            if (!captured.spec.native || exe !== captured.spec.native.target) throw new Error('Runtime executable changed');
+          }
+        }
+        if (captured.spec.native && exe === captured.spec.native.target) {
           if (hash(await readFile(`/proc/${p.pid}/exe`)) !== captured.spec.native.digest) throw new Error('Native executable content changed');
           const args = protocol.read(`/proc/${p.pid}/cmdline`, 16384).split('\0').filter(Boolean);
           if (JSON.stringify(args) !== JSON.stringify([exe, ...captured.args])) throw new Error('Native argv transition mismatch');
           captured.nativeObserved = true;
-        } else throw new Error('Unapproved executable transition');
+        } else if (exe !== node || captured.nativeObserved) throw new Error('Unapproved executable transition');
         const after = await identity(p.pid);
         if (after && !same(p, after)) throw new Error('Identity changed around executable validation');
       } catch (error) {
         // Short-lived ps/launcher may exit after capture and before exec observation.
         // That does not revoke historical ownership or authorize another executable.
-        if (['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-          for (let retry = 0; retry < 5 && await identity(p.pid); retry++) await pause(5);
-        }
+        if (!['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        for (let retry = 0; retry < 5 && await identity(p.pid); retry++) await pause(5);
         if (await identity(p.pid)) throw error;
       }
     }
