@@ -23,6 +23,9 @@ export default function contribute(server: PluginServerContext) {
   // One host-level snapshot for the plugin process, shared by every caller.
   const inventory = Promise.all([repository, ports]).then(([config, reads]) => createServiceInventory({
     enabled: inventoryEnabled, claims: () => config.unitClaims(), port: reads,
+    // Revocation ends the grant: disabling/removing/reloading this plugin or
+    // stopping the daemon aborts it, discarding cached and in-flight results.
+    signal: lifetime.signal,
   }));
   const github = Promise.all([repository, ports]).then(([config, reads]) => new GitHubReader(config, reads));
   const runs = Promise.all([repository, ports, github]).then(([config, reads, reports]) => new RunsReader(config, reads, reports));

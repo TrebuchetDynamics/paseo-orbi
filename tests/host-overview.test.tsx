@@ -252,6 +252,30 @@ describe('host states and authority', () => {
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
   });
 
+  it('replaces former unit names with the undecided off state when revocation is received', async () => {
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, client } = await render();
+    expect(rowPage(renderer, 'orbi')).toContain('Failed\nRunning');
+    expect(rowPage(renderer, 'orbi-demo')).toContain('Example/project');
+    expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({ lastSuccessfulAt: stamp });
+    // Monitoring is revoked on the host; the next background check receives off.
+    host.readInventory.mockResolvedValue(inventory({ state: 'off', observedAt: null, sources: [] }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
+    expect(text(renderer)).toContain('Service check off · activity unknown');
+    expect(text(renderer)).not.toContain('Stale');
+    expect(text(renderer)).not.toContain('Last success:');
+    // Former rows are gone rather than retained as stale evidence.
+    expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'))).toHaveLength(0);
+    expect(text(renderer)).not.toMatch(/orbi-demo|orbi@|Example\/project|Failed|Running/);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+    expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({
+      state: 'available', lastSuccessfulAt: null, data: { state: 'off', groups: [] },
+    });
+    // Revocation never turns into a write: no Save/settings control is offered.
+    const labels = renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string').map(node => node.props.accessibilityLabel as string);
+    expect(labels.filter(label => /save|settings|enable monitoring/i.test(label))).toEqual([]);
+  });
+
   it('claims empty only for current complete evidence and keeps stale success and safe refresh errors visible', async () => {
     host.readInventory.mockResolvedValue(inventory({ state: 'complete' }));
     const { renderer, press } = await render();
