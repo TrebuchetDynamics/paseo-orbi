@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import ts from 'typescript';
+import { assertPluginCompatibility } from '@getpaseo/protocol/plugin-requirements';
 
 const read = (path: string) => readFileSync(path, 'utf8');
 const json = (path: string) => JSON.parse(read(path));
@@ -23,6 +24,28 @@ function imports(file: string) {
   }
   visit(source); return result;
 }
+
+// Policy admission only: these rows report what the pinned 0.15.4 evaluator admits for the
+// proposed requirements.paseo range. They do not guarantee that any app/daemon pair interoperates.
+describe('proposed_paseo_range_policy_admission', () => {
+  const proposedRange = { paseo: '>0.15.0' }; // Test-only fixture of the proposed policy; the shipped manifest is unchanged.
+  const rows: Array<[version: string, admitted: boolean]> = [
+    ['0.14.9', false], ['0.15.0', false], ['0.15.0-beta.1', false],
+    ['0.15.1', true], ['0.15.4', true], ['0.16.0-beta.2', true], ['0.16.0', true], ['0.17.0-beta.1', true], ['1.0.0', true],
+  ];
+  const evaluate = (version: string, runtime: 'daemon' | 'app') => () => assertPluginCompatibility({ id: 'paseo-orbi', requirements: proposedRange, version, runtime });
+  it('admits and rejects the recorded versions for both runtimes through the real evaluator', () => {
+    for (const runtime of ['daemon', 'app'] as const) for (const [version, admitted] of rows) {
+      if (admitted) expect(evaluate(version, runtime), `${runtime} ${version}: admitted by >0.15.0`).not.toThrow();
+      else expect(evaluate(version, runtime), `${runtime} ${version}: rejected by >0.15.0`).toThrow('requires Paseo >0.15.0');
+    }
+  });
+  it('rejects a 0.16 prerelease with the shipped bounded range as a negative control', () => {
+    const shipped = json('paseo-plugin.json').requirements;
+    expect(shipped.paseo).toBe('>=0.15.4 <0.16.0');
+    expect(() => assertPluginCompatibility({ id: 'paseo-orbi', requirements: shipped, version: '0.16.0-beta.2', runtime: 'daemon' })).toThrow('requires Paseo >=0.15.4 <0.16.0');
+  });
+});
 
 describe('package_and_registration boundaries', () => {
   it('keeps every transitive runtime and type import in its lane', () => {
