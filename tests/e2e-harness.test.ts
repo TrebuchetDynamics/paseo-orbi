@@ -376,7 +376,8 @@ it('native exec gates preserve PID/start/PGID and standard stdin/stdout without 
     // observation names Node, the next metadata read already names the target.
     f.registration.ledger[0].nativeObserved = false;
     const originalReadlink = fsPromises.readlink;
-    const observation = vi.spyOn(fsPromises, 'readlink').mockImplementationOnce((async () => process.execPath) as typeof originalReadlink);
+    // readlink is overloaded (string | Buffer); the harness awaits the string form.
+    const observation = vi.spyOn(fsPromises, 'readlink').mockImplementationOnce((async (): Promise<string | Buffer> => process.execPath) as typeof originalReadlink);
     syncBuiltinESMExports();
     try {
       await expect(f.registration.verify()).resolves.toBeUndefined();
