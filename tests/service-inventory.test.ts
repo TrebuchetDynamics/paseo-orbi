@@ -61,6 +61,8 @@ const reader = (lists: { runtime?: string | Error; installed?: string | Error } 
   return { ...stub, read: createServiceInventory({ enabled: true, claims, port: stub.port }) };
 };
 const parse = (value: unknown) => servicesInventory.output.parse(value);
+// The only answer allowed once the operator grant is withdrawn.
+const OFF = { state: 'off', observedAt: null, sources: [], groups: [], problems: [] } as const;
 
 describe('host_service_inventory', () => {
   it('defaults to off and spawns nothing', async () => {
@@ -192,6 +194,47 @@ describe('host_service_inventory', () => {
     expect(hostInventory).toHaveBeenCalledTimes(4);
   });
 
+  it('drops a paused read and never launches the second source once monitoring is revoked', async () => {
+    const calls: string[] = [];
+    const grant = new AbortController();
+    let releaseRuntime!: (value: string) => void;
+    const read = createServiceInventory({ enabled: true, claims: () => [], signal: grant.signal, port: {
+      clock: () => new Date('2026-11-14T23:00:00Z'),
+      hostInventory: vi.fn((operation: 'runtime' | 'installed') => {
+        calls.push(operation);
+        return operation === 'runtime'
+          ? new Promise<string>(resolve => { releaseRuntime = resolve; })
+          : Promise.resolve(installed);
+      }),
+    } });
+    const pending = read({});
+    expect(calls).toEqual(['runtime']);
+    // The operator revokes monitoring while the runtime read is still paused.
+    grant.abort();
+    releaseRuntime(runtime); // late data arrives after revocation
+    const result = parse(await pending);
+    expect(result).toEqual(OFF);
+    // Late data is neither returned nor cached and the installed read never starts.
+    expect(JSON.stringify(result)).not.toMatch(/orbi@|orbi-demo|orbi-exporter/);
+    expect(calls).toEqual(['runtime']);
+    // Every later request while off answers without touching the host again.
+    expect(parse(await read({}))).toEqual(OFF);
+    expect(calls).toEqual(['runtime']);
+  });
+
+  it('discards a cached snapshot when monitoring is revoked', async () => {
+    const stub = stubPort();
+    const grant = new AbortController();
+    const read = createServiceInventory({ enabled: true, claims: () => [], signal: grant.signal, port: stub.port });
+    expect(parse(await read({})).state).toBe('complete');
+    expect(stub.calls).toEqual(['runtime', 'installed']);
+    grant.abort();
+    const after = parse(await read({}));
+    expect(after).toEqual(OFF);
+    expect(JSON.stringify(after)).not.toMatch(/orbi-demo|orbi@1\.service/);
+    expect(stub.calls).toEqual(['runtime', 'installed']);
+  });
+
   it('associates only a unique exact validated prefix; unsupported profiles stay display-only', async () => {
     const demo = await fixture(); cleanups.push(demo.cleanup);
     const core = await fixture(); cleanups.push(core.cleanup);
@@ -278,6 +321,23 @@ describe('host_inventory_port', () => {
 });
 
 describe('host_inventory_registration', () => {
+  it('answers off with zero host reads after the plugin grant is revoked by disposal', async () => {
+    const f = await fixture(); cleanups.push(f.cleanup);
+    vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+    vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+    const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockResolvedValue(runtime);
+    const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+    const dispose = contribute({ handle: (contract: { name: string }, handler: (input: unknown) => Promise<unknown>) => { handlers.set(contract.name, handler); } } as unknown as PluginServerContext);
+    const read = handlers.get('services.inventory')!;
+    expect(parse(await read({})).state).toBe('complete');
+    expect(hostInventory).toHaveBeenCalledTimes(2);
+    // Disabling/removing/reloading the plugin (or stopping the daemon) revokes the grant.
+    await dispose();
+    const after = parse(await read({}));
+    expect(after).toEqual(OFF);
+    expect(hostInventory).toHaveBeenCalledTimes(2);
+  });
+
   it('registers services.inventory and snapshots the startup opt-in', async () => {
     const f = await fixture(); cleanups.push(f.cleanup); vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
     const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory');

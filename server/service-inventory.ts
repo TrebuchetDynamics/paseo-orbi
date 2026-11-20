@@ -120,10 +120,19 @@ export function createServiceInventory(options: {
   enabled: boolean;
   claims: () => readonly UnitFamilyClaim[];
   port: InventoryPort;
+  // Operator grant lifetime. It aborts when the operator disables, removes or
+  // reloads the plugin, or stops the daemon. Once it aborts, the only answer is
+  // off: no host read starts, no late result is parsed, returned or cached, and
+  // no earlier snapshot keeps publishing unit names.
+  signal?: AbortSignal;
 }): ServiceInventoryReader {
   let cached: ServiceInventory | null = null;
   let cachedAt = 0;
   let inFlight: Promise<ServiceInventory> | null = null;
+  const revoked = () => options.signal?.aborted === true;
+  // Withdrawal discards the snapshot, not merely hides it from later readers.
+  options.signal?.addEventListener('abort', () => { cached = null; }, { once: true });
+  const offAndDiscard = (): ServiceInventory => { cached = null; return off(); };
 
   const refresh = async (): Promise<ServiceInventory> => {
     const deadline = options.port.clock().getTime() + OVERALL_DEADLINE_MS;
@@ -133,6 +142,8 @@ export function createServiceInventory(options: {
     // Sequential bounded reads share one overall deadline; the second read is
     // never launched once the first has consumed it.
     for (const source of ['runtime', 'installed'] as const) {
+      // A withdrawn grant never starts another host read.
+      if (revoked()) return offAndDiscard();
       const started = options.port.clock().getTime();
       if (started >= deadline) {
         sources.push({ source, state: 'unavailable', observedAt: new Date(started).toISOString(), problems: [{ source, code: 'deadline' }] });
@@ -141,17 +152,21 @@ export function createServiceInventory(options: {
       }
       try {
         const output = await options.port.hostInventory(source, Math.min(OVERALL_DEADLINE_MS, Math.max(1, deadline - started)));
+        // Data that arrives after revocation is discarded unparsed.
+        if (revoked()) return offAndDiscard();
         const result = source === 'runtime' ? parseRuntime(output) : parseInstalled(output);
         parsed[source] = result;
         const sourceProblems: InventoryProblem[] = result.malformed ? [{ source, code: 'malformed_record' }] : [];
         sources.push({ source, state: sourceProblems.length ? 'partial' : 'complete', observedAt: options.port.clock().toISOString(), problems: sourceProblems });
         problems.push(...sourceProblems);
       } catch (error) {
+        if (revoked()) return offAndDiscard();
         const code = failureCode(error);
         sources.push({ source, state: 'unavailable', observedAt: options.port.clock().toISOString(), problems: [{ source, code }] });
         problems.push({ source, code });
       }
     }
+    if (revoked()) return offAndDiscard();
     let rows = merge(parsed.runtime ?? null, parsed.installed ?? null);
     let truncated = false;
     if (rows.length > ROW_LIMIT) { rows = rows.slice(0, ROW_LIMIT); truncated = true; problems.push({ source: 'host', code: 'row_limit' }); }
@@ -165,12 +180,15 @@ export function createServiceInventory(options: {
   };
 
   return async () => {
-    if (!options.enabled) return off();
+    if (!options.enabled || revoked()) return offAndDiscard();
     const now = options.port.clock().getTime();
     if (cached && now - cachedAt < SNAPSHOT_TTL_MS) return cached;
     if (!inFlight) {
-      inFlight = refresh().then(value => { cached = value; cachedAt = options.port.clock().getTime(); return value; })
-        .finally(() => { inFlight = null; });
+      inFlight = refresh().then(value => {
+        // A snapshot that outlived the grant is never cached or returned.
+        if (revoked()) return offAndDiscard();
+        cached = value; cachedAt = options.port.clock().getTime(); return value;
+      }).finally(() => { inFlight = null; });
     }
     return inFlight;
   };
