@@ -247,9 +247,10 @@ export async function capture(page: Page, running: NativeLease, c: { id: string;
   await expect(page.locator('body')).not.toContainText(/(?:SECRET|TOKEN|PROMPT|REASONING|PRIVATE)[A-Z_]*CANARY/);
   const path = `${c.id}.png`, bytes = await page.screenshot({ path: join(running.input.output, path), fullPage: true }), size = pngSize(bytes) as { width: number; height: number };
   const fixture = (await provenance()).find((p: { profile: string }) => p.profile === running.hosts[0].profile);
+  // Every image carries its own OS and virtual-display provenance, not only its target's.
   await writeFile(join(running.input.output, `${c.id}.shot.json`), JSON.stringify({ ...c, targetId: running.native.targetId, path, pixelWidth: size.width, pixelHeight: size.height, sha256: digestOf(bytes),
-    pluginSha: running.input.sha, dirty: false, daemonVersion: '0.15.4', appVersion: PIN.appVersion, toolVersion: c.tool, hostAlias: 'host-a', fixture,
-    observedAt: new Date().toISOString(), expected: 'pass', observed: 'pass', inspection: null }, null, 2));
+    pluginSha: running.input.sha, dirty: false, daemonVersion: '0.15.4', appVersion: PIN.appVersion, osVersion: `${process.platform} ${osRelease()}`, toolVersion: c.tool, hostAlias: 'host-a',
+    virtualDisplay: running.native.virtualDisplay, fixture, observedAt: new Date().toISOString(), expected: 'pass', observed: 'pass', inspection: null }, null, 2));
   return size;
 }
 
@@ -268,6 +269,11 @@ export const test = base.extend<{}, WorkerFixtures>({
       await writeFile(join(running.input.output, 'native-app.log'), errors.join('\n'));
       await app.close();
       expect(errors, 'unexpected native renderer errors').toEqual([]);
+      // Same read-only invariant as the browser lane: the observer never mutated a host.
+      for (const host of running.hosts) {
+        const calls = (await readFile(host.calls, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { allowed: boolean });
+        expect(calls.every(call => call.allowed === true), 'observer attempted an unapproved command').toBe(true);
+      }
     }
   }, { scope: 'worker' }],
 });

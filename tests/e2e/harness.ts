@@ -314,9 +314,8 @@ export function lease(running: { root: string; input: Inputs; hosts: Host[] }) {
 }
 // Ownership-aware teardown shared by both lanes. Extra identities (owned display/app
 // groups) are only ever verified and signalled by proven pid+pgid+start identity.
-export async function release(input: Pick<Inputs, 'output' | 'repo'>, root: string, hosts: Host[], extra: { identities?: Identity[]; close?: () => Promise<void> } = {}) {
-  const extras = extra.identities ?? [], closeErrors: string[] = [];
-  if (extra.close) { try { await extra.close(); } catch (error) { closeErrors.push(`Owned app close failed: ${diagnostic(error)}`); } }
+export async function release(input: Pick<Inputs, 'output' | 'repo'>, root: string, hosts: Host[], extra: { identities?: Identity[] } = {}) {
+  const extras = extra.identities ?? [];
   for (const host of hosts) host.startup.deadline = Infinity;
   const result = await cleanupInstallations(hosts, {
     snapshot: () => ownedProcesses(hosts, root, extras), stop: stopOwned,
@@ -332,8 +331,8 @@ export async function release(input: Pick<Inputs, 'output' | 'repo'>, root: stri
       if (failures.length) throw new Error(failures.join('; '));
     },
   });
-  const errors = [...closeErrors, ...result.errors];
-  const report = { status: errors.length ? 'fail' : 'pass', ...result, ...(closeErrors.length ? { closeErrors } : {}), errors };
+  const errors = [...result.errors];
+  const report = { status: errors.length ? 'fail' : 'pass', ...result, errors };
   if (errors.length) {
     await writeFile(join(input.output, 'cleanup.json'), sanitize(JSON.stringify(report), [root, input.repo, input.output]));
     throw new Error('Ownership-aware cleanup failed; runtime trees retained for investigation. Inspect cleanup.json for removal and process diagnostics.');
