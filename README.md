@@ -29,8 +29,9 @@ installed qualification remain unperformed.
 ## Setup
 
 Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4**. The manifest
-declares admission `>0.15.0`, which only decides whether Paseo loads the plugin;
-installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain NOT_RUN (#23).
+declares admission `>0.15.0`, which only decides whether Paseo installs or
+loads the plugin; installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain
+NOT_RUN (#23).
 
 **Already installed and configured?** Open the **Orbi** entry on the intended host. An
 unconfigured or invalid catalog shows a setup panel naming the missing
