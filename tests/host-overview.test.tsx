@@ -297,6 +297,29 @@ describe('host_services_states', () => {
     expect(host.readInventory).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the off state undecided and Refresh-free when the selected host goes offline', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    cleanups.push(() => client.clear());
+    let renderer!: ReactTestRenderer;
+    vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
+    const tree = () => <QueryClientProvider client={client}><Shell {...props()} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
+    await act(async () => { renderer = create(tree()); });
+    cleanups.push(async () => { await act(async () => renderer.unmount()); });
+    await settle();
+    host.hosts[0] = { serverId: 'host-a', label: 'Host A', status: 'offline' };
+    await act(async () => renderer.update(tree())); await settle();
+    const page = text(renderer);
+    const panel = renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+    expect(page).toContain('Host service check: off');
+    expect(panel).toContain('Selected host is offline');
+    // Off stays undecided offline: no count, no absence claim, and no instruction
+    // to press a Refresh control the off state does not render.
+    expect(panel).not.toContain('Observed unit families');
+    expect(panel).not.toContain('No matching Orbi user units');
+    expect(panel).not.toContain('then Refresh');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+  });
+
   it('reports no matching units only for a fresh complete empty observation', async () => {
     const complete = await renderWith(inventory({ state: 'complete' }));
     expect(text(complete)).toContain("No matching Orbi user units found in the selected host's user services");

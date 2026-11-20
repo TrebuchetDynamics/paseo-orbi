@@ -179,7 +179,9 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
     <Text style={text}>{off ? 'Host service check: off (nothing checked; worker and timer state is undecided)' : `Host service check: ${state}`}</Text>
     {countEvidence && <Text style={text}>{`Observed unit families: ${families.length}; families with failed units: ${attention}. Observed unit activity is not an active delivery.`}</Text>}
     {data !== null && !off && <Text style={text}>{`Last check: ${data.observedAt ?? 'not yet observed'}; last successful check: ${observation?.lastSuccessfulAt ?? 'never'}`}</Text>}
-    {!connected && <Text style={text}>Selected host is offline. Host service reads are paused and current activity is unknown. Reconnect this host, then Refresh.</Text>}
+    {!connected && <Text style={text}>{off
+      ? 'Selected host is offline. Host service reads are paused and current activity is unknown; reconnect this host to resume the host service check.'
+      : 'Selected host is offline. Host service reads are paused and current activity is unknown. Reconnect this host, then Refresh.'}</Text>}
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}
     <Text accessibilityRole="alert" style={text}>{problems}</Text>
     {off ? <View style={{ gap: 8 }}>
