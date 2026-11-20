@@ -78,9 +78,9 @@ export function useObservationQuery<T>(options: {
     refresh: () => enabled ? query.refetch({ cancelRefetch: false }) : Promise.resolve(undefined) };
 }
 
-export function ObservationView<T>({ observation, refreshing, canRefresh, refresh, theme, children }: {
+export function ObservationView<T>({ observation, refreshing, canRefresh, refresh, theme, refreshLabel = 'Refresh', children }: {
   observation?: Observation<T>; refreshing: boolean; canRefresh: boolean; refresh: () => unknown;
-  theme: PluginHostProps['theme']; children: (data: T) => React.ReactNode;
+  theme: PluginHostProps['theme']; refreshLabel?: string; children: (data: T) => React.ReactNode;
 }) {
   const text = { color: theme.colors.foreground };
   const status = observation?.state ?? 'Loading';
@@ -90,6 +90,6 @@ export function ObservationView<T>({ observation, refreshing, canRefresh, refres
     {observation && <Text style={text}>Observed: {observation.observedAt}; Last success: {observation.lastSuccessfulAt ?? 'never'}</Text>}
     <Text accessibilityRole="alert" style={text}>{problems}</Text>
     {observation?.data != null && children(observation.data)}
-    <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!canRefresh} accessibilityState={{ disabled: !canRefresh, busy: refreshing }} style={{ opacity: canRefresh ? 1 : 0.5 }} onPress={refresh}><Text style={text}>{refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={refreshLabel} disabled={!canRefresh} accessibilityState={{ disabled: !canRefresh, busy: refreshing }} style={{ opacity: canRefresh ? 1 : 0.5 }} onPress={refresh}><Text style={text}>{refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
   </View>;
 }

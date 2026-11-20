@@ -147,7 +147,7 @@ it('four_views_read_only_journey', async () => {
   let finishDetail!: (value: unknown) => void;
   host.readIssue.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
   let pending!: Promise<unknown>;
-  await act(async () => { pending = renderer.root.findByProps({ testID: 'orbi-issues' }).findAllByProps({ accessibilityLabel: 'Refresh' }).at(-1)!.props.onPress(); }); await settle();
+  await act(async () => { pending = renderer.root.findByProps({ testID: 'orbi-issues' }).findByProps({ accessibilityLabel: 'Refresh selected issue' }).props.onPress(); }); await settle();
   host.hosts.push({ serverId: 'host-b', label: 'Host A', status: 'online' });
   const otherHost = { ...props, host: { id: 'host-b', label: 'Host A' } } as PluginScreenProps;
   await act(async () => renderer.update(tree('issues', otherHost))); await settle();

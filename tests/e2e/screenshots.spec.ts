@@ -1,4 +1,4 @@
-import { test, expect, theme, navigate, select, state, configure, refresh, capture, assertState } from './fixtures/browser';
+import { test, expect, theme, navigate, select, state, configure, refresh, pageRefresh, capture, assertState } from './fixtures/browser';
 import { matrix } from './evidence.mjs';
 import { start } from './harness';
 
@@ -35,7 +35,7 @@ for (const c of matrix) test(`screenshot ${c.id}`, async ({ page, browser, lease
     const control = page.getByRole('button', { name: c.view === 'fleet' ? 'Active work for Demo' : c.view === 'issues' ? 'Inspect issue 42' : c.view === 'runs' ? 'Inspect run 42 84360d31' : 'Inspect blocker 43', exact: true });
     await control.scrollIntoViewIfNeeded(); await expect(control).toBeVisible();
     if (c.view !== 'fleet') { await control.focus(); await page.keyboard.press('Enter'); }
-    const end = page.getByTestId(`orbi-${c.view}`).getByRole('button', { name: 'Refresh', exact: true }).last();
+    const end = page.getByTestId(`orbi-${c.view}`).getByRole('button', { name: pageRefresh(c.view), exact: true }).last();
     await end.scrollIntoViewIfNeeded(); await expect(end).toBeVisible();
     await capture(page, lease, browser.version(), { ...c, id: `${c.id}-scrolled-detail`, supplemental: true });
   }
