@@ -40,7 +40,7 @@ export async function configureHost(host: LeaseHost, kind: 'available' | 'norepo
 export async function assertOverviewState(page: Page, state: 'complete' | 'partial' | 'unconfigured') {
   if (state === 'complete') {
     await expect(page.getByText('Services: Current', { exact: true })).toBeVisible();
-    await expect(page.getByText('3 families · 1 failed', { exact: true })).toBeVisible();
+    await expect(page.getByText('1 of 3 groups needs attention', { exact: true })).toBeVisible();
   } else if (state === 'partial') {
     await expect(page.getByText('Services: partial', { exact: true })).toBeVisible();
     await expect(page.getByText('Partial · units may be missing.', { exact: true })).toBeVisible();

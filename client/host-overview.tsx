@@ -11,13 +11,13 @@ import { useObservationQuery } from './observation';
 // when the server already validated a unique exact unit-name prefix, and the
 // client still requires that deployment to be available in the current catalog.
 
-type FamilyFact = 'failed' | 'running' | 'scheduled' | 'installed' | 'idle' | 'unknown';
+type FamilyFact = 'failed' | 'running' | 'idle' | 'waiting' | 'installed' | 'unknown';
 const familyFactText: Record<FamilyFact, string> = {
   failed: 'Failed',
   running: 'Running',
-  scheduled: 'Scheduled',
-  installed: 'Installed',
   idle: 'Idle',
+  waiting: 'Timer waiting',
+  installed: 'Installed',
   unknown: 'Unknown / transitional',
 };
 
@@ -50,21 +50,25 @@ function summarizeFamily(group: InventoryGroup) {
   const observed = group.units.filter(unit => unit.runtime !== null);
   const runtime = (unit: InventoryUnit) => unit.runtime!;
   const running = observed.filter(unit => unit.kind === 'service' && runtime(unit).activeState === 'active' && runtime(unit).subState === 'running').length;
+  const idle = observed.filter(unit => unit.kind === 'service' && runtime(unit).loadState === 'loaded' && runtime(unit).activeState === 'inactive' && runtime(unit).subState === 'dead').length;
   const failed = observed.some(unit => runtime(unit).activeState === 'failed' || runtime(unit).subState === 'failed');
   const waiting = observed.some(unit => unit.kind === 'timer' && runtime(unit).activeState === 'active' && runtime(unit).subState === 'waiting');
+  // Worker and timer facts stay independent: a running worker must not hide a
+  // waiting timer, and a waiting timer must not hide an idle or failed worker.
   const facts: FamilyFact[] = [];
   if (failed) facts.push('failed');
   if (running > 0) facts.push('running');
-  else if (waiting) facts.push('scheduled');
+  else if (idle > 0) facts.push('idle');
+  if (waiting) facts.push('waiting');
   if (group.units.length > 0 && observed.length === 0) facts.push('installed');
-  if (facts.length === 0) facts.push(observed.length === group.units.length && observed.length > 0 && observed.every(unit => runtime(unit).loadState === 'loaded' && runtime(unit).activeState === 'inactive' && runtime(unit).subState === 'dead') ? 'idle' : 'unknown');
-  return { facts, running };
+  if (facts.length === 0) facts.push('unknown');
+  return { facts };
 }
 function familyRank(group: InventoryGroup) {
   const { facts } = summarizeFamily(group);
-  return facts.includes('failed') ? 0 : facts.includes('running') ? 1 : facts.includes('scheduled') ? 2 : 3;
+  return facts.includes('failed') ? 0 : facts.includes('running') ? 1 : facts.includes('waiting') ? 2 : 3;
 }
-// Failed/attention, running, scheduled, then other/not loaded; stable label tie-break.
+// Failed/attention, running, timer waiting, then other/not loaded; stable label tie-break.
 function sortFamilies(groups: readonly InventoryGroup[]): InventoryGroup[] {
   return [...groups].sort((left, right) => familyRank(left) - familyRank(right) || (left.label < right.label ? -1 : left.label > right.label ? 1 : 0));
 }
@@ -130,6 +134,28 @@ function displayNames(groups: InventoryGroup[], entries: DeploymentCatalog['entr
     if (!changed) return names;
   }
 }
+const isFailed = (unit: InventoryUnit | undefined) => unit?.runtime != null && (unit.runtime.activeState === 'failed' || unit.runtime.subState === 'failed');
+const compareSlots = (left: string, right: string) => {
+  const a = left.replace(/^0+/, '') || '0', b = right.replace(/^0+/, '') || '0';
+  return a.length - b.length || a.localeCompare(b) || left.localeCompare(right);
+};
+const slotOf = (group: InventoryGroup, unit: InventoryUnit) => {
+  const match = /^(.*)@(\d+)\.(service|timer)$/.exec(unit.id);
+  return match && match[1] === group.label ? match[2] : null;
+};
+// Collapsed rows name the first observed failure. A numbered slot is only
+// claimed by exact family identity; otherwise the observed unit kind is named.
+const failedUnits = (group: InventoryGroup) => group.units
+  .filter(unit => isFailed(unit))
+  .map(unit => ({ slot: slotOf(group, unit), kind: unit.kind === 'service' ? 'Worker' : 'Timer' }))
+  .sort((left, right) => left.slot === null ? (right.slot === null ? 0 : 1) : right.slot === null ? -1 : compareSlots(left.slot, right.slot));
+function failureSummary(group: InventoryGroup): string | null {
+  const failures = failedUnits(group);
+  if (failures.length === 0) return null;
+  const first = failures[0];
+  const label = first.slot === null ? `${first.kind} failed` : `Slot ${first.slot} · ${first.kind} failed`;
+  return failures.length === 1 ? label : `${label} · +${failures.length - 1} more`;
+}
 function slotState(unit: InventoryUnit | undefined, timer = false): string {
   const prefix = timer ? 'Timer ' : '';
   if (!unit) return timer ? 'Timer not observed' : 'Service not observed';
@@ -151,9 +177,9 @@ function slotLines(group: InventoryGroup): string[] {
     slot[match[3] as 'service' | 'timer'] = unit;
     slots.set(match[2], slot);
   }
-  return [...slots].sort(([a], [b]) => {
-    const left = a.replace(/^0+/, '') || '0', right = b.replace(/^0+/, '') || '0';
-    return left.length - right.length || left.localeCompare(right) || a.localeCompare(b);
+  return [...slots].sort(([leftId, left], [rightId, right]) => {
+    const severity = (slot: { service?: InventoryUnit; timer?: InventoryUnit }) => isFailed(slot.service) || isFailed(slot.timer) ? 0 : 1;
+    return severity(left) - severity(right) || compareSlots(leftId, rightId);
   }).map(([id, slot]) => `Slot ${id} · ${slotState(slot.service)} · ${slotState(slot.timer, true)}`);
 }
 function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle, name }: {
@@ -162,25 +188,34 @@ function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle
   expanded: boolean; toggle: () => void; name: string;
 }) {
   const text = { color: theme.colors.foreground };
+  const secondary = { ...text, fontSize: 12 };
   const { facts } = summarizeFamily(group);
+  const failure = failureSummary(group);
+  // A named failure already carries the failed fact; do not repeat "Failed".
+  const status = facts.filter(fact => fact !== 'failed' || failure === null);
   const entry = authorizedEntry(group, entries);
   const [technical, setTechnical] = useState(false);
   return <View testID={`orbi-family-${group.label}`} style={{ gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityState={{ expanded }}
-      style={{ minHeight: 44, justifyContent: 'center' }} onPress={toggle}>
-      <Text style={{ ...text, fontSize: 16, fontWeight: '600', flexShrink: 1 }}>{name}</Text>
+      style={({ pressed }) => ({ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, opacity: pressed ? 0.65 : 1 })}
+      onPress={toggle}>
+      <View style={{ flexShrink: 1, gap: 4 }}>
+        <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {failure !== null && <Text style={secondary}>{failure}</Text>}
+          {status.map(fact => <Text key={fact} style={secondary}>{familyFactText[fact]}</Text>)}
+          {!entry && <Text style={secondary}>Unlinked</Text>}
+        </View>
+      </View>
+      <Text testID={`orbi-chevron-${group.label}`} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={text}>{expanded ? '▾' : '▸'}</Text>
     </Pressable>
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 6 }}>
-      {!entry && <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Unlinked</Text>}
-      {facts.map(fact => <Text key={fact} style={{ ...text, fontSize: 12 }}>{familyFactText[fact]}</Text>)}
-    </View>
     {entry !== null && <Pressable accessibilityRole="button" accessibilityLabel={`View repository ${entry.label}`}
       style={{ minHeight: 44, justifyContent: 'center' }}
       onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })}><Text style={text}>View repository</Text></Pressable>}
     {expanded && <View style={{ gap: 2 }}>
       {slotLines(group).map(line => <Text key={line} style={text}>{line}</Text>)}
-      <Pressable accessibilityRole="button" accessibilityLabel={`Technical details for ${group.label}`} accessibilityState={{ expanded: technical }}
-        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setTechnical(value => !value)}><Text style={text}>Technical details</Text></Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Unit details for ${group.label}`} accessibilityState={{ expanded: technical }}
+        style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.65 : 1 })} onPress={() => setTechnical(value => !value)}><Text style={text}>Unit details</Text></Pressable>
       {technical && <View style={{ gap: 2 }}>
         <Text style={text}>{group.label}</Text>
         <Text style={text}>{associationText(group, entry)}</Text>
@@ -234,9 +269,9 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   ].filter(Boolean);
   const panel = { gap: compact ? 8 : 12 };
   return <View testID="orbi-host-services" style={panel}>
-    <Text accessibilityRole="header" testID="orbi-overview-heading" style={text}>{`Orbi · ${hostLabel}`}</Text>
+    <Text accessibilityRole="header" testID="orbi-overview-heading" style={text}>{`${hostLabel} · Fleet`}</Text>
     <Text style={text}>{off ? 'Service check off · activity unknown' : stale ? 'Stale · current activity unknown' : `Services: ${state === 'complete' ? 'Current' : state}`}</Text>
-    {countEvidence && <Text style={text}>{`${families.length} families · ${attention} failed`}</Text>}
+    {countEvidence && families.length > 0 && <Text testID="orbi-attention-count" style={text}>{`${attention} of ${families.length} groups ${attention === 1 ? 'needs' : 'need'} attention`}</Text>}
     {!connected && <Text style={text}>Offline · current activity unknown</Text>}
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}
     {!!problems && <Text accessibilityRole="alert" style={text}>{problems}</Text>}
@@ -248,10 +283,10 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
         <Text style={text}>Host service inventory is not enabled on this host. The operator can opt in with PASEO_ORBI_HOST_INVENTORY=1 at plugin startup and explicitly authorize a reload.</Text>
         <Text style={text}>Connected clients on this host can then see Orbi unit names. No other host is read. Refresh cannot enable access or reload this plugin.</Text>
       </View>}
-    </View> : <Pressable accessibilityRole="button" accessibilityLabel="Refresh host services" disabled={!query.canRefresh}
+    </View> : <Pressable accessibilityRole="button" accessibilityLabel="Refresh services" disabled={!query.canRefresh}
       accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }}
-      style={{ minHeight: 44, justifyContent: 'center', opacity: query.canRefresh ? 1 : 0.5 }}
-      onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
+      style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', borderWidth: 1, borderColor: theme.colors.foreground, borderRadius: 8, paddingHorizontal: 12, opacity: !query.canRefresh ? 0.5 : pressed ? 0.7 : 1 })}
+      onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh services'}</Text></Pressable>}
     {copies.map(copy => <Text key={copy} style={text}>{copy}</Text>)}
     {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} theme={theme} entries={entries} openScreen={openScreen}
       name={names.get(group.label)!}
