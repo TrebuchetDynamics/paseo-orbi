@@ -8,6 +8,70 @@ import { ObservationView, useObservationQuery } from './observation';
 
 type Props = PluginScreenProps & { openScreen: PluginClientContext['openScreen'] };
 type Entry = DeploymentCatalog['entries'][number];
+type Unit = FleetSnapshot['units'][number];
+
+// A slot's timer and its one-shot worker are separate units. They are paired by
+// the numeric instance in each observed unit ID, never by response order, and a
+// unit that does not match exactly one known instance stays visible unpaired.
+const instanceId = /^(.*)@([1-9]\d*)\.(service|timer)$/;
+function slots(units: readonly Unit[]) {
+  const groups = new Map<string, { key: string; prefix: string; slot: number; service: Unit | null; timer: Unit | null }>();
+  const unpaired: Unit[] = [];
+  for (const unit of units) {
+    const match = instanceId.exec(unit.id);
+    if (!match) { unpaired.push(unit); continue; }
+    const key = `${match[1]}@${match[2]}`;
+    const group = groups.get(key) ?? { key, prefix: match[1], slot: Number(match[2]), service: null, timer: null };
+    if (match[3] === 'service' && group.service === null) group.service = unit;
+    else if (match[3] === 'timer' && group.timer === null) group.timer = unit;
+    else { unpaired.push(unit); continue; }
+    groups.set(key, group);
+  }
+  // Numeric instance order; a mixed snapshot only ever arrives from one prefix.
+  const ordered = [...groups.values()].sort((left, right) => left.slot - right.slot || (left.prefix < right.prefix ? -1 : left.prefix > right.prefix ? 1 : 0));
+  return { ordered, unpaired };
+}
+// Missing or unreadable facts stay unknown/not found. Only both readable runtime
+// fields may read as a state, and unfamiliar or transitional pairs stay verbatim.
+function observed(unit: Unit | null) {
+  if (unit === null) return null;
+  if (unit.loadState === 'not-found') return 'not found' as const;
+  if (unit.activeState === null || unit.subState === null) return null;
+  return { active: unit.activeState, sub: unit.subState };
+}
+function workerState(unit: Unit | null) {
+  const state = observed(unit);
+  if (state === null) return 'unknown';
+  if (state === 'not found') return state;
+  if (state.active === 'failed' || state.sub === 'failed') return 'failed';
+  if (state.active === 'active' && state.sub === 'running') return 'running';
+  if (state.active === 'inactive' && state.sub === 'dead') return 'idle';
+  return `${state.active}/${state.sub}`;
+}
+function timerState(unit: Unit | null) {
+  const state = observed(unit);
+  if (state === null) return 'unknown';
+  if (state === 'not found') return state;
+  if (state.active === 'failed' || state.sub === 'failed') return 'failed';
+  if (state.active === 'active' && state.sub === 'waiting') return 'waiting';
+  if (state.active === 'inactive') return 'inactive';
+  return `${state.active}/${state.sub}`;
+}
+// The timer's reported real-time elapse, never a computed cadence. A value that
+// systemd still reports for a timer that is not waiting keeps that context.
+function nextTrigger(unit: Unit | null, waiting: boolean) {
+  if (unit?.nextTrigger == null) return 'unknown';
+  return waiting ? unit.nextTrigger : `${unit.nextTrigger} (timer not waiting)`;
+}
+function UnitDetail({ unit, style }: { unit: Unit; style: { color: string } }) {
+  return <View style={{ gap: 4 }}>
+    <Text style={style}>{unit.id}</Text>
+    <Text style={style}>Load: {unit.loadState ?? 'unavailable'}; Active: {unit.activeState ?? 'unavailable'}; Substate: {unit.subState ?? 'unavailable'}</Text>
+    <Text style={style}>Unit file: {unit.unitFileState ?? 'unavailable'}; Service/timer result: {unit.result ?? 'unavailable'}</Text>
+    <Text style={style}>Last trigger: {unit.lastTrigger ?? 'unavailable'}; Next trigger (realtime): {unit.nextTrigger ?? 'unavailable'}</Text>
+    {unit.problems.map((problem, i) => <Text key={i} style={style}>{problem.source}: {problem.code}</Text>)}
+  </View>;
+}
 
 // Rich deployment detail is selection/expansion evidence only. The Overview
 // landing loads it for one deployment, never for every configured repository.
@@ -21,24 +85,30 @@ function DeploymentDetail({ entry, connected, foreground, ...props }: Props & {
   });
   const text = { color: props.theme.colors.foreground };
   return <View testID={`orbi-deployment-${entry.id}`} style={{ gap: 8 }}>
-    <ObservationView {...query} theme={props.theme}>{data => <View style={{ gap: 8 }}>
-      <Text style={text}>Profile: {data.profile}</Text>
-      <Text style={text}>Configured capacity: {data.configuredCapacity}; Occupancy: unknown</Text>
-      <Text style={text}>Active deliveries: unknown</Text>
-      {data.units.map(unit => <View key={unit.id} style={{ gap: 4 }}>
-        <Text style={text}>{unit.id}</Text>
-        <Text style={text}>Load: {unit.loadState ?? 'unavailable'}; Active: {unit.activeState ?? 'unavailable'}; Substate: {unit.subState ?? 'unavailable'}</Text>
-        <Text style={text}>Unit file: {unit.unitFileState ?? 'unavailable'}; Service/timer result: {unit.result ?? 'unavailable'}</Text>
-        <Text style={text}>Last trigger: {unit.lastTrigger ?? 'unavailable'}; Next trigger (realtime): {unit.nextTrigger ?? 'unavailable'}</Text>
-        {unit.problems.map((p, i) => <Text key={i} style={text}>{p.source}: {p.code}</Text>)}
-      </View>)}
-      <Text style={text}>Recorded health (not current service health)</Text>
-      {data.health === null ? <Text style={text}>Health unavailable. Ask the operator to check the health writer/file, then Refresh.</Text> : <View>
-        <Text style={text}>Last pickup: {data.health.lastPickupAt ?? 'unavailable'}</Text>
-        {data.health.recentRuns.length === 0 && <Text style={text}>No recorded runs in the validated health history.</Text>}
-        {data.health.recentRuns.map((run, i) => <Text key={i} style={text}>{run.repo} #{run.issue} · {run.runId} · Reported outcome: {run.outcome} · {run.at}</Text>)}
-      </View>}
-    </View>}</ObservationView>
+    <ObservationView {...query} theme={props.theme}>{data => {
+      const grouped = slots(data.units);
+      return <View style={{ gap: 8 }}>
+        <Text style={text}>Profile: {data.profile}</Text>
+        <Text style={text}>Configured capacity: {data.configuredCapacity}; Occupancy: unknown</Text>
+        <Text style={text}>Active deliveries: unknown</Text>
+        {data.units.length > 0 && <Text style={text}>Worker and timer are separate units: a waiting timer does not guarantee that a worker starts or picks up an issue.</Text>}
+        {grouped.ordered.map(({ key, slot, service, timer }) => {
+          const timerFact = timerState(timer);
+          return <View key={key} style={{ gap: 4 }}>
+            <Text accessibilityRole="summary" style={text}>{`Slot ${slot} · Worker ${workerState(service)} · Timer ${timerFact} · Next trigger ${nextTrigger(timer, timerFact === 'waiting')}`}</Text>
+            {service !== null && <UnitDetail unit={service} style={text} />}
+            {timer !== null && <UnitDetail unit={timer} style={text} />}
+          </View>;
+        })}
+        {grouped.unpaired.map(unit => <UnitDetail key={unit.id} unit={unit} style={text} />)}
+        <Text style={text}>Recorded health (not current service health)</Text>
+        {data.health === null ? <Text style={text}>Health unavailable. Ask the operator to check the health writer/file, then Refresh.</Text> : <View>
+          <Text style={text}>Last pickup: {data.health.lastPickupAt ?? 'unavailable'}</Text>
+          {data.health.recentRuns.length === 0 && <Text style={text}>No recorded runs in the validated health history.</Text>}
+          {data.health.recentRuns.map((run, i) => <Text key={i} style={text}>{run.repo} #{run.issue} · {run.runId} · Reported outcome: {run.outcome} · {run.at}</Text>)}
+        </View>}
+      </View>;
+    }}</ObservationView>
     <Text style={text}>Unit reads unavailable? Ask the operator to check user-unit access, then Refresh. No controls change services.</Text>
   </View>;
 }

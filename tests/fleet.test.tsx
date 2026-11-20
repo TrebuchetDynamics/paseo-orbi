@@ -6,7 +6,7 @@ import * as filesystem from 'node:fs/promises';
 import { join } from 'node:path';
 vi.mock('node:fs/promises', { spy: true });
 import { readFleet } from '../server/fleet';
-import { fleetRead } from '../shared/fleet';
+import { fleetRead, type FleetSnapshot } from '../shared/fleet';
 import { fixture } from './helpers/fixtures';
 
 const cleanups: (() => unknown)[] = [];
@@ -106,6 +106,7 @@ import { Shell } from '../client/shell';
 import contribute from '../index.server';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import { deploymentsList } from '../shared/common';
+import type { Observation } from '../shared/common';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const props = { theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id: 'host-a', label: 'Host A' }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps;
 const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
@@ -171,6 +172,113 @@ it('stale_compact_and_theme', async () => {
   await act(async () => renderer.update(tree(light)));
   expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(24);
   for (const node of renderer.root.findAllByType('Text' as any)) expect(node.props.style.color).toBe('#222');
+});
+
+// One slot's worker and timer are separate systemd units. Fixtures state every
+// fact explicitly so a summary can only be right when it pairs by unit ID.
+const unitSnapshot = (id: string, fields: Partial<FleetSnapshot['units'][number]> = {}): FleetSnapshot['units'][number] => ({
+  id, loadState: 'loaded', activeState: null, subState: null, unitFileState: null, result: null,
+  lastTrigger: null, nextTrigger: null, problems: [], ...fields,
+});
+type FleetObservation = Observation<FleetSnapshot>;
+const fleetSnapshot = (units: FleetSnapshot['units'], configuredCapacity = Math.max(1, units.length / 2)): FleetObservation => fleetRead.output.parse({
+  state: 'available', observedAt: '2026-11-14T23:00:00.000Z', lastSuccessfulAt: '2026-11-14T23:00:00.000Z', problems: [],
+  data: { deploymentId: 'demo', repo: 'Example/project', profile: 'orbi-0.7.41-release', configuredCapacity, occupancy: null, units, health: null },
+});
+const renderFleet = async (snapshot: FleetObservation) => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+  host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', problems: [], entries: [
+    { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi', status: 'available', problems: [] },
+  ] });
+  host.readFleet.mockReset().mockResolvedValue(snapshot);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...props} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
+  await settle(); await settle();
+  const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+  const summaries = () => renderer.root.findAll(node => node.props.accessibilityRole === 'summary').map(node => node.children.join(''));
+  const update = async (next: PluginScreenProps) => {
+    const tree = (p: PluginScreenProps) => <QueryClientProvider client={client}><Shell {...p} route="fleet" openScreen={vi.fn()} /></QueryClientProvider>;
+    await act(async () => renderer.update(tree(next))); await settle(); await settle();
+  };
+  return { renderer, text, summaries, update };
+};
+
+it('pairs each selected slot summary by unit ID instead of response order', async () => {
+  // Response order is deliberately interleaved; each row may use only its own facts.
+  const { renderer, text, summaries, update } = await renderFleet(fleetSnapshot([
+    unitSnapshot('orbi-demo@1.timer', { activeState: 'active', subState: 'waiting', unitFileState: 'enabled', lastTrigger: 'Sat 2026-11-14 22:00:00 UTC', nextTrigger: 'Sat 2026-11-14 22:30:00 UTC' }),
+    unitSnapshot('orbi-demo@2.service', { activeState: 'active', subState: 'running' }),
+    unitSnapshot('orbi-demo@1.service', { activeState: 'inactive', subState: 'dead', unitFileState: 'static', result: 'success' }),
+    unitSnapshot('orbi-demo@2.timer', { activeState: 'inactive', subState: 'dead', unitFileState: 'disabled' }),
+  ]));
+  expect(summaries()).toEqual([
+    'Slot 1 · Worker idle · Timer waiting · Next trigger Sat 2026-11-14 22:30:00 UTC',
+    'Slot 2 · Worker running · Timer inactive · Next trigger unknown',
+  ]);
+  // Numeric slot order, summary before that slot's raw state/result/problem details.
+  expect(text().indexOf('Slot 1 ·')).toBeLessThan(text().indexOf('orbi-demo@1.service'));
+  expect(text().indexOf('orbi-demo@1.service')).toBeLessThan(text().indexOf('Slot 2 ·'));
+  expect(text().indexOf('Slot 2 ·')).toBeLessThan(text().indexOf('orbi-demo@2.timer'));
+  // Raw trigger values and their time context survive.
+  expect(text()).toContain('Last trigger: Sat 2026-11-14 22:00:00 UTC; Next trigger (realtime): Sat 2026-11-14 22:30:00 UTC');
+  expect(text()).toContain('Unit file: disabled; Service/timer result: unavailable');
+  // Separate units: a waiting timer is not a worker start, idle is not a completed issue.
+  expect(text()).toContain('Worker and timer are separate units');
+  expect(summaries()[0]).not.toMatch(/closed|completed|success|issue/i);
+  // Grouping is client-only: expanding and collapsing the same selection adds no read.
+  expect(host.readFleet).toHaveBeenCalledTimes(1);
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Hide details for Demo' }).props.onPress()); await settle();
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Show details for Demo' }).props.onPress()); await settle();
+  expect(summaries()).toHaveLength(2);
+  expect(host.readFleet).toHaveBeenCalledTimes(1);
+  // A host switch still reads only its own selected deployment, and the summary
+  // is rebuilt from that observation rather than from a second read.
+  host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
+  cleanups.push(() => { host.hosts = host.hosts.filter(candidate => candidate.serverId !== 'host-b'); });
+  await update({ ...props, host: { id: 'host-b', label: 'Host B' } } as PluginScreenProps);
+  expect(host.readFleet).toHaveBeenCalledTimes(2);
+  expect(host.readFleet).toHaveBeenLastCalledWith({ deploymentId: 'demo' });
+  expect(summaries()).toHaveLength(2);
+});
+
+it('keeps failed, inactive, unknown and not-found slot facts apart with the reported next trigger', async () => {
+  const { renderer, text, summaries } = await renderFleet(fleetSnapshot([
+    unitSnapshot('orbi-demo@1.service', { activeState: 'failed', subState: 'failed', result: 'exit-code' }),
+    unitSnapshot('orbi-demo@1.timer', { activeState: 'inactive', subState: 'dead' }),
+    unitSnapshot('orbi-demo@2.service', { activeState: 'active', subState: 'exited', result: 'success' }),
+    unitSnapshot('orbi-demo@2.timer', { activeState: 'active', subState: 'waiting', nextTrigger: 'Sat 2026-11-14 22:30:00 UTC' }),
+    unitSnapshot('orbi-demo@3.service', { loadState: null, problems: [{ source: 'systemd', code: 'process_failed' }] }),
+    unitSnapshot('orbi-demo@3.timer', { activeState: 'active', subState: 'waiting' }),
+    unitSnapshot('orbi-demo@4.service', { loadState: 'not-found', activeState: 'inactive', subState: 'dead' }),
+    // A disabled unit file is not the timer's runtime state: it is still waiting.
+    unitSnapshot('orbi-demo@4.timer', { activeState: 'active', subState: 'waiting', unitFileState: 'disabled', nextTrigger: 'Sat 2026-11-14 23:00:00 UTC' }),
+    unitSnapshot('orbi-demo@5.service', { activeState: 'inactive', subState: 'dead', result: 'success' }),
+    unitSnapshot('orbi-demo@5.timer', { activeState: 'failed', subState: 'failed' }),
+  ], 5));
+  expect(summaries()).toEqual([
+    'Slot 1 · Worker failed · Timer inactive · Next trigger unknown',
+    'Slot 2 · Worker active/exited · Timer waiting · Next trigger Sat 2026-11-14 22:30:00 UTC',
+    'Slot 3 · Worker unknown · Timer waiting · Next trigger unknown',
+    'Slot 4 · Worker not found · Timer waiting · Next trigger Sat 2026-11-14 23:00:00 UTC',
+    'Slot 5 · Worker idle · Timer failed · Next trigger unknown',
+  ]);
+  // A failed worker and an inactive timer show both facts; inactive is not failed.
+  expect(summaries()[0]).toContain('Worker failed · Timer inactive');
+  expect(summaries()[0]).not.toContain('Timer failed');
+  // Success is not a completed issue; the per-unit problem stays.
+  expect(summaries()[4]).toContain('Worker idle · Timer failed');
+  expect(text()).toContain('Service/timer result: success');
+  expect(text()).toContain('systemd: process_failed');
+  // Partial/stale observation keeps the independently observed slot facts fresh-labelled.
+  host.readFleet.mockRejectedValue(new Error('transport unavailable'));
+  await act(async () => { await renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); });
+  await settle();
+  expect(text()).toContain('stale');
+  expect(text()).toContain('Last success: 2026-11-14T23:00:00.000Z');
+  expect(summaries()).toHaveLength(5);
+  expect(host.readFleet).toHaveBeenCalledTimes(2);
 });
 
 it('registers fleet.read at the actual server entry with startup authorization', async () => {
