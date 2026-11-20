@@ -11,12 +11,12 @@ import { servicesInventory } from '../shared/services';
 import { z } from 'zod';
 import contribute from '../index.server';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { fixture } from './helpers/fixtures';
+import { fixture, type FixtureProfile } from './helpers/fixtures';
 
 // Pass-through host filesystem spies record real opens/stats without replacing safety code.
 vi.mock('node:fs/promises', { spy: true });
 const cleanups: (() => unknown)[] = [];
-async function setup(profile: 'release' | 'installed' = 'release') { const f = await fixture(profile); cleanups.push(f.cleanup); return f; }
+async function setup(profile: FixtureProfile = 'release') { const f = await fixture(profile); cleanups.push(f.cleanup); return f; }
 afterEach(async () => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 async function rpc(path?: string) {
   if (path === undefined) vi.stubEnv('PASEO_ORBI_CONFIG', undefined); else vi.stubEnv('PASEO_ORBI_CONFIG', path);
@@ -54,7 +54,7 @@ describe('config_and_compatibility', () => {
     await expect(ports.read('demo', 'health')).rejects.toThrow('deployment_unavailable');
     expect(JSON.stringify(await rpc(f.authorization))).not.toMatch(/SECRET_CANARY|publisher-canary|configPath|engineSourcePath|repoDir|deployHome/);
   });
-  it.each(['release', 'installed'] as const)('independently fetched %s pinned bytes reproduce approved fingerprint', async profile => {
+  it.each(['release', 'installed', 'v0748'] as const)('tracked %s pinned bytes reproduce approved fingerprint', async profile => {
     const f = await setup(profile);
     expect(await fingerprint(f.source, f.entry.adapter as keyof typeof profiles)).toBe(profiles[f.entry.adapter as keyof typeof profiles].fingerprint);
     expect((await rpc(f.authorization)).entries[0].status).toBe('available');

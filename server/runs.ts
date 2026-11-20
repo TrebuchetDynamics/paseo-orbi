@@ -170,7 +170,7 @@ export class RunsReader {
     for (let slot = 1; slot <= deployment.capacity; slot++) {
       const prefix = deployment.unitName === null ? 'orbi' : `orbi-${deployment.unitName}`;
       try {
-        const projected = projectEvents(await this.ports.process(id, { kind: 'journalctl', slot }), { unit: `${prefix}@${slot}.service`, repo: deployment.repo, issue, runId, retained: deployment.sourceProfile === 'orbi-0.7.41-1a8b2f96' });
+        const projected = projectEvents(await this.ports.process(id, { kind: 'journalctl', slot }), { unit: `${prefix}@${slot}.service`, repo: deployment.repo, issue, runId, retained: deployment.keepFailedWorktrees !== null });
         data.events.push(...projected.events); problems.push(...projected.problems);
       } catch (error) { problems.push(problem(error, 'journal')); }
     }

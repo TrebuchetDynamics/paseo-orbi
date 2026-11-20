@@ -28,6 +28,9 @@ export const reasonText = {
   base_branch_missing: 'Configured base branch is missing. The operator repairs repository/configuration externally.',
   base_ci_red: 'Base CI is red. Repair belongs to the base, not a plain requeue of this delivery. Orbi owns same-run recovery.',
   checks_permission_missing: 'Check-read permission is missing. An installation owner approves permissions externally; Orbi can then resume.',
+  release_failed: 'The release failed. Inspect the release failure externally.',
+  no_commit_delivered: 'The task delivered no commit. Review the ticket and expected delivery externally.',
+  no_file_change: 'The task delivered commits but no file change. Review the expected changes externally.',
   unclassified: 'Unclassified failure. An operator must investigate externally; no diagnostic prose is interpreted.',
 } as const;
 export const actionText = {
@@ -64,7 +67,7 @@ export type BlockerPage = z.infer<typeof BlockerPage>;
 export const artifactNames = ['worktree', '.orbi/run-state.json', '.orbi/test.log', '.orbi/plan.md', '.orbi/verify.md'] as const;
 export const ArtifactMetadata = z.object({ name: z.enum(artifactNames), status: z.enum(['present', 'missing', 'unreadable', 'invalid', 'unattributed']), size: z.number().int().nonnegative().nullable(), modifiedAt: z.iso.datetime().nullable() }).strict();
 export type ArtifactMetadata = z.infer<typeof ArtifactMetadata>;
-export const Retention = z.object({ profile: z.enum(['orbi-0.7.41-release', 'orbi-0.7.41-1a8b2f96']), worktreeRetainHours: z.number().positive(), keepFailedWorktrees: z.boolean().nullable() }).strict();
+export const Retention = z.object({ profile: z.enum(['orbi-0.7.41-release', 'orbi-0.7.41-1a8b2f96', 'orbi-0.7.48-release']), worktreeRetainHours: z.number().positive(), keepFailedWorktrees: z.boolean().nullable() }).strict();
 export const BlockerDetails = Blocker.extend({ artifacts: z.array(ArtifactMetadata), retention: Retention }).strict();
 export type BlockerDetails = z.infer<typeof BlockerDetails>;
 const selector = z.object({ deploymentId: DeploymentId, issue: z.number().int().positive() }).strict();

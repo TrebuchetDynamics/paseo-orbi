@@ -239,11 +239,11 @@ it('four_views_read_only_journey', async () => {
 });
 
 it.each(pins)('source_profile $fixture fails closed before telemetry', async pin => {
-  const f = await fixture(pin.fixture as 'release' | 'installed'); cleanups.push(f.cleanup);
+  const f = await fixture(pin.fixture as NonNullable<Parameters<typeof fixture>[0]>); cleanups.push(f.cleanup);
   const profile = pin.adapter as SourceProfile;
   expect(profiles[profile].commit).toBe(pin.commit);
   expect(await fingerprint(f.source, profile)).toBe(pin.fingerprint);
-  await writeFile(join(f.source, 'src/orbi/config.py'), '# changed unsupported source\n');
+  await writeFile(join(f.source, pin.fixture === 'v0748' ? 'src/orbi/question.py' : 'src/orbi/config.py'), '# changed unsupported source\n');
   vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
   const processPort = vi.spyOn(ReadPorts.prototype, 'process');
   const reads = vi.spyOn(ReadPorts.prototype, 'read');

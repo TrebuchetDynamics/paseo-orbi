@@ -9,6 +9,9 @@
     "base_branch_missing": "Configured base branch is missing",
     "base_ci_red": "Repair belongs to the base",
     "checks_permission_missing": "installation owner approves permissions externally",
+    "release_failed": "Inspect the release failure externally",
+    "no_commit_delivered": "The task delivered no commit",
+    "no_file_change": "The task delivered commits but no file change",
     "unclassified": "Unclassified failure"
   },
   "actions": {

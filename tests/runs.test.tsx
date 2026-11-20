@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { mkdir, writeFile, readFile, readdir, lstat, chmod, rename, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { fixture } from './helpers/fixtures';
+import { fixture, type FixtureProfile } from './helpers/fixtures';
 import { ConfigRepository } from '../server/config';
 import { ReadPorts } from '../server/read-ports';
 import { GitHubReader } from '../server/github';
@@ -36,7 +36,7 @@ const comment = (run: string, extra = '', id = 1) => ({ id, user: { login: 'publ
 const progress = '<!-- orbi:progress:v1 {"step":"checks","reported_at":"2026-10-15T06:20:00Z","activity":null} -->';
 const scene = '<!-- orbi:scene:v1 {"schema":1,"run_id":"22222222","base_branch":"main","base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pr_url":"https://github.com/Example/project/pull/7","external":"","review_round":1} -->';
 function issue(number: number, labels = ['ai-in-progress']) { return { number, title: `Issue ${number}`, labels: labels.map(name => ({ name })), state: 'open', updated_at: '2026-10-15T06:20:00Z' }; }
-async function membershipFixture(profile: 'release' | 'installed' = 'release') {
+async function membershipFixture(profile: FixtureProfile = 'release', journal = records.journal) {
   const files = await fixture(profile); cleanups.push(files.cleanup);
   const repository = await ConfigRepository.load(files.authorization);
   const ports = new ReadPorts(repository); cleanups.push(() => ports.dispose());
@@ -53,7 +53,7 @@ async function membershipFixture(profile: 'release' | 'installed' = 'release') {
   let comments = [comment('11111111', progress), comment('22222222', '', 2)];
   let checks: unknown[] = [records.check];
   const processPort = vi.spyOn(ports, 'process').mockImplementation(async (_id, op) => {
-    if (op.kind === 'journalctl') return op.slot === 1 ? JSON.stringify(records.journal) + '\n' : '';
+    if (op.kind === 'journalctl') return op.slot === 1 ? JSON.stringify(journal) + '\n' : '';
     if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
     if (op.resource === 'issues') return failed ? response({}, 500) : response(terminal ? [issue(42, ['ai-in-progress', 'ai-blocked']), { ...issue(420), state: 'closed' }, issue(99, ['ai-ready'])] : [issue(42), issue(420), issue(99, ['ai-ready'])]);
     if (op.resource === 'comments') return response(op.issue === 42 ? comments : [comment('33333333', progress)]);
@@ -91,6 +91,12 @@ async function snapshot(root: string): Promise<unknown[]> {
   }
   return result;
 }
+it.each(['release', 'installed', 'v0748'] as const)('projects retained events only for supported retention profiles: %s', async profile => {
+  const f = await membershipFixture(profile, { ...records.journal, MESSAGE: 'INFO [22222222] worktree_retained run_id=22222222 issue=42' });
+  const detail = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(detail.data?.events.map(row => row.event)).toEqual(profile === 'release' ? [] : ['worktree_retained']);
+});
+
 it('bounded_private_event_projection', async () => {
   const f = await membershipFixture('installed');
   const path = join(f.tree(), '.pi-session/one.jsonl');

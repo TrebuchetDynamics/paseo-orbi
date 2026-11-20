@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Progress, Failure, Scene, BaseCi, Receipt, type ReportSelection } from '../shared/issues';
 
-// Contracts pinned to fbafd09: public-contracts, journal, progress_summary,
+// Contracts checked against Orbi v0.7.48: public-contracts, journal, progress_summary,
 // comment_kind, failure, scene, base_ci_red and delivery_comment. No prose fallback.
 export const Comment = z.object({ id: z.number().int().positive(), updated_at: z.iso.datetime(), user: z.object({ login: z.string() }), body: z.string() });
 export type Comment = z.infer<typeof Comment>;
@@ -17,16 +17,16 @@ export function repositoryPr(repo: string, url: string): number | null {
   const number = Number(suffix);
   return /^[1-9][0-9]*$/.test(suffix) && Number.isSafeInteger(number) ? number : null;
 }
-function unquoted(body: string): string {
+function unquoted(body: string, omitted: string[] = []): string {
   let fence: string | null = null;
-  return body.split(/\r?\n/).filter(line => {
+  return body.split(/\r?\n/).flatMap(line => {
     const delimiter = line.match(/^\s*(`{3,}|~{3,})/)?.[1];
     if (delimiter) {
       if (!fence) fence = delimiter;
       else if (delimiter[0] === fence[0] && delimiter.length >= fence.length) fence = null;
-      return false;
+      return omitted;
     }
-    return !fence && !/^\s*>/.test(line) && !/^ {4}|^\t/.test(line);
+    return !fence && !/^\s*>/.test(line) && !/^ {4}|^\t/.test(line) ? [line] : omitted;
   }).join('\n');
 }
 type Formal = { comment: Comment; run: string; kind: string | null; prefix: string };
@@ -35,7 +35,9 @@ function formal(comment: Comment): Formal | null {
   if (!run) return null;
   const rest = comment.body.slice(run[0].length);
   const kind = rest.match(/^<!-- orbi:comment=([a-z-]+) -->(?:\r?\n|$)/);
-  if (rest.startsWith('<!-- orbi:comment=') && (!kind || !['started', 'failure', 'review-round', 'merged'].includes(kind[1]))) return null;
+  if (rest.startsWith('<!-- orbi:comment=') && (!kind || !['started', 'failure', 'review-round', 'merged', 'requeued'].includes(kind[1]))) return null;
+  // The requeue writer publishes attribution and readable text, no report payload.
+  if (kind?.[1] === 'requeued') return { comment, run: run[1], kind: kind[1], prefix: '' };
   // Only contiguous hidden blocks are official. Never scan prose/fences for metadata.
   let prefix = '', remaining = rest;
   while (remaining.startsWith('<!-- orbi:')) {
@@ -68,13 +70,14 @@ export function selectReports(repo: string, issue: number, raw: unknown[], trust
     if (!r) return missing();
     const attr = attribution(r);
     let source = r.prefix;
-    // base_ci_red.comment_body at the pinned revision places this block at
-    // the end of its formal failure, after readable diagnostics, not in the
-    // prefix. Only that documented position on a validated base-CI failure
-    // is accepted; quoted/fenced examples never supply metadata.
+    // base_ci_red.comment_body ends with the block, optionally followed by
+    // the engine's fix-issues receipt. Strip only that literal final paragraph
+    // before checking the block's position and ignoring quoted/fenced examples.
     if (name === 'base-ci-red' && result.failure.status === 'available' && result.failure.data.reason_code === 'base_ci_red') {
-      const body = unquoted(r.comment.body).trimEnd();
-      if (/\n<!-- orbi:base-ci-red:[^\n]*$/.test(body)) source = body.split('\n').filter(line => line.startsWith('<!-- orbi:base-ci-red:')).join('\n');
+      // Keep a placeholder for excluded lines so filtering can't create a valid tail.
+      const tail = unquoted(r.comment.body, ['#']).trimEnd()
+        .replace(/\n\n<!-- orbi-base-ci-red-fix-issues scene=[0-9a-f]{16} -->$/, '');
+      if (/\n<!-- orbi:base-ci-red:[^\n]*$/.test(tail)) source = tail.split('\n').filter(line => line.startsWith('<!-- orbi:base-ci-red:')).join('\n');
     }
     if (!source.includes(`<!-- orbi:${name}:`)) return { status: 'missing' as const, attribution: attr };
     const tokens = source.match(new RegExp(`<!-- orbi:${name}:[^\\n]*`, 'g')) ?? [];

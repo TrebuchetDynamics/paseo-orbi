@@ -31,7 +31,7 @@ import { afterEach, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 vi.mock('node:fs/promises', async importOriginal => ({ ...await importOriginal<typeof import('node:fs/promises')>() }));
 import { join } from 'node:path';
-import { fixture } from './helpers/fixtures';
+import { fixture, type FixtureProfile } from './helpers/fixtures';
 import { ConfigRepository } from '../server/config';
 import { ReadPorts } from '../server/read-ports';
 import { GitHubReader } from '../server/github';
@@ -48,7 +48,7 @@ const block = (name: string, data: unknown, version = 1) => `<!-- orbi:${name}:v
 const comments = (scene: unknown = guidance.scene) => [{ id: 1, user: { login: 'publisher-canary' }, updated_at: stamp, body: `<!-- orbi:run=${run} -->\n<!-- orbi:comment=failure -->\n${block('failure', guidance.failure)}\n${block('scene', scene)}\n${block('base-ci-red', guidance.base)}\n\nRAW_DIAGNOSTIC_CANARY` }];
 const reports = (scene: unknown = guidance.scene) => selectReports(repo, 4, comments(scene), ['publisher-canary'], true);
 const response = (data: unknown, status = 200) => `HTTP/2.0 ${status} Status\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}`;
-async function setup(profile: 'release' | 'installed' = 'release') {
+async function setup(profile: FixtureProfile = 'release') {
   const f = await fixture(profile); cleanups.push(f.cleanup);
   const repository = await ConfigRepository.load(f.authorization);
   const ports = new ReadPorts(repository); cleanups.push(() => ports.dispose());
@@ -69,7 +69,7 @@ async function setup(profile: 'release' | 'installed' = 'release') {
 }
 
 it('retention_and_artifact_metadata', async () => {
-  for (const profile of ['release', 'installed'] as const) {
+  for (const profile of ['release', 'installed', 'v0748'] as const) {
     const f = await setup(profile);
     const scene = join(f.repoDir, '.worktrees', `orbi-Example-project-issue-4-${run}`);
     const directory = join(scene, '.orbi');
@@ -119,7 +119,7 @@ it('retention_and_artifact_metadata', async () => {
 });
 
 it('validates_only_profile_supported_retention_values', async () => {
-  for (const profile of ['release', 'installed'] as const) {
+  for (const profile of ['release', 'installed', 'v0748'] as const) {
     const f = await fixture(profile); cleanups.push(f.cleanup);
     for (const value of ['true', '0', '-1', '"72"', 'nan', 'inf']) {
       await fs.writeFile(f.configPath, f.toml + `worktree_retain_hours = ${value}\n`);

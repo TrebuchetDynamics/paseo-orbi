@@ -115,6 +115,31 @@ describe('trusted_report_selection', () => {
     expect(result).toMatchObject({ selectedRunId: run, complete: true, progress: { status: 'available', data: { step: 'review', activity: { target: null } }, attribution: { repo, issue: 4, commentId: 1 } }, failure: { status: 'available', data: { action_code: 'fix_ticket' } }, baseCi: { status: 'available', data: { state: 'waiting' } }, prIdentity: { status: 'available', number: 42, source: 'scene' } });
     expect(JSON.stringify(result)).not.toMatch(/TARGET_CANARY|PROSE_CANARY|body|author_association/);
   });
+  it('uses trusted requeues for run attribution only', () => {
+    const old = comment(1, `${marker()}\n${block('progress', reports.progress)}`);
+    const next = '22222222';
+    const body = `${marker(next)}\n${kind('requeued')}\nRequeued for another attempt.`;
+    expect(select([old, comment(2, body)])).toMatchObject({ selectedRunId: next, attribution: { commentId: 2 }, progress: { status: 'missing' } });
+    expect(select([old, comment(2, body, 'attacker')]).selectedRunId).toBe(run);
+    const fakeScene = block('scene', { ...reports.scene, run_id: next });
+    expect(select([comment(2, `${marker(next)}\n${kind('requeued')}\n${fakeScene}`)]).prIdentity.status).toBe('missing');
+  });
+  it.each(['release_failed', 'no_commit_delivered', 'no_file_change'])('accepts formal failure reason %s', reason_code => {
+    const data = { ...reports.failure, reason_code, action_code: 'fix_ticket', retry_safe: false };
+    expect(select([comment(1, `${marker()}\n${kind('failure')}\n${block('failure', data)}`)]).failure).toMatchObject({ status: 'available', data });
+  });
+  it('reads base CI before the exact final fix-issues receipt, not as PR identity', () => {
+    const prefix = `${marker()}\n${kind('failure')}\n${block('failure', reports.failure)}\n\nReadable diagnostics\n\n`;
+    const base = block('base-ci-red', reports.baseCi);
+    const receipt = '<!-- orbi-base-ci-red-fix-issues scene=0123456789abcdef -->';
+    const tail = `${base}\n\n${receipt}`;
+    expect(select([comment(1, prefix + tail)])).toMatchObject({ baseCi: { status: 'available', attribution: { commentId: 1 } }, scene: { status: 'missing' }, prIdentity: { status: 'missing' } });
+    for (const invalid of [tail + '\nmore prose', tail.replace('0123', 'XYZ'), `${base}\n\n> ${receipt}`, `> ${tail}`, `\`\`\`\n${base}\n\`\`\`\n\n${receipt}`, `${base}\n\nadditional prose\n\n${receipt}`]) {
+      expect(select([comment(1, prefix + invalid)]).baseCi.status).toBe('missing');
+    }
+    expect(select([comment(1, prefix.replace('base_ci_red', 'tests_failed') + tail)]).baseCi.status).toBe('missing');
+    expect(select([comment(1, prefix + base + '\n\n' + tail)]).baseCi.status).toBe('invalid');
+  });
   it('reads the pinned base-CI writer final block only on a formal base_ci_red failure', () => {
     const body = `${marker()}\n${kind('failure')}\n${block('failure', reports.failure)}\n\nReadable failure and repair prose\n\n${block('base-ci-red', reports.baseCi)}`;
     expect(select([comment(1, body)]).baseCi.status).toBe('available');
