@@ -32,7 +32,7 @@ Production client/shared compilation has no DOM types. `tests/e2e/tsconfig.json`
 
 Prerequisites: Linux `/proc` with process/fd inspection, free loopback ports, Node 22.19.0, npm, executable `/usr/bin/ps`, `/usr/bin/git`, `/usr/bin/tar`, access to the public npm registry and Playwright downloads, and Chromium/Firefox/WebKit OS libraries. Missing browser libraries are a **named blocking execution prerequisite**; do not use sudo, `--with-deps` or alter system packages under this approval. No production secrets are needed.
 
-Root dev dependency: exact `@playwright/test` **1.65.1**, whose browser revisions govern all three engines. Separate `tests/e2e/runtime/package.json` and lock pin `@getpaseo/cli` **0.15.4**, matching server/client and bundled web UI. Do not use `npx latest`, app.paseo.sh, an arbitrary CLI on PATH, or widen the product's compatibility range. Runtime setup is explicit, not hidden inside daemon activation.
+Root dev dependency: exact `@playwright/test` **1.65.1**, whose browser revisions govern all three engines. Separate `tests/e2e/runtime/package.json` and lock pin `@getpaseo/cli` **0.15.4**, matching server/client and bundled web UI. The manifest's declared admission `>0.15.0` is not harness qualification: only the pinned 0.15.4 rows are exercised, and installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain NOT_RUN (#23). Do not use `npx latest`, app.paseo.sh, an arbitrary CLI on PATH, or widen the product's compatibility range. Runtime setup is explicit, not hidden inside daemon activation.
 
 In a fresh disposable worker checkout after consent, run these commands once (paths are quoted, not interpolated into shell command strings):
 

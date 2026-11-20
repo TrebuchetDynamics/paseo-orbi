@@ -17,7 +17,7 @@ Reviewed on **2026-11-14**, starting from the [official documentation index](htt
 | [Migration](https://paseo.sh/docs/plugins/migration.md) | Migration from the old single-entry format |
 | [SDK reference](https://paseo.sh/docs/sdk/reference.md) | Normal Paseo agent, workspace, and host operations |
 
-The deployed docs govern this summary. They can describe newer or unreleased APIs. Check both daemon and app compatibility before implementation. The bootstrap is pinned to SDK 0.15.4, with both daemon and app requirements `>=0.15.4 <0.16.0`. Newer documented APIs are not implicitly available.
+The deployed docs govern this summary. They can describe newer or unreleased APIs. Check both daemon and app compatibility before implementation. The bootstrap is pinned to SDK 0.15.4, and both daemon and app evaluate the manifest requirement `>0.15.0`. That declared admission is a policy check, not tested interoperability: installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain NOT_RUN (#23). Newer documented APIs are not implicitly available.
 
 GitHub `main` resolved to [`6e2fee462f148fe1aa158976da4435c753cc814a`](https://github.com/getpaseo/paseo/tree/6e2fee462f148fe1aa158976da4435c753cc814a). The examples below use that revision. This does not prove that the deployed docs came from that commit.
 
@@ -137,7 +137,7 @@ Do not copy an older example without checking the current contract. The table de
 
 | Area | Current documented behavior |
 | --- | --- |
-| Manifest requirements | Missing `requirements.paseo` means `<0.8.0`. Set an explicit supported range. Both daemon and app check compatibility. |
+| Manifest requirements | Missing `requirements.paseo` means `<0.8.0`. Set an explicit supported range. Both daemon and app check compatibility, but a declared range only admits a version to load; it does not qualify it. |
 | Prereleases | Paseo also compares the stable core version. A prerelease minimum does not necessarily exclude earlier prereleases of that core. |
 | Manifest display metadata | `name`, `icon`, and `media` require Paseo 0.11.0 or later. |
 | Panel API | Unified panel props, `addAgentPanel`, and `useTabState` require 0.13.0 or later. Agent IDs are in `params.agentId`. Older `context` and flat `agentId` forms are deprecated. |
@@ -387,7 +387,7 @@ Still to verify through separately authorized live work (not performed here):
 - Real-host setup using the explicit startup authorization; no automatic deployment discovery.
 - Live GitHub authentication/rate behavior and installed-app issue/PR mapping. Offline Issues fixtures now exercise typed auth failures, backoff, complete pagination, metadata trust, merge identity conflicts, and UI failure/repair.
 - Live Pi log formats, retention, redaction, and session identity. Runs' synthetic header/tail/increment/rotation/privacy tests are offline evidence, not live-format qualification.
-- Supported Paseo daemon/app versions and whether polling is sufficient before adding subscriptions.
+- Installed Paseo daemon/app rows for the declared `>0.15.0` admission — 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 — remain NOT_RUN (#23), and whether polling is sufficient before adding subscriptions.
 
 The feature and assembled integration fixtures validate the two approved source subsets and the read boundary offline. An altered supported source file is rejected before any telemetry port call; unknown source builds remain unsupported. The exact SDK baseline is [1c00b365c9e0b74c1580eba33d905d693125ae21](https://github.com/getpaseo/paseo/tree/1c00b365c9e0b74c1580eba33d905d693125ae21); deployed docs above may describe newer APIs and are not live compatibility evidence. Browser fixture checks do not qualify live Orbi behavior or native mobile use. Future features may share entry registration files; parallel changes must be reconciled rather than claimed conflict-free. This delivery does not install a plugin.
 
