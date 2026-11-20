@@ -22,8 +22,9 @@ merge, Orbi CLI, Git or shell execution, and no raw logs, prompts or reasoning.
 Reported retry safety is never permission to retry; recovery stays
 Orbi/operator-owned. Only deployments already configured on that host are
 visible — the plugin does not discover repositories. Offline checks cover
-all four views; live installation and installed qualification remain
-unperformed.
+all four views; the Linux Electron qualification lane is implemented but has
+not been executed, iOS/Android are deferred, and live installation plus
+installed qualification remain unperformed.
 
 ## Setup
 
