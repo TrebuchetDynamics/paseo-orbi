@@ -156,10 +156,10 @@ function slotLines(group: InventoryGroup): string[] {
     return left.length - right.length || left.localeCompare(right) || a.localeCompare(b);
   }).map(([id, slot]) => `Slot ${id} · ${slotState(slot.service)} · ${slotState(slot.timer, true)}`);
 }
-function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle, name }: {
+function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle, name, showUnlinked }: {
   group: InventoryGroup; hostId: string; theme: PluginHostProps['theme'];
   entries: DeploymentCatalog['entries'] | null; openScreen: PluginClientContext['openScreen'];
-  expanded: boolean; toggle: () => void; name: string;
+  expanded: boolean; toggle: () => void; name: string; showUnlinked: boolean;
 }) {
   const text = { color: theme.colors.foreground };
   const { facts } = summarizeFamily(group);
@@ -171,7 +171,7 @@ function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle
       <Text style={{ ...text, fontSize: 16, fontWeight: '600', flexShrink: 1 }}>{name}</Text>
     </Pressable>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 6 }}>
-      {!entry && <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Unlinked</Text>}
+      {showUnlinked && !entry && <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Unlinked</Text>}
       {facts.map(fact => <Text key={fact} style={{ ...text, fontSize: 12 }}>{familyFactText[fact]}</Text>)}
     </View>
     {entry !== null && <Pressable accessibilityRole="button" accessibilityLabel={`View repository ${entry.label}`}
@@ -191,21 +191,27 @@ function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle
   </View>;
 }
 
-export function HostServices({ hostId, hostLabel, surfaceKey, connected, foreground, theme, compact, entries, openScreen, query }: {
+export function HostServices({ hostId, hostLabel, surfaceKey, connected, foreground, theme, compact, entries, catalogState, openScreen, query }: {
   hostId: string; hostLabel: string; surfaceKey: string; connected: boolean; foreground: boolean;
   theme: PluginHostProps['theme']; compact: boolean;
-  entries: DeploymentCatalog['entries'] | null; openScreen: PluginClientContext['openScreen'];
+  entries: DeploymentCatalog['entries'] | null; catalogState: DeploymentCatalog['state'] | null;
+  openScreen: PluginClientContext['openScreen'];
   query: ReturnType<typeof useHostServicesQuery>;
 }) {
   const text = { color: theme.colors.foreground };
   const [expanded, setExpanded] = useExpandedFamily(surfaceKey);
   const [setupExpanded, setSetupExpanded] = useState(false);
+  const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const observation = query.observation;
   const data = observation?.data ?? null;
   const families = sortFamilies(data?.groups ?? []);
   const names = displayNames(families, entries);
   const attention = families.filter(group => summarizeFamily(group).facts.includes('failed')).length;
   const off = data?.state === 'off';
+  // A confirmed unconfigured catalog explains the missing repository detail once
+  // here instead of repeating a badge on every row. 'off' shows no service rows
+  // at all, so the explanation belongs to the rows this state actually shows.
+  const unconfigured = catalogState === 'unconfigured' && !off;
   const state = data?.state ?? (!connected || !foreground ? 'unavailable' : 'loading');
   // Only fresh evidence may publish counts, and only a fresh complete empty
   // check may publish absence. Off/loading, unavailable, stale and offline are
@@ -248,13 +254,24 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
         <Text style={text}>Host service inventory is not enabled on this host. The operator can opt in with PASEO_ORBI_HOST_INVENTORY=1 at plugin startup and explicitly authorize a reload.</Text>
         <Text style={text}>Connected clients on this host can then see Orbi unit names. No other host is read. Refresh cannot enable access or reload this plugin.</Text>
       </View>}
-    </View> : <Pressable accessibilityRole="button" accessibilityLabel="Refresh host services" disabled={!query.canRefresh}
+    </View> : <Pressable accessibilityRole="button" accessibilityLabel="Refresh services" disabled={!query.canRefresh}
       accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }}
       style={{ minHeight: 44, justifyContent: 'center', opacity: query.canRefresh ? 1 : 0.5 }}
-      onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
+      onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh services'}</Text></Pressable>}
     {copies.map(copy => <Text key={copy} style={text}>{copy}</Text>)}
+    {unconfigured && <View testID="orbi-host-services-unconfigured" style={{ gap: 8 }}>
+      <Text style={text}>Showing host services. Repository details aren't configured.</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Setup instructions" accessibilityState={{ expanded: instructionsExpanded }}
+        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setInstructionsExpanded(value => !value)}>
+        <Text style={text}>Setup instructions</Text>
+      </Pressable>
+      {instructionsExpanded && <View accessibilityLabel="Repository setup instructions" style={{ gap: 8 }}>
+        <Text style={text}>Repository details come from an authorized JSON file the operator provides through PASEO_ORBI_CONFIG at plugin startup. The operator must provide or repair that file, then explicitly reload this plugin.</Text>
+        <Text style={text}>The host service rows above need no repository configuration. Refresh services only rereads this host's inventory; it does not configure the repository catalog or enable access.</Text>
+      </View>}
+    </View>}
     {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} theme={theme} entries={entries} openScreen={openScreen}
-      name={names.get(group.label)!}
+      name={names.get(group.label)!} showUnlinked={!unconfigured}
       expanded={expanded === group.label} toggle={() => setExpanded(expanded === group.label ? null : group.label)} />)}
   </View>;
 }

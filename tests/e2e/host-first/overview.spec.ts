@@ -113,7 +113,7 @@ test(titles[3], async ({ page, lease }) => {
     await expect(page.getByText('Service check off · activity unknown', { exact: true })).toBeVisible();
     await pressEnter(page, 'button', 'Set up service access');
     await expect(page.getByText(/PASEO_ORBI_HOST_INVENTORY=1/)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Refresh host services', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Refresh services', exact: true })).toHaveCount(0);
     // The authorized catalog is independent of the inventory opt-in.
     await openRoute(page, 'Issues');
     await page.getByRole('button', { name: 'Select Demo', exact: true }).click();
@@ -177,7 +177,7 @@ test(titles[7], async ({ page, lease, network }) => {
   await expect(page.getByText('Services: Current', { exact: true })).toBeVisible();
   // Delay the selected host's inventory read, then switch hosts.
   await setScenario(a, 'late');
-  await page.getByRole('button', { name: 'Refresh host services', exact: true }).click();
+  await page.getByRole('button', { name: 'Refresh services', exact: true }).click();
   await switchHost(page, secondary);
   await pressEnter(page, 'button', 'Expand orbi-demo');
   await expect(page.getByText('Slot 4 · Running · Timer waiting', { exact: true })).toBeVisible();

@@ -54,6 +54,11 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   const observedIds = observedDeploymentIds(inventory.observation?.data);
   const text = { color: props.theme.colors.foreground };
   const catalog = query.observation?.data;
+  // A confirmed unconfigured catalog cannot be repaired by rereading startup
+  // configuration, so this state offers no catalog Refresh. A real read failure
+  // (including one that retained previous data) keeps the retry.
+  const catalogReadFailed = query.observation?.problems.some(problem => problem.code === 'refresh_failed') ?? false;
+  const unconfiguredCatalog = catalog?.state === 'unconfigured' && !catalogReadFailed;
   const selected = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
   const featureKey = `${props.host.id}:${selected?.id}:${selected?.repo}`;
   const surfaceKey = `${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`;
@@ -64,7 +69,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       hostId={props.host.id} hostLabel={props.host.label}
       connected={connected} foreground={foreground}
       theme={props.theme} compact={props.layout.compact}
-      entries={catalog?.entries ?? null} openScreen={openScreen} query={inventory}
+      entries={catalog?.entries ?? null} catalogState={catalog?.state ?? null} openScreen={openScreen} query={inventory}
     />}
     <View testID="orbi-catalog" style={{ gap: 8 }}>
       {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Repository setup" accessibilityState={{ expanded: setupExpanded }}
@@ -82,7 +87,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         <Text style={text}>Refresh only reads the current startup catalog. It does not configure authorization or reload the plugin.</Text>
       </View>}
       {!catalog && setupExpanded && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}
-      {setupExpanded && <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!query.canRefresh} accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }} style={{ opacity: query.canRefresh ? 1 : 0.5 }} onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
+      {setupExpanded && !unconfiguredCatalog && <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!query.canRefresh} accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }} style={{ opacity: query.canRefresh ? 1 : 0.5 }} onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
     </View>
     {catalog?.state === 'configured' && <>
       <View testID="orbi-navigation" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>

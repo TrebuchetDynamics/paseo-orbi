@@ -359,7 +359,7 @@ describe('package_and_registration', () => {
         expect(fleetText).toContain('Orbi · Host A');
         expect(fleetText.indexOf('Orbi · Host A')).toBeLessThan(fleetText.indexOf('Fleet — read-only'));
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Set up service access' })).toHaveLength(1);
-        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh host services' })).toHaveLength(0);
+        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
         await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Active work for Demo' }).props.onPress());
         expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
@@ -436,18 +436,23 @@ describe('package_and_registration', () => {
       expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
       expect(host.readCatalog).toHaveBeenCalledTimes(1);
       const button = () => renderer.root.findByProps({ accessibilityLabel: 'Refresh' });
-      expect(button().props).toMatchObject({ disabled: false, accessibilityState: { disabled: false, busy: false } });
-      let finish!: (value: DeploymentCatalog) => void;
-      host.readCatalog.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-      let pending!: Promise<unknown>;
-      await act(async () => { pending = button().props.onPress(); }); await settle();
-      expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: true } });
-      await act(async () => { finish(catalog); await pending; }); await settle();
+      // A confirmed unconfigured catalog is not a read failure: rereading startup
+      // configuration cannot repair it, so no catalog Refresh is offered.
+      if (catalog.state === 'unconfigured') expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
+      else {
+        expect(button().props).toMatchObject({ disabled: false, accessibilityState: { disabled: false, busy: false } });
+        let finish!: (value: DeploymentCatalog) => void;
+        host.readCatalog.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        let pending!: Promise<unknown>;
+        await act(async () => { pending = button().props.onPress(); }); await settle();
+        expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: true } });
+        await act(async () => { finish(catalog); await pending; }); await settle();
+      }
       await act(async () => { for (const listener of host.listeners) listener('background'); });
       await act(async () => { await vi.advanceTimersByTimeAsync(60001); }); await settle();
       expect(json()).toContain('Catalog transport: stale');
-      expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
-      expect(host.readCatalog).toHaveBeenCalledTimes(2);
+      if (catalog.state !== 'unconfigured') expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
+      expect(host.readCatalog).toHaveBeenCalledTimes(catalog.state === 'unconfigured' ? 1 : 2);
       await act(async () => renderer.unmount());
     }
     for (const read of features) expect(read).not.toHaveBeenCalled();
@@ -466,7 +471,9 @@ describe('package_and_registration', () => {
     expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
     expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(0);
     expect(inventoryRenderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('View repository'))).toHaveLength(0);
-    expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('Unlinked');
+    // One explanation above the rows replaces the repeated Unlinked badge.
+    expect(JSON.stringify(inventoryRenderer.toJSON())).toContain("Showing host services. Repository details aren't configured.");
+    expect(JSON.stringify(inventoryRenderer.toJSON())).not.toContain('Unlinked');
     await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' }).props.onPress());
     await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Technical details for orbi-demo' }).props.onPress());
     expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('not in the current authorized catalog');
@@ -487,7 +494,7 @@ describe('package_and_registration', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain('refresh_failed');
     expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: unavailable');
     expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
-    host.readCatalog.mockResolvedValue(unconfigured);
+    host.readCatalog.mockResolvedValue(invalid);
     await act(async () => { await renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle();
     host.readCatalog.mockRejectedValue(new Error('SECRET_CANARY'));
     await act(async () => { await renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle();
