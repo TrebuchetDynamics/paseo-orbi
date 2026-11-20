@@ -356,8 +356,8 @@ describe('package_and_registration', () => {
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
         const fleetText = renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
-        expect(fleetText).toContain('Orbi · Host A');
-        expect(fleetText.indexOf('Orbi · Host A')).toBeLessThan(fleetText.indexOf('Fleet — read-only'));
+        expect(fleetText).toContain('Host A · Fleet');
+        expect(fleetText.indexOf('Host A · Fleet')).toBeLessThan(fleetText.indexOf('Fleet — read-only'));
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Set up service access' })).toHaveLength(1);
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
@@ -475,7 +475,7 @@ describe('package_and_registration', () => {
     expect(JSON.stringify(inventoryRenderer.toJSON())).toContain("Showing host services. Repository details aren't configured.");
     expect(JSON.stringify(inventoryRenderer.toJSON())).not.toContain('Unlinked');
     await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' }).props.onPress());
-    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Technical details for orbi-demo' }).props.onPress());
+    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Unit details for orbi-demo' }).props.onPress());
     expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('not in the current authorized catalog');
     for (const read of features) expect(read).not.toHaveBeenCalled();
     await act(async () => inventoryRenderer.unmount());

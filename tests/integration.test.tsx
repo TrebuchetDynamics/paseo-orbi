@@ -128,7 +128,7 @@ it('four_views_read_only_journey', async () => {
   expect(text()).toContain('Service check off · activity unknown');
   expect(text()).not.toContain('Observed unit families');
   expect(text()).not.toContain('last successful check');
-  expect(text().indexOf('Orbi · Host A')).toBeLessThan(text().indexOf('Demo (Example/project)'));
+  expect(text().indexOf('Host A · Fleet')).toBeLessThan(text().indexOf('Demo (Example/project)'));
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
   await press('Set up service access');
   expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');

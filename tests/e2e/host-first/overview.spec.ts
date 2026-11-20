@@ -54,8 +54,9 @@ test(titles[0], async ({ page, lease }) => {
   await setScenario(host, 'available'); await configureHost(host, 'available');
   await openOverview(page, host);
   const demo = page.getByTestId('orbi-family-orbi-demo');
-  await expect(demo.getByText('Failed', { exact: true })).toBeVisible();
+  await expect(demo.getByText('Slot 2 · Timer failed', { exact: true })).toBeVisible();
   await expect(demo.getByText('Running', { exact: true }).first()).toBeVisible();
+  await expect(demo.getByText('Timer waiting', { exact: true }).first()).toBeVisible();
   // Keyboard-only expand; text states, never color alone.
   await pressEnter(page, 'button', 'Expand orbi-demo');
   await expect(demo.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toBeVisible();
@@ -73,7 +74,7 @@ test(titles[1], async ({ page, lease }) => {
   await setScenario(host, 'available'); await configureHost(host, 'available');
   await openOverview(page, host);
   await pressEnter(page, 'button', 'Expand orbi-demo');
-  await pressEnter(page, 'button', 'Technical details for orbi-demo');
+  await pressEnter(page, 'button', 'Unit details for orbi-demo');
   const demo = page.getByTestId('orbi-family-orbi-demo');
   await expect(demo.getByText(/Matches configured deployment Demo \(Example\/project\) by unit name/)).toBeVisible();
   await expect(demo.getByText(/Unit activity does not establish issue delivery\./)).toBeVisible();
@@ -100,7 +101,7 @@ test(titles[2], async ({ page, lease }) => {
   await expect(unclaimed.getByText('Unlinked', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^View repository / })).toHaveCount(0);
   await pressEnter(page, 'button', 'Expand orbi-unclaimed');
-  await pressEnter(page, 'button', 'Technical details for orbi-unclaimed');
+  await pressEnter(page, 'button', 'Unit details for orbi-unclaimed');
   await expect(page.getByText(/Discovered on this host only; no configured deployment claims this unit name/)).toBeVisible();
 });
 
@@ -134,7 +135,7 @@ test(titles[4], async ({ page, lease }) => {
   await expect(page.getByText(/Ask the operator to repair the authorized configuration\/source profile/)).toBeVisible();
   const demo = page.getByTestId('orbi-family-orbi-demo');
   await pressEnter(page, 'button', 'Expand orbi-demo');
-  await pressEnter(page, 'button', 'Technical details for orbi-demo');
+  await pressEnter(page, 'button', 'Unit details for orbi-demo');
   await expect(demo.getByText(/its source profile is unsupported for repository detail\. This compatibility limit does not mean the runner is broken\./)).toBeVisible();
   await expect(demo.getByRole('button', { name: /^View repository / })).toHaveCount(0);
 });
@@ -156,11 +157,11 @@ test(titles[6], async ({ page, lease }) => {
   const { primary, secondary } = await preparePair(page, lease);
   await openOverview(page, a);
   await switchHost(page, primary);
-  await expect(page.getByTestId('orbi-overview-heading')).toHaveText('Orbi · Qualification');
+  await expect(page.getByTestId('orbi-overview-heading')).toHaveText('Qualification · Fleet');
   await pressEnter(page, 'button', 'Expand orbi-demo');
   await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toBeVisible();
   await switchHost(page, secondary);
-  await expect(page.getByTestId('orbi-overview-heading')).toHaveText('Orbi · Qualification');
+  await expect(page.getByTestId('orbi-overview-heading')).toHaveText('Qualification · Fleet');
   // Identical labels: only the selected host identity decides the rows.
   await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toHaveCount(0);
   const demo = page.getByTestId('orbi-family-orbi-demo');
@@ -197,7 +198,7 @@ test(titles[7], async ({ page, lease, network }) => {
     await switchHost(fresh, secondary);
     await expect(fresh.getByText(/Offline · current activity unknown|Unavailable · current activity unknown\./)).toBeVisible({ timeout: 30000 });
     await expect(fresh.getByText('No Orbi units found.', { exact: true })).toHaveCount(0);
-    await expect(fresh.getByText(/^[0-9]+ families/)).toHaveCount(0);
+    await expect(fresh.getByText(/^[0-9]+ of [0-9]+ groups/)).toHaveCount(0);
   } finally { await fresh.close(); }
   network.blocked.delete(b.port);
 });
@@ -215,7 +216,7 @@ test(hostFirstCaptureTitle, async ({ page, lease, browser }) => {
       const family = page.getByTestId(`orbi-family-${c.expanded}`);
       await family.scrollIntoViewIfNeeded();
       await expect(family.getByText('Running', { exact: true }).first()).toBeVisible();
-      await expect(family.getByRole('button', { name: `Technical details for ${c.expanded}`, exact: true })).toBeVisible();
+      await expect(family.getByRole('button', { name: `Unit details for ${c.expanded}`, exact: true })).toBeVisible();
     }
     await captureOverview(page, lease, browser.version(), c);
   }

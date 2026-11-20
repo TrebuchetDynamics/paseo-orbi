@@ -54,9 +54,10 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   const observedIds = observedDeploymentIds(inventory.observation?.data);
   const text = { color: props.theme.colors.foreground };
   const catalog = query.observation?.data;
-  // A confirmed unconfigured catalog cannot be repaired by rereading startup
-  // configuration, so this state offers no catalog Refresh. A real read failure
-  // (including one that retained previous data) keeps the retry.
+  // One projection of the confirmed unconfigured state: no repeated Unlinked badge
+  // on the Overview rows, one explanation above them, and no catalog Refresh
+  // because rereading startup configuration cannot configure authorization. A real
+  // read failure (including one that retained previous data) keeps the retry.
   const catalogReadFailed = query.observation?.problems.some(problem => problem.code === 'refresh_failed') ?? false;
   const unconfiguredCatalog = catalog?.state === 'unconfigured' && !catalogReadFailed;
   const selected = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
@@ -69,7 +70,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       hostId={props.host.id} hostLabel={props.host.label}
       connected={connected} foreground={foreground}
       theme={props.theme} compact={props.layout.compact}
-      entries={catalog?.entries ?? null} catalogState={catalog?.state ?? null} openScreen={openScreen} query={inventory}
+      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} openScreen={openScreen} query={inventory}
     />}
     <View testID="orbi-catalog" style={{ gap: 8 }}>
       {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Repository setup" accessibilityState={{ expanded: setupExpanded }}
