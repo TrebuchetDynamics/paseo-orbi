@@ -16,7 +16,7 @@ Version 0.1 is strictly read-only: no timer control, execution-state mutation, m
 
 ## Setup
 
-Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4** (`>=0.15.4 <0.16.0`). Issues uses the daemon user's existing authenticated GitHub CLI. Fleet uses existing user systemd units and does not invoke GitHub; Issues never invokes systemd. No provider/model/auth changes are required or performed.
+Baseline: Linux, Node **22.19.0**, Paseo daemon and app **0.15.4**. The manifest declares admission `>0.15.0`; that check only gates installing/loading, and installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain NOT_RUN (#23). Issues uses the daemon user's existing authenticated GitHub CLI. Fleet uses existing user systemd units and does not invoke GitHub; Issues never invokes systemd. No provider/model/auth changes are required or performed.
 
 An operator supplies an existing JSON file via the daemon environment's absolute `PASEO_ORBI_CONFIG`. That variable must be visible to the running daemon/plugin subprocess at startup: exporting it in a later CLI shell does not change an already running daemon's environment. Arrange it through the daemon's existing operator-managed launch environment; the plugin does not alter that launcher or activate services. Authorization, TOML, source compatibility and retention settings are read once at plugin startup; changes require an explicitly authorized plugin reload. **Refresh does not reload configuration.** The plugin does not write configuration or discover repositories. All paths and logins below are placeholders.
 
@@ -219,7 +219,7 @@ paseo plugin ls
 paseo plugin logs paseo-orbi
 ```
 
-Without `--ref`, Paseo installs the repository's current default HEAD (`main`) at install time, not a GitHub Release. The offline checks do not promise that every `main` commit has passed live qualification. The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An existing Git installation stays at its installed revision until the operator reviews and applies `paseo plugin update paseo-orbi`; that update checks the current default HEAD, shows the current and proposed revision and asks for approval, and declining or a failed update keeps the installed content. The daemon host needs Node 22.19.0 and Paseo `>=0.15.4 <0.16.0`; the daemon checks its version before installing or loading the plugin, and a rejected update keeps the installed revision. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
+Without `--ref`, Paseo installs the repository's current default HEAD (`main`) at install time, not a GitHub Release. The offline checks do not promise that every `main` commit has passed live qualification. The commands above are instructions only: **none were run for this delivery**. Require `running` on the intended host, then open all four views and exercise selected-host RPC success/failure and Refresh. An existing Git installation stays at its installed revision until the operator reviews and applies `paseo plugin update paseo-orbi`; that update checks the current default HEAD, shows the current and proposed revision and asks for approval, and declining or a failed update keeps the installed content. The daemon host needs Node 22.19.0 and Paseo `>0.15.0` (0.15.4 is the tested baseline); the daemon checks its version before installing or loading the plugin, and a rejected update keeps the installed revision. Git preparation runs the manifest argv `npm ci --omit=dev --ignore-scripts` using committed `package-lock.json`; npm must be on the daemon's PATH. Paseo supplies host libraries; they are not bundled.
 
 **Historical offline evidence (reproducing that revision only).** Commit `875c69a101a102a8f14b064f0664069b5e603f4f` is the historical offline-tested Git candidate (Node 22.19.0; 97 tests, typecheck, boundary guard, pack inspection and isolated locked production preparation passed). It is not needed for a fresh install and is not a permanent update pin. To reproduce it deliberately:
 
@@ -239,6 +239,7 @@ An initial `--ref` does not pin later ordinary updates; inspect and authorize up
 - Selected-host real RPC success and failure for all four views, including configuration errors and repair/Refresh.
 - Wide/compact and light/dark physical clients (desktop and native mobile), including accessibility behavior.
 - Authorized reload cleanup of registrations, timers, reads and process groups.
+- Installed rows for the declared `>0.15.0` admission — 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 — are **NOT_RUN** for #23; declared admission never qualifies an installed version.
 
 No daemon/plugin installation or reload, live Orbi issue, credentials change, service activation, human-review approval, registry submission, npm publication, release/tag or branch-protection change was performed. Historical fixture previews are not physical-client screenshots or live approvals.
 

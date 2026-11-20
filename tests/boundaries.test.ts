@@ -25,25 +25,32 @@ function imports(file: string) {
   visit(source); return result;
 }
 
-// Policy admission only: these rows report what the pinned 0.15.4 evaluator admits for the
-// proposed requirements.paseo range. They do not guarantee that any app/daemon pair interoperates.
-describe('proposed_paseo_range_policy_admission', () => {
-  const proposedRange = { paseo: '>0.15.0' }; // Test-only fixture of the proposed policy; the shipped manifest is unchanged.
+// Declared admission only: these rows report what the pinned 0.15.4 evaluator admits for the
+// manifest's actual requirements.paseo. They do not guarantee that any installed daemon/app pair,
+// or any future Paseo version, interoperates with this plugin.
+const HISTORICAL_BOUNDED_RANGE = '>=0.15.4 <0.16.0'; // Pre-#61 shipped requirement, kept only as an independent negative control.
+describe('declared_paseo_range_policy_admission', () => {
+  const requirements = json('paseo-plugin.json').requirements;
   const rows: Array<[version: string, admitted: boolean]> = [
     ['0.14.9', false], ['0.15.0', false], ['0.15.0-beta.1', false],
     ['0.15.1', true], ['0.15.4', true], ['0.16.0-beta.2', true], ['0.16.0', true], ['0.17.0-beta.1', true], ['1.0.0', true],
   ];
-  const evaluate = (version: string, runtime: 'daemon' | 'app') => () => assertPluginCompatibility({ id: 'paseo-orbi', requirements: proposedRange, version, runtime });
+  const evaluate = (version: string, runtime: 'daemon' | 'app') => () => assertPluginCompatibility({ id: 'paseo-orbi', requirements, version, runtime });
+  it('declares exactly the accepted >0.15.0 requirement in the shipped manifest', () => {
+    expect(requirements).toEqual({ paseo: '>0.15.0' });
+  });
   it('admits and rejects the recorded versions for both runtimes through the real evaluator', () => {
     for (const runtime of ['daemon', 'app'] as const) for (const [version, admitted] of rows) {
-      if (admitted) expect(evaluate(version, runtime), `${runtime} ${version}: admitted by >0.15.0`).not.toThrow();
-      else expect(evaluate(version, runtime), `${runtime} ${version}: rejected by >0.15.0`).toThrow('requires Paseo >0.15.0');
+      if (admitted) expect(evaluate(version, runtime), `${runtime} ${version}: admitted by ${requirements.paseo}`).not.toThrow();
+      else expect(evaluate(version, runtime), `${runtime} ${version}: rejected by ${requirements.paseo}`).toThrow(`requires Paseo ${requirements.paseo}`);
     }
   });
-  it('rejects a 0.16 prerelease with the shipped bounded range as a negative control', () => {
-    const shipped = json('paseo-plugin.json').requirements;
-    expect(shipped.paseo).toBe('>=0.15.4 <0.16.0');
-    expect(() => assertPluginCompatibility({ id: 'paseo-orbi', requirements: shipped, version: '0.16.0-beta.2', runtime: 'daemon' })).toThrow('requires Paseo >=0.15.4 <0.16.0');
+  it('keeps the historical bounded range rejecting 0.16.0-beta.2 independently of the shipped manifest', () => {
+    const historicalRequirements = { paseo: HISTORICAL_BOUNDED_RANGE };
+    expect(historicalRequirements.paseo).not.toBe(requirements.paseo);
+    for (const runtime of ['daemon', 'app'] as const) {
+      expect(() => assertPluginCompatibility({ id: 'paseo-orbi', requirements: historicalRequirements, version: '0.16.0-beta.2', runtime }), `${runtime}: historical bounded range`).toThrow(`requires Paseo ${HISTORICAL_BOUNDED_RANGE}`);
+    }
   });
 });
 
@@ -96,7 +103,7 @@ describe('package_and_registration boundaries', () => {
     expect(lock.packages[''].dependencies).toEqual(pkg.dependencies);
     expect(lock.packages[''].devDependencies).toEqual(pkg.devDependencies);
     for (const [name, version] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) expect(lock.packages[`node_modules/${name}`].version).toBe(version);
-    expect(json('paseo-plugin.json')).toEqual({ id: 'paseo-orbi', requirements: { paseo: '>=0.15.4 <0.16.0' }, build: [['npm', 'ci', '--omit=dev', '--ignore-scripts']] });
+    expect(json('paseo-plugin.json')).toEqual({ id: 'paseo-orbi', requirements: { paseo: '>0.15.0' }, build: [['npm', 'ci', '--omit=dev', '--ignore-scripts']] });
     expect(pkg.scripts).toEqual({ typecheck: 'tsc -p tsconfig.client.json && tsc -p tsconfig.server.json', test: 'vitest run', 'test:boundaries': 'vitest run tests/boundaries.test.ts',
       'test:e2e:unit': 'vitest run tests/e2e-harness.test.ts', 'test:e2e:list': 'playwright test --config tests/e2e/playwright.config.ts --list',
       'test:e2e': 'playwright test --config tests/e2e/playwright.config.ts', 'test:e2e:verify': 'node tests/e2e/evidence.mjs', 'test:e2e:typecheck': 'tsc --project tests/e2e/tsconfig.json --noEmit',
