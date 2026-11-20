@@ -476,6 +476,17 @@ export async function pinnedProcessSpecs(home: string, bin: string, cli: string,
 }
 export type Host = Awaited<ReturnType<typeof makeHost>>;
 export type HostOptions = { fixture?: FixtureLane; inventory?: boolean };
+// Installs the exact stand-in layout a launched host must have, so the executable
+// proof can exercise the same paths: shims live in <bin>, and the redesign shim's
+// own relative import resolves the unchanged #12 tool at <root>/fixtures/tool.mjs.
+export async function installStandin(root: string, bin: string, lane: FixtureLane) {
+  const standin = await readFile(new URL(lane === 'host-first' ? './host-first/fixture.mjs' : './fixtures/tool.mjs', import.meta.url), 'utf8');
+  if (lane === 'host-first') {
+    await mkdir(join(root, 'fixtures'), { recursive: true, mode: 0o700 });
+    await writeFile(join(root, 'fixtures', 'tool.mjs'), await readFile(new URL('./fixtures/tool.mjs', import.meta.url)));
+  }
+  for (const name of ['gh', 'systemctl', 'journalctl']) { const path = join(bin, name); await writeFile(path, `#!${process.execPath}\n${standin}`); await chmod(path, 0o700); }
+}
 export async function makeHost(root: string, alias: string, profile: 'release' | 'installed', candidate: string, cli: string, mode: 'available' | 'unconfigured', retained: unknown[] = [], options: HostOptions = {}) {
   const fixtureLane = options.fixture ?? 'standard';
   // The expanded inventory capability is startup-only and exists solely on the
@@ -487,8 +498,7 @@ export async function makeHost(root: string, alias: string, profile: 'release' |
   const bin = join(root, `${alias}-bin`); await mkdir(bin);
   await symlink(process.execPath, join(bin, 'node'));
   const { data, registry, calls, state, setState } = await prepareTelemetry(root, alias, profile);
-  const standin = await readFile(new URL(fixtureLane === 'host-first' ? './host-first/fixture.mjs' : './fixtures/tool.mjs', import.meta.url), 'utf8');
-  for (const name of ['gh', 'systemctl', 'journalctl']) { const path = join(bin, name); await writeFile(path, `#!${process.execPath}\n${standin}`); await chmod(path, 0o700); }
+  await installStandin(root, bin, fixtureLane);
   const port = await reservePort();
   const host = `tcp://127.0.0.1:${port.port}`;
   const env: NodeJS.ProcessEnv = { ...environment(root, bin, home), PASEO_LISTEN: `127.0.0.1:${port.port}`, PASEO_WEB_UI_ENABLED: 'true', PASEO_RELAY_ENABLED: 'false',

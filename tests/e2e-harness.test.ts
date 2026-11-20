@@ -758,7 +758,7 @@ it('redesign stand-in answers exactly the two fixed inventory argv forms and ref
 
 it('executed redesign fixture proof answers both list forms and refuses other argv with exit 64', async () => {
   const proof = await verifyFixtureRefusal();
-  expect(proof).toMatchObject({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, unknownArgvRefused: true, refusalExitCode: 64, fallback: false });
+  expect(proof).toMatchObject({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, delegatedRead: true, unknownArgvRefused: true, refusalExitCode: 64, fallback: false });
 }, 20000);
 
 async function hostFirstEvidence() {
@@ -776,9 +776,9 @@ async function hostFirstEvidence() {
       pluginSha: manifest.pluginSha, dirty: false, observedAt: now, hostAlias: 'host-a', state: c.state, paseoVersion: '0.15.4',
       daemonVersion: '0.15.4', appVersion: '0.15.4', playwrightVersion: '1.65.1', browser: 'chromium', browserVersion: 'pinned-revision-test',
       deviceScaleFactor: 1, fixture, expected: 'pass', observed: 'pass',
-      inspection: { horizontalClipping: false, scrollReachable: true, contrast: 'pass', stateVisible: true, reviewedBy: 'unit-fixture-only', at: now } });
+      inspection: { horizontalClipping: false, scrollReachable: true, contrast: 'pass', touchTargets: 'pass', focus: 'pass', stateVisible: true, reviewedBy: 'unit-fixture-only', at: now } });
   }
-  await writeFile(join(root, 'fixture-proof.json'), JSON.stringify({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, refusedArgv: ['stop'], refusalExitCode: 64, unknownArgvRefused: true, fallback: false }));
+  await writeFile(join(root, 'fixture-proof.json'), JSON.stringify({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, delegatedRead: true, refusedArgv: ['stop'], refusalExitCode: 64, unknownArgvRefused: true, fallback: false }));
   return { root, manifest };
 }
 async function runHostFirstVerify(root: string) {
@@ -802,6 +802,8 @@ it('host-first validator passes only complete inspected evidence and never turns
   await mutate(m => { m.screenshots.pop(); });
   await mutate(m => { m.screenshots[0].sha256 = '0'.repeat(64); });
   await mutate(m => { m.screenshots[0].inspection = null; });
+  await mutate(m => { m.screenshots[0].inspection.focus = 'fail'; });
+  await mutate(m => { delete m.screenshots[0].inspection.touchTargets; });
   await mutate(m => { m.cleanup.status = 'fail'; });
   await mutate(m => { m.tests[0].status = 'skip'; });
   await mutate(m => { m.artifactUrl = null; });
@@ -809,7 +811,7 @@ it('host-first validator passes only complete inspected evidence and never turns
   await rm(join(root, 'fixture-proof.json'));
   const noProof = await runHostFirstVerify(root);
   expect(noProof.code).toBe(1); expect(JSON.parse(noProof.stdout).errors.join()).toMatch(/fixture proof/);
-  await writeFile(join(root, 'fixture-proof.json'), JSON.stringify({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, refusalExitCode: 64, unknownArgvRefused: true, fallback: false }));
+  await writeFile(join(root, 'fixture-proof.json'), JSON.stringify({ lane: 'host-first', inventoryFlag: true, allowedListArgv: true, delegatedRead: true, refusalExitCode: 64, unknownArgvRefused: true, fallback: false }));
   await rm(join(root, 'manifest.json'));
   const missing = await runHostFirstVerify(root);
   expect(missing.code).toBe(1); expect(JSON.parse(missing.stdout).status).toBe('not_run');

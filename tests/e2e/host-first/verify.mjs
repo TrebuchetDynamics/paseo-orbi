@@ -28,7 +28,7 @@ export async function validateHostFirst(directory, manifest, proof) {
   require(Array.isArray(manifest.tests) && manifest.tests.length === TITLES.length && TITLES.every(title => manifest.tests.some(t => t.title === title && t.status === 'pass')), 'mandatory host-first journeys missing, failed or skipped');
   require(new Set((manifest.tests ?? []).map(t => t.id)).size === manifest.tests?.length, 'duplicate test results');
   // The fixture refusal proof is executed by the run's global setup, never asserted.
-  require(proof?.refusalExitCode === 64 && proof?.unknownArgvRefused === true && proof?.allowedListArgv === true && proof?.fallback === false && proof?.inventoryFlag === true, 'safe redesign fixture proof required');
+  require(proof?.refusalExitCode === 64 && proof?.unknownArgvRefused === true && proof?.allowedListArgv === true && proof?.delegatedRead === true && proof?.fallback === false && proof?.inventoryFlag === true, 'safe redesign fixture proof required');
   const shots = manifest.screenshots ?? [], seen = new Set(), paths = new Set(), fixtures = await provenance();
   require(shots.length === required.length, 'evidence must contain exactly the required host-first images');
   for (const shot of shots) {
@@ -41,7 +41,7 @@ export async function validateHostFirst(directory, manifest, proof) {
     require(text(shot.hostAlias) && text(shot.state) && text(shot.paseoVersion), `shot host/state/version: ${shot.id}`);
     require(shot.browser === 'chromium' && shot.deviceScaleFactor === 1 && text(shot.browserVersion), `shot browser provenance: ${shot.id}`);
     const review = shot.inspection;
-    require(review?.horizontalClipping === false && review?.scrollReachable === true && review?.contrast === 'pass' && review?.stateVisible === true && text(review?.reviewedBy) && stamp(review?.at), `manual image inspection missing/failed: ${shot.id}`);
+    require(review?.horizontalClipping === false && review?.scrollReachable === true && review?.contrast === 'pass' && review?.touchTargets === 'pass' && review?.focus === 'pass' && review?.stateVisible === true && text(review?.reviewedBy) && stamp(review?.at), `manual image inspection missing/failed: ${shot.id}`);
     if (expected) {
       require(['scenario', 'theme'].every(key => expected[key] === shot[key]) && JSON.stringify(expected.viewport) === JSON.stringify(shot.viewport) && expected.state === shot.state, `matrix mismatch: ${shot.id}`);
       require(shot.supplemental === expected.supplemental, `supplemental marker mismatch: ${shot.id}`);
