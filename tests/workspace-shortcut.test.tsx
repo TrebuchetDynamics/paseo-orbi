@@ -236,6 +236,28 @@ it('closes a handle returned by a late successful open without continuing the wa
   expect((await state()).state).toBe('symlink');
 });
 
+it('retains the capacity hold when closing an inspected descriptor fails', async () => {
+  const { state } = await configured(async ({ parent, repoDir }) => { await symlink(repoDir, join(parent, 'checkout')); });
+  const calls = await raw();
+  let uncertain: import('node:fs/promises').FileHandle | null = null;
+  const opened = vi.spyOn(filesystem, 'open').mockImplementation((async (path: string, flags?: unknown) => {
+    const handle = await calls.open(path, flags);
+    if (uncertain !== null || !path.startsWith('/proc/self/fd/')) return handle;
+    uncertain = handle;
+    // An uncertain close: the adapter cannot prove that this descriptor was released.
+    return { fd: handle.fd, stat: (options?: unknown) => handle.stat(options as { bigint: true }),
+      close: async () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } };
+  }) as never);
+  cleanups.push(() => opened.mockRestore());
+  cleanups.push(() => (uncertain as import('node:fs/promises').FileHandle).close());
+  // The observation itself completed and was reported truthfully...
+  expect((await state()).state).toBe('symlink');
+  // ...but the uncertain descriptor keeps the single reservation: no further
+  // admission, and no late result for the earlier inspection is published.
+  expect(await state()).toMatchObject({ state: 'cannot_inspect', problem: { code: 'read_limit' } });
+  expect(await state()).toMatchObject({ state: 'cannot_inspect', problem: { code: 'read_limit' } });
+});
+
 it('disables only a malformed shortcut descriptor and never touches the designated leaf', async () => {
   const base = await owned(async ({ parent, repoDir }) => { await symlink(repoDir, join(parent, 'checkout')); });
   const parent = base.parent;
