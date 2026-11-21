@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useRpc } from '@getpaseo/plugin/client';
 import type { PluginHostProps } from '@getpaseo/plugin/client';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { workspaceShortcutStatus, type ShortcutState, type WorkspaceShortcutStatus } from '../shared/workspace-shortcut';
+import { ActionButton } from './action-button';
 
 // Plain-language labels only. Nothing here names, resolves or shows the target, and a
 // present shortcut never claims that a checkout exists or opens.
@@ -49,9 +50,7 @@ export function WorkspaceShortcut({ hostId, deploymentId, repo, connected, foreg
     <Text style={text}>Explicit inspection only. This reports whether the designated name is present and whether it is a symbolic link. It does not read, follow, compare or display the target, and it does not prove that a checkout exists or opens. A shortcut is a possible convenience for terminal, editor and file-manager users, not a Paseo workspace registration.</Text>
     {!connected && <Text style={text}>Host offline: no shortcut inspection.</Text>}
     {connected && !foreground && <Text style={text}>App is in the background: no shortcut inspection.</Text>}
-    <Pressable accessibilityRole="button" accessibilityLabel={action} disabled={!canInspect}
-      accessibilityState={{ disabled: !canInspect, busy }} style={{ opacity: canInspect ? 1 : 0.5 }} onPress={inspect}>
-      <Text style={text}>{busy ? 'Inspecting' : action}</Text>
-    </Pressable>
+    <ActionButton label={busy ? 'Inspecting' : action} accessibilityName={action} disabled={!canInspect} busy={busy}
+      theme={theme} onPress={() => { void inspect(); }} />
   </View>;
 }

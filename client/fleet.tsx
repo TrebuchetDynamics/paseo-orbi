@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import type { PluginClientContext, PluginScreenProps } from '@getpaseo/plugin/client';
 import { useRpc } from '@getpaseo/plugin/client';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { type DeploymentCatalog } from '../shared/common';
 import { fleetRead, type FleetSnapshot } from '../shared/fleet';
+import { ActionButton } from './action-button';
 import { ObservationView, useObservationQuery } from './observation';
 import { WorkspaceShortcut } from './workspace-shortcut';
 
@@ -129,13 +130,10 @@ function DeploymentRow({ entry, openId, setOpenId, observedIds, connected, foreg
       {observed !== null && <Text style={text}>{observed ? 'Observed in this host service check' : 'Not observed in this host service check'}</Text>}
     </View>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel={`${open ? 'Hide' : 'Show'} details for ${entry.label}`}
-        accessibilityState={{ expanded: open, selected: open }}
-        style={{ padding: 4, borderWidth: 1, borderColor: props.theme.colors.foreground }}
-        onPress={() => setOpenId(open ? null : entry.id)}><Text style={text}>{open ? 'Hide details' : 'Show details'}</Text></Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Active work for ${entry.label}`}
-        style={{ padding: 4, borderWidth: 1, borderColor: props.theme.colors.foreground }}
-        onPress={() => props.openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })}><Text style={text}>View active work in Issues</Text></Pressable>
+      <ActionButton label={open ? 'Hide details' : 'Show details'} accessibilityName={`${open ? 'Hide' : 'Show'} details for ${entry.label}`}
+        expanded={open} selected={open} theme={props.theme} onPress={() => setOpenId(open ? null : entry.id)} />
+      <ActionButton label="View active work in Issues" accessibilityName={`Active work for ${entry.label}`} theme={props.theme}
+        onPress={() => props.openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })} />
     </View>
     {open && <DeploymentDetail {...props} entry={entry} connected={connected} foreground={foreground} />}
   </View>;

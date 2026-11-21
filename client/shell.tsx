@@ -5,6 +5,7 @@ import { SidebarRow } from '@getpaseo/plugin/client/ui';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { deploymentsList, type DeploymentCatalog, type Observation } from '../shared/common';
 import { useForeground, useObservationQuery } from './observation';
+import { ActionButton } from './action-button';
 import { Fleet } from './fleet';
 import { observedDeploymentIds, useHostServicesQuery } from './host-overview';
 import { Issues } from './issues';
@@ -23,10 +24,8 @@ export function Sidebar({ currentScreen, openScreen }: PluginSidebarItemProps) {
 function ConfiguredRepositories(props: React.ComponentProps<typeof Fleet>) {
   const [expanded, setExpanded] = useState(Boolean(props.params.deploymentId));
   return <View style={{ gap: 8 }}>
-    <Pressable accessibilityRole="button" accessibilityLabel="Configured repositories" accessibilityState={{ expanded }}
-      style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setExpanded(value => !value)}>
-      <Text style={{ color: props.theme.colors.foreground }}>Configured repositories</Text>
-    </Pressable>
+    <ActionButton label="Configured repositories" accessibilityName="Configured repositories" expanded={expanded}
+      theme={props.theme} onPress={() => setExpanded(value => !value)} />
     {expanded && <Fleet {...props} />}
   </View>;
 }
@@ -78,8 +77,8 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       connected={connected} foreground={foreground} query={inventory}
     />}
     <View testID="orbi-catalog" style={{ gap: 8 }}>
-      {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Set up repositories" accessibilityState={{ expanded: setupExpanded }}
-        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setSetupHost(setupExpanded ? null : props.host.id)}><Text style={text}>Set up repositories</Text></Pressable>}
+      {route === 'fleet' && <ActionButton label="Set up repositories" accessibilityName="Set up repositories" expanded={setupExpanded}
+        theme={props.theme} onPress={() => setSetupHost(setupExpanded ? null : props.host.id)} />}
       {route !== 'fleet' && <Text style={text}>Selected host: {props.host.label}</Text>}
       {!connected && route !== 'fleet' && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
       {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
@@ -94,11 +93,13 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         <Text style={text}>Refresh only reads the current startup catalog. It does not configure authorization or reload the plugin.</Text>
       </View>}
       {!catalog && setupExpanded && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}
-      {setupExpanded && !unconfiguredCatalog && <Pressable accessibilityRole="button" accessibilityLabel="Refresh" disabled={!query.canRefresh} accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }} style={{ opacity: query.canRefresh ? 1 : 0.5 }} onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>}
+      {setupExpanded && !unconfiguredCatalog && <ActionButton label={query.refreshing ? 'Refreshing' : 'Refresh'} accessibilityName="Refresh"
+        disabled={!query.canRefresh} busy={query.refreshing} theme={props.theme} onPress={() => { void query.refresh(); }} />}
     </View>
     {catalog?.state === 'configured' && <>
       <View testID="orbi-navigation" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {routes.map(next => <Pressable key={next} accessibilityRole="button" accessibilityLabel={`Open ${title(next)}`} accessibilityState={{ selected: route === next }} style={{ padding: 8, borderWidth: route === next ? 2 : 1, borderColor: props.theme.colors.foreground }} onPress={() => openScreen({ screenId: next, params: selected ? { deploymentId: selected.id } : {} })}><Text style={text}>{title(next)}</Text></Pressable>)}
+        {routes.map(next => <ActionButton key={next} label={title(next)} accessibilityName={`Open ${title(next)}`} selected={route === next}
+          theme={props.theme} onPress={() => openScreen({ screenId: next, params: selected ? { deploymentId: selected.id } : {} })} />)}
       </View>
       {catalog.entries.length === 0 && <Text style={text}>No configured deployments.</Text>}
       {catalog.entries.filter(entry => entry.status !== 'available').map(entry => <View key={entry.id}>
