@@ -39,7 +39,7 @@ discover repositories. The pinned Paseo host cannot separate viewers from
 operators, so a grant is an explicit statement that every admitted client of
 that host may operate the approved targets; see the
 [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#service-controls-operator-grant-default-off). Offline checks cover
-all four views; the Linux Electron qualification lane is implemented but has
+all five views; the Linux Electron qualification lane is implemented but has
 not been executed, iOS/Android are deferred, and live installation plus
 installed qualification remain unperformed.
 

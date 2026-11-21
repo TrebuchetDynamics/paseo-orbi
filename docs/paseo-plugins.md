@@ -220,7 +220,7 @@ Sources: [quickstart](https://paseo.sh/docs/plugins.md), [CLI](https://paseo.sh/
 
 ## Install in Paseo
 
-**Prerequisite:** these steps require operator authorization. The plugin implements four telemetry/evidence views, but has not been installed or qualified on a live host. An ordinary Git install selects the repository's current default HEAD (`main`) at install time, not a GitHub Release, and no `main` commit is claimed to have passed live qualification. The [operator guide installation procedure](operator-guide.md#authorized-installation-not-performed-here) owns the ordinary Git install and the historical offline-tested revision, and its [setup section](operator-guide.md#setup) owns the startup JSON example. `PASEO_ORBI_CONFIG` must already be visible to the daemon/plugin at startup; a CLI-shell export cannot change an existing daemon's environment. Authorization/TOML/profile changes require an explicitly authorized plugin reload, not Refresh.
+**Prerequisite:** these steps require operator authorization. The plugin implements five telemetry/evidence views, but has not been installed or qualified on a live host. An ordinary Git install selects the repository's current default HEAD (`main`) at install time, not a GitHub Release, and no `main` commit is claimed to have passed live qualification. The [operator guide installation procedure](operator-guide.md#authorized-installation-not-performed-here) owns the ordinary Git install and the historical offline-tested revision, and its [setup section](operator-guide.md#setup) owns the startup JSON example. `PASEO_ORBI_CONFIG` must already be visible to the daemon/plugin at startup; a CLI-shell export cannot change an existing daemon's environment. Authorization/TOML/profile changes require an explicitly authorized plugin reload, not Refresh.
 
 ### Install through the app
 
@@ -381,7 +381,7 @@ Offline Blockers tests cover every closed reason/action, invalid/unknown/missing
 Still to verify through separately authorized live work (not performed here):
 
 - Test-daemon installation of the exact tested commit; inspect `pluginsEnabled` and obtain explicit consent if absent/false; require `running`. No offline result grants installation or enablement approval.
-- Selected-host live RPC success/failure for all four views; wide/compact and light/dark physical clients; authorized reload cleanup. No real-client screenshots or approvals are supplied by these offline checks.
+- Selected-host live RPC success/failure for all five views; wide/compact and light/dark physical clients; authorized reload cleanup. No real-client screenshots or approvals are supplied by these offline checks.
 - Services' real narrow/wide composition, theme contrast and keyboard focus/return are owned by #32's installed visual inspection; the component fixtures only prove declarative roles, labels and states.
 - Collector projection remains limited to the pinned formats. All Orbi CLI commands and Git commands are excluded; there is no diagnostic execution loophole.
 - Real-host setup using the explicit startup authorization; no automatic deployment discovery.
