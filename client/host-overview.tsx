@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PluginClientContext, PluginHostProps } from '@getpaseo/plugin/client';
 import { useRpc } from '@getpaseo/plugin/client';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { ControlAction, DeploymentCatalog, Observation } from '../shared/common';
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
 import type { ControlObservation, ControlOutcome, ControlReason } from '../shared/service-control';
 import { servicesControl } from '../shared/service-control';
 import { useObservationQuery } from './observation';
+import { ActionButton } from './action-button';
 
 // Host-first Overview. It reads one host-scoped services.inventory({}) snapshot
 // and never resolves a repository: an association carries a deployment id only
@@ -297,10 +298,8 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
   };
 
   return <View testID={`orbi-actions-${group.label}`} style={{ gap: 8 }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Actions for ${group.label}`} accessibilityState={{ expanded: open }}
-      style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setOpen(value => !value)}>
-      <Text style={text}>{open ? 'Hide actions' : 'Actions'}</Text>
-    </Pressable>
+    <ActionButton label={open ? 'Hide actions' : 'Actions'} accessibilityName={`Actions for ${group.label}`}
+      expanded={open} theme={theme} onPress={() => setOpen(value => !value)} />
     {open && <View style={{ gap: 8 }}>
       {slots.length === 0 && <Text style={text}>No observed slot is inside this repository's approved targets.</Text>}
       {slots.map(slot => {
@@ -309,13 +308,12 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
         return <View key={`${hostId}:${group.label}:${slot}`} style={{ gap: 4 }}>
           <Text style={text}>{`Slot ${slot} · ${slotState(service)}`}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {controls.actions.map(action => <Pressable key={action} accessibilityRole="button"
-              accessibilityLabel={`${actionText[action]} slot ${slot}`}
+            {controls.actions.map(action => <ActionButton key={action} label={actionText[action]}
+              accessibilityName={`${actionText[action]} slot ${slot}`}
+              variant={action === 'start' ? 'primary' : action === 'stop' ? 'danger' : 'secondary'}
               disabled={sending || confirming !== null}
-              accessibilityState={{ disabled: sending || confirming !== null, busy: sending && pending && confirming?.action === action }}
-              style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderWidth: 1, borderRadius: 8,
-                borderColor: theme.colors.foreground, opacity: sending || confirming !== null ? 0.5 : pressed ? 0.7 : 1 })}
-              onPress={() => { setFeedback(null); setConfirming({ action, slot }); }}><Text style={text}>{actionText[action]}</Text></Pressable>)}
+              busy={sending && pending && confirming?.action === action} theme={theme}
+              onPress={() => { setFeedback(null); setConfirming({ action, slot }); }} />)}
           </View>
           {pending && confirming !== null && <View testID={`orbi-confirm-${group.label}-${slot}`} style={{ gap: 4 }}>
             <Text style={text}>{`Confirm ${actionText[confirming.action].toLowerCase()} · Slot ${slot}`}</Text>
@@ -325,17 +323,12 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
             <Text style={text}>{`Effect: ${effectText[confirming.action]}`}</Text>
             <Text style={secondary}>Confirmation is not authorization. The daemon rechecks the operator grant before it runs anything.</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              <Pressable accessibilityRole="button" accessibilityLabel={`Confirm ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
-                disabled={sending} accessibilityState={{ disabled: sending, busy: sending }}
-                style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderWidth: 1, borderRadius: 8,
-                  borderColor: theme.colors.foreground, opacity: sending ? 0.5 : pressed ? 0.7 : 1 })}
-                onPress={() => void submit(confirming.action, slot)}>
-                <Text style={text}>{sending ? 'Submitting…' : `Confirm ${actionText[confirming.action].toLowerCase()}`}</Text>
-              </Pressable>
-              <Pressable accessibilityRole="button" accessibilityLabel={`Cancel ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
-                disabled={sending} accessibilityState={{ disabled: sending }}
-                style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, opacity: sending ? 0.5 : 1 }}
-                onPress={() => setConfirming(null)}><Text style={text}>Cancel</Text></Pressable>
+              <ActionButton label={sending ? 'Submitting…' : `Confirm ${actionText[confirming.action].toLowerCase()}`}
+                accessibilityName={`Confirm ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
+                variant={confirming.action === 'stop' ? 'danger' : 'primary'} disabled={sending} busy={sending} theme={theme}
+                onPress={() => void submit(confirming.action, slot)} />
+              <ActionButton label="Cancel" accessibilityName={`Cancel ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
+                disabled={sending} theme={theme} onPress={() => setConfirming(null)} />
             </View>
           </View>}
         </View>;
@@ -371,9 +364,8 @@ function FamilyRow({ group, hostId, hostLabel, theme, entries, openScreen, expan
     ...(entry || !showUnlinked ? [] : ['Unlinked']),
   ].join(' · ');
   return <View testID={`orbi-family-${group.label}`} style={{ gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityHint={description} accessibilityState={{ expanded }}
-      style={({ pressed }) => ({ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, opacity: pressed ? 0.65 : 1 })}
-      onPress={toggle}>
+    <ActionButton accessibilityName={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityHint={description}
+      expanded={expanded} theme={theme} style={{ justifyContent: 'space-between', gap: 8 }} onPress={toggle}>
       <View style={{ flexShrink: 1, gap: 4 }}>
         <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -384,15 +376,14 @@ function FamilyRow({ group, hostId, hostLabel, theme, entries, openScreen, expan
         </View>
       </View>
       <Text testID={`orbi-chevron-${group.label}`} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={text}>{expanded ? '▾' : '▸'}</Text>
-    </Pressable>
-    {entry !== null && <Pressable accessibilityRole="button" accessibilityLabel={`View repository ${entry.label}`}
-      style={{ minHeight: 44, justifyContent: 'center' }}
-      onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })}><Text style={text}>View repository</Text></Pressable>}
+    </ActionButton>
+    {entry !== null && <ActionButton label="View repository" accessibilityName={`View repository ${entry.label}`} theme={theme}
+      onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })} />}
     {expanded && <View style={{ gap: 2 }}>
       {slotLines(group).map(line => <Text key={line} style={text}>{line}</Text>)}
       {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} />}
-      <Pressable accessibilityRole="button" accessibilityLabel={`Unit details for ${group.label}`} accessibilityState={{ expanded: technical }}
-        style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.65 : 1 })} onPress={() => setTechnical(value => !value)}><Text style={text}>Unit details</Text></Pressable>
+      <ActionButton label="Unit details" accessibilityName={`Unit details for ${group.label}`} expanded={technical} theme={theme}
+        onPress={() => setTechnical(value => !value)} />
       {technical && <View style={{ gap: 2 }}>
         <Text style={text}>{group.label}</Text>
         <Text style={text}>{associationText(group, entry)}</Text>
@@ -462,24 +453,19 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}
     {!!problems && <Text accessibilityRole="alert" style={text}>{problems}</Text>}
     {off ? <View style={{ gap: 8 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Set up service access" accessibilityState={{ expanded: setupExpanded }}
-        style={{ minHeight: 44, justifyContent: 'center' }}
-        onPress={() => setSetupExpanded(value => !value)}><Text style={text}>{setupExpanded ? 'Hide service access setup' : 'Set up service access'}</Text></Pressable>
+      <ActionButton label={setupExpanded ? 'Hide service access setup' : 'Set up service access'} accessibilityName="Set up service access"
+        expanded={setupExpanded} theme={theme} onPress={() => setSetupExpanded(value => !value)} />
       {setupExpanded && <View accessibilityLabel="Service access setup" style={{ gap: 8 }}>
         <Text style={text}>Host service inventory is not enabled on this host. The operator can opt in with PASEO_ORBI_HOST_INVENTORY=1 at plugin startup and explicitly authorize a reload.</Text>
         <Text style={text}>Connected clients on this host can then see Orbi unit names. No other host is read. Refresh cannot enable access or reload this plugin.</Text>
       </View>}
-    </View> : <Pressable accessibilityRole="button" accessibilityLabel="Refresh services" disabled={!query.canRefresh}
-      accessibilityState={{ disabled: !query.canRefresh, busy: query.refreshing }}
-      style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', borderWidth: 1, borderColor: theme.colors.foreground, borderRadius: 8, paddingHorizontal: 12, opacity: !query.canRefresh ? 0.5 : pressed ? 0.7 : 1 })}
-      onPress={query.refresh}><Text style={text}>{query.refreshing ? 'Refreshing' : 'Refresh services'}</Text></Pressable>}
+    </View> : <ActionButton label={query.refreshing ? 'Refreshing' : 'Refresh services'} accessibilityName="Refresh services"
+      disabled={!query.canRefresh} busy={query.refreshing} theme={theme} onPress={() => { void query.refresh(); }} />}
     {copies.map(copy => <Text key={copy} style={text}>{copy}</Text>)}
     {unconfigured && <View testID="orbi-host-services-unconfigured" style={{ gap: 8 }}>
       <Text style={text}>Showing host services. Repository details aren't configured.</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Setup instructions" accessibilityState={{ expanded: instructionsExpanded }}
-        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setInstructionsExpanded(value => !value)}>
-        <Text style={text}>Setup instructions</Text>
-      </Pressable>
+      <ActionButton label="Setup instructions" accessibilityName="Setup instructions" expanded={instructionsExpanded}
+        theme={theme} onPress={() => setInstructionsExpanded(value => !value)} />
       {instructionsExpanded && <View accessibilityLabel="Repository setup instructions" style={{ gap: 8 }}>
         <Text style={text}>Repository details come from an authorized JSON file the operator provides through PASEO_ORBI_CONFIG at plugin startup. The operator must provide or repair that file, then explicitly reload this plugin.</Text>
         <Text style={text}>The host service rows below need no repository configuration. Refresh services only rereads this host's inventory; it does not configure the repository catalog or enable access.</Text>

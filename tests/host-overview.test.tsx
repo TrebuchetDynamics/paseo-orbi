@@ -51,7 +51,7 @@ const nineGroups = (worker: 'failed' | 'idle' | 'running', timer: 'waiting' | 'f
 const demo: DeploymentCatalog['entries'][number] = { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi-0.7.41-release', status: 'available', problems: [], controls: null };
 const second = { ...demo, id: 'second', label: 'Second', repo: 'Other/repository' };
 const catalog = (entries: DeploymentCatalog['entries']): DeploymentCatalog => ({ state: 'configured', problems: [], entries });
-const props = (id = 'host-a'): PluginScreenProps => ({ theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id, label: host.hosts.find(item => item.serverId === id)?.label ?? (id === 'host-a' ? 'Host A' : 'Host B') }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps);
+const props = (id = 'host-a'): PluginScreenProps => ({ theme: { colors: { surface0: '#111', surface1: '#222', surface2: '#2a2a2a', border: '#555', foreground: '#eee', foregroundMuted: '#aaa', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } }, host: { id, label: host.hosts.find(item => item.serverId === id)?.label ?? (id === 'host-a' ? 'Host A' : 'Host B') }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps);
 beforeEach(() => {
   resetHostOverviewState();
   host.readControl.mockReset();
@@ -557,7 +557,8 @@ describe('host states and authority', () => {
     expect(servicesTexts().indexOf(explanation)).toBeLessThan(servicesTexts().indexOf('orbi'));
     // The setup action is a real disclosure with a 44-unit target.
     const instructions = () => renderer.root.findByProps({ accessibilityLabel: 'Setup instructions' });
-    expect(instructions().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
+    expect(instructions().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+    expect(instructions().props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
     expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
     await press('Setup instructions');
     expect(instructions().props.accessibilityState.expanded).toBe(true);
@@ -627,7 +628,8 @@ describe('host states and authority', () => {
   it('mounts rich repositories only on expansion, stops collapsed polling and resets on host switch', async () => {
     const { renderer, press, switchTo } = await render();
     const disclosure = () => renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' });
-    expect(disclosure().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
+    expect(disclosure().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+    expect(disclosure().props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
     expect(host.readFleet).not.toHaveBeenCalled();
     await press('Configured repositories');
     expect(disclosure().props.accessibilityState.expanded).toBe(true);
@@ -684,7 +686,9 @@ describe('operator-authorized service controls', () => {
     }
     await press('Expand orbi-demo');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props)
-      .toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
+      .toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props.style({ pressed: false }))
+      .toMatchObject({ minHeight: 44 });
     await press('Actions for orbi-demo');
     // Exactly the observed slots inside the operator-approved bound.
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 1' })).toHaveLength(1);
@@ -803,5 +807,57 @@ describe('operator-authorized service controls', () => {
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
     expect(renderer.root.findByProps({ accessibilityLabel: 'View repository Demo' })).toBeDefined();
     expect(host.readControl).not.toHaveBeenCalled();
+  });
+
+  it('styles granted actions as buttons and keeps a busy confirm from submitting twice', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    let finish!: (value: unknown) => void;
+    host.readControl.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { renderer, press } = await render();
+    const colors = props().theme.colors;
+    await openActions(press);
+    const control = (name: string) => renderer.root.findByProps({ accessibilityLabel: name });
+    const controlStyle = (name: string) => control(name).props.style({ pressed: false });
+    // One filled primary for the main action, an outlined navigation action and a
+    // danger outline for the supported destructive Stop.
+    expect(control('Start slot 1').findAllByType('Text' as any).map(node => node.children.join(''))).toEqual(['Start']);
+    expect(controlStyle('Start slot 1')).toMatchObject({ backgroundColor: colors.accent, borderColor: colors.accent });
+    expect(control('Start slot 1').findByType('Text' as any).props.style.color).toBe(colors.accentForeground);
+    expect(controlStyle('Stop slot 1')).toMatchObject({ backgroundColor: colors.surface1, borderColor: colors.statusDanger });
+    expect(control('Stop slot 1').findByType('Text' as any).props.style.color).toBe(colors.statusDanger);
+    expect(controlStyle('Restart slot 1')).toMatchObject({ backgroundColor: colors.surface1, borderColor: colors.border });
+    expect(control('Restart slot 1').findByType('Text' as any).props.style.color).toBe(colors.foreground);
+    // Danger is used only by the destructive action; no status line borrows it.
+    const danger = renderer.root.findAll(node => node.type === ('Pressable' as any))
+      .filter(node => typeof node.props.style === 'function' && node.props.style({ pressed: false }).borderColor === colors.statusDanger);
+    expect(danger.map(node => node.props.accessibilityLabel)).toEqual(['Stop slot 1']);
+    // Confirming is the main action of the confirmation and stays a filled
+    // primary; Cancel remains an outlined secondary.
+    await press('Start slot 1');
+    expect(controlStyle('Confirm start slot 1')).toMatchObject({ backgroundColor: colors.accent, borderColor: colors.accent });
+    expect(controlStyle('Cancel start slot 1')).toMatchObject({ backgroundColor: colors.surface1, borderColor: colors.border });
+    await act(async () => { control('Confirm start slot 1').props.onPress(); await vi.advanceTimersByTimeAsync(2); });
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+    const busy = control('Confirm start slot 1');
+    expect(busy.props.disabled).toBe(true);
+    expect(busy.props.accessibilityState).toEqual({ disabled: true, busy: true });
+    expect(busy.findByType('Text' as any).children.join('')).toBe('Submitting…');
+    expect(busy.props.style({ pressed: false }).opacity).toBeLessThan(0.7);
+    // A second tap on the busy confirmation cannot submit again, and the cancel
+    // path stays disabled until that one submission reports back.
+    await act(async () => { busy.props.onPress(); await vi.advanceTimersByTimeAsync(2); });
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+    expect(control('Cancel start slot 1').props.disabled).toBe(true);
+    await act(async () => { finish(answer()); }); await settle();
+    expect(text(renderer)).toContain('Start succeeded · Slot 1 · Running');
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+    // A Stop confirmation carries the destructive styling; Cancel still closes
+    // it without sending anything.
+    await press('Stop slot 1');
+    expect(controlStyle('Confirm stop slot 1')).toMatchObject({ borderColor: colors.statusDanger, backgroundColor: colors.surface1 });
+    await press('Cancel stop slot 1');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Confirm stop slot 1' })).toHaveLength(0);
+    expect(host.readControl).toHaveBeenCalledTimes(1);
   });
 });

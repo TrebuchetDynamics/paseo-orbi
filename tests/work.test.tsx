@@ -55,7 +55,7 @@ const hostA = inventory({ state: 'complete', groups: [
   family('orbi-core', 'incompatible', null, [unit('orbi-core@1.service', 'service', 'activating', 'start')]),
 ] });
 const props = (id = 'host-a'): PluginScreenProps => ({
-  theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111', surface1: '#222' } },
+  theme: { colors: { surface0: '#111', surface1: '#222', surface2: '#2a2a2a', border: '#555', foreground: '#eee', foregroundMuted: '#aaa', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } },
   host: { id, label: host.hosts.find(item => item.serverId === id)?.label ?? 'Host A' },
   layout: { compact: true, platform: 'ios' }, params: {},
 } as PluginScreenProps);
@@ -69,11 +69,11 @@ beforeEach(() => {
   host.openExternalUrl.mockReset().mockResolvedValue(undefined);
 });
 const settle = async () => { for (let n = 0; n < 3; n++) await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
-async function render(params: PluginScreenProps['params'] = {}) {
+async function render(params: PluginScreenProps['params'] = {}, theme?: PluginScreenProps['theme']) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   cleanups.push(() => client.clear());
   const openScreen = vi.fn();
-  const tree = (id = 'host-a', route = 'fleet', next = params) => <QueryClientProvider client={client}><Shell {...props(id)} params={next} route={route} openScreen={openScreen} /></QueryClientProvider>;
+  const tree = (id = 'host-a', route = 'fleet', next = params) => <QueryClientProvider client={client}><Shell {...props(id)} {...(theme ? { theme } : {})} params={next} route={route} openScreen={openScreen} /></QueryClientProvider>;
   let renderer!: ReactTestRenderer;
   vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
   await act(async () => { renderer = create(tree()); });
@@ -239,6 +239,10 @@ describe('Work first screen', () => {
     expect(offline).not.toContain('Issues: loading');
     expect(offline).toContain('Selected host is offline.');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh issues' }).props.disabled).toBe(true);
+    // The offline repair is a disabled button: tapping it starts no read.
+    const blocked = host.readIssues.mock.calls.length;
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Refresh issues' }).props.onPress());
+    expect(host.readIssues.mock.calls.length).toBe(blocked);
     await act(async () => { finish(pageAt([issue(42)])); await settle(); });
     expect(text(renderer)).not.toContain('#42 Issue 42');
   });
@@ -386,7 +390,8 @@ describe('Work first screen', () => {
     }
     // The action row wraps instead of expanding past a 360 CSS-px viewport.
     const inspect = row(renderer, 42).findByProps({ accessibilityLabel: 'Inspect issue 42' });
-    expect(inspect.parent?.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
+    const actionRow = inspect.parent?.parent;
+    expect(actionRow?.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
     // Nothing in an issue row declares a fixed width or a line limit.
     for (const number of [42]) {
       const issueRow = row(renderer, number);
@@ -402,5 +407,93 @@ describe('Work first screen', () => {
       'Browse open issues', 'Browse closed issues', 'Browse all issues', 'All labels', 'Filter by label ai-ready']) {
       expect(renderer.root.findAllByProps({ accessibilityLabel: label }).length).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it('makes Work actions look like buttons while GitHub labels stay static chips', async () => {
+    host.readInventory.mockResolvedValue(hostA);
+    host.readCatalog.mockResolvedValue(catalog([demo, second]));
+    host.readIssues.mockResolvedValue(pageAt([issue(42, {
+      labels: ['ai-ready'], labelDetails: [{ name: 'ai-ready', color: '#00ff00' }],
+    })]));
+    const { renderer } = await render();
+    const colors = props().theme.colors;
+    const control = (name: string) => renderer.root.findByProps({ accessibilityLabel: name });
+    const controlStyle = (name: string) => control(name).props.style({ pressed: false });
+    // Every Work action is a labelled button with a 44x44 target, not a bare word
+    // that reads like a heading or a status line.
+    expect(control('Inspect issue 42').props.accessibilityRole).toBe('button');
+    expect(control('Inspect issue 42').findAllByType('Text' as any).map(node => node.children.join(''))).toEqual(['Inspect issue']);
+    expect(controlStyle('Inspect issue 42')).toMatchObject({ minHeight: 44, minWidth: 44, backgroundColor: colors.surface1, borderColor: colors.border });
+    expect(control('Inspect issue 42').findByType('Text' as any).props.style.color).toBe(colors.foreground);
+    // The selected browse/label filter is drawn and announced; the other states
+    // stay outlined, so a selected filter can never read as a static chip.
+    expect(control('Browse open issues').props.accessibilityState).toEqual({ selected: true, disabled: false, busy: false });
+    expect(controlStyle('Browse open issues')).toMatchObject({ backgroundColor: colors.surface2, borderColor: colors.accent });
+    expect(control('Browse closed issues').props.accessibilityState).toEqual({ selected: false, disabled: false, busy: false });
+    expect(controlStyle('Browse closed issues')).toMatchObject({ backgroundColor: colors.surface1, borderColor: colors.border });
+    expect(control('All labels').props.accessibilityState.selected).toBe(true);
+    expect(control('Filter by label ai-ready').props.accessibilityState.selected).toBe(false);
+    expect(control('Work repository Demo').props.accessibilityState.selected).toBe(true);
+    expect(controlStyle('Work repository Demo')).toMatchObject({ backgroundColor: colors.surface2, borderColor: colors.accent });
+    expect(control('Work repository Second').props.accessibilityState.selected).toBe(false);
+    // The technical-details disclosure is a button, not a header.
+    expect(control('Services (technical details)').props.accessibilityRole).toBe('button');
+    expect(control('Services (technical details)').props.accessibilityState).toMatchObject({ expanded: false });
+    expect(controlStyle('Services (technical details)')).toMatchObject({ minHeight: 44, backgroundColor: colors.surface1 });
+    // GitHub labels keep their literal fill and are not buttons.
+    const chips = renderer.root.findAll(node => node.props.testID === 'orbi-label-chip');
+    expect(chips.map(chip => chip.findByType('Text' as any).children.join(''))).toEqual(['ai-ready']);
+    expect(chips[0].props.style.backgroundColor).toBe('#00ff00');
+    for (const chip of chips) {
+      expect(chip.props.accessibilityRole).toBeUndefined();
+      expect(chip.findAll(node => node.props.accessibilityRole === 'button')).toHaveLength(0);
+      expect(chip.findAll(node => node.type === ('Pressable' as any))).toHaveLength(0);
+    }
+    // The validated external GitHub link keeps link semantics and is not a button.
+    const link = row(renderer, 42).findAll(node => node.type === ('ExternalLink' as any));
+    expect(link).toHaveLength(1);
+    expect(link[0].props.accessibilityRole).toBe('link');
+    // Heading and status lines are never announced as buttons.
+    for (const testID of ['orbi-work-heading', 'orbi-work-services-summary', 'orbi-work-issues-status']) {
+      expect(renderer.root.findByProps({ testID }).props.accessibilityRole).not.toBe('button');
+    }
+  });
+
+  it('follows a light phone theme for the same Work actions', async () => {
+    const light = { colors: {
+      surface0: '#ffffff', surface1: '#f4f5f7', surface2: '#e6e8ec', border: '#c9ccd2', foreground: '#111318',
+      foregroundMuted: '#585c66', accent: '#1d4ed8', accentForeground: '#ffffff',
+      statusSuccess: '#157f4b', statusWarning: '#9a6100', statusDanger: '#b3261e',
+    } } as PluginScreenProps['theme'];
+    const { renderer } = await render({}, light);
+    const control = (name: string) => renderer.root.findByProps({ accessibilityLabel: name });
+    expect(control('Inspect issue 42').props.style({ pressed: false }))
+      .toMatchObject({ backgroundColor: light.colors.surface1, borderColor: light.colors.border });
+    expect(control('Browse open issues').props.style({ pressed: false }))
+      .toMatchObject({ backgroundColor: light.colors.surface2, borderColor: light.colors.accent });
+    expect(control('Inspect issue 42').findByType('Text' as any).props.style.color).toBe(light.colors.foreground);
+    for (const name of ['Inspect issue 42', 'Refresh issues', 'Services (technical details)']) {
+      expect(control(name).findByType('Text' as any).props.style.color).toBe(light.colors.foreground);
+    }
+  });
+
+  it('disables and labels Refresh issues while a read is in flight so no second read starts', async () => {
+    const { renderer } = await render();
+    let finish!: (value: unknown) => void;
+    host.readIssues.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refresh = () => renderer.root.findByProps({ accessibilityLabel: 'Refresh issues' });
+    await act(async () => { refresh().props.onPress(); await vi.advanceTimersByTimeAsync(2); });
+    const reads = host.readIssues.mock.calls.length;
+    expect(refresh().props.disabled).toBe(true);
+    expect(refresh().props.accessibilityState).toEqual({ disabled: true, busy: true });
+    expect(refresh().findByType('Text' as any).children.join('')).toBe('Refreshing');
+    expect(refresh().props.style({ pressed: false }).opacity).toBeLessThan(0.7);
+    // A second tap on the busy button cannot start another read.
+    await act(async () => { refresh().props.onPress(); await vi.advanceTimersByTimeAsync(2); });
+    expect(host.readIssues.mock.calls.length).toBe(reads);
+    await act(async () => { finish(pageAt([issue(42)])); });
+    await settle();
+    expect(refresh().props.disabled).toBe(false);
+    expect(refresh().findByType('Text' as any).children.join('')).toBe('Refresh issues');
   });
 });

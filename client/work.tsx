@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import type { PluginClientContext, PluginScreenProps } from '@getpaseo/plugin/client';
 import { useRpc } from '@getpaseo/plugin/client';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { DeploymentCatalog } from '../shared/common';
 import {
   issueBrowseStateTitle, issueBrowseStates, issueLabelShortcuts, issueReadRepair, issuesList,
   type IssueBrowseState, type IssuePage, type IssueSummary,
 } from '../shared/issues';
 import { useObservationQuery } from './observation';
+import { ActionButton } from './action-button';
 import { GitHubEvidenceLink } from './github-evidence-link';
 import { LabelChips } from './label-chip';
 import { HostServices, serviceAttention, useHostServicesQuery } from './host-overview';
@@ -41,11 +42,8 @@ function WorkIssue({ issue, repo, hostId, deploymentId, theme, openScreen }: {
       </View>
     </View>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Inspect issue ${issue.number}`}
-        style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.65 : 1 })}
-        onPress={() => openScreen({ screenId: 'issues', params: { deploymentId, issue: String(issue.number) } })}>
-        <Text style={text}>Inspect issue</Text>
-      </Pressable>
+      <ActionButton label="Inspect issue" accessibilityName={`Inspect issue ${issue.number}`} theme={theme}
+        onPress={() => openScreen({ screenId: 'issues', params: { deploymentId, issue: String(issue.number) } })} />
       <View style={{ minHeight: 44, justifyContent: 'center' }}>
         <GitHubEvidenceLink key={JSON.stringify([hostId, deploymentId, repo, 'issues', issue.number])}
           repo={repo} kind="issues" number={issue.number} url={issue.url} theme={theme} />
@@ -119,26 +117,21 @@ export function Work(props: PluginScreenProps & {
     <Text accessibilityRole="header" testID="orbi-work-heading" style={text}>{`Work · ${props.host.label}`}</Text>
     {selected !== null && <Text testID="orbi-work-repository" style={text}>{`Repository: ${selected.label} (${selected.repo})`}</Text>}
     {available.length > 1 && <View testID="orbi-work-repositories" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {available.map(entry => <Pressable key={entry.id} accessibilityRole="button" accessibilityLabel={`Work repository ${entry.label}`}
-        accessibilityState={{ selected: entry.id === selected?.id }}
-        style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, borderWidth: entry.id === selected?.id ? 2 : 1, borderColor: props.theme.colors.foreground }}
-        onPress={() => setChosen(entry.id)}><Text style={text}>{`${entry.label} (${entry.repo})`}</Text></Pressable>)}
+      {available.map(entry => <ActionButton key={entry.id} label={`${entry.label} (${entry.repo})`} accessibilityName={`Work repository ${entry.label}`}
+        selected={entry.id === selected?.id} theme={props.theme} onPress={() => setChosen(entry.id)} />)}
     </View>}
     <Text testID="orbi-work-services-summary" style={text}>{summary}</Text>
     {selected === null ? <Text testID="orbi-work-blocked" style={text}>{blocked}</Text> : <>
       <Text accessibilityRole="header" testID="orbi-work-issues-heading" style={text}>{issueHeading(browseState)}</Text>
       <View testID="orbi-work-filters" style={{ gap: 8 }}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {issueBrowseStates.map(next => <Pressable key={next} accessibilityRole="button" accessibilityLabel={`Browse ${next} issues`}
-            accessibilityState={{ selected: browseState === next }}
-            style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, borderWidth: browseState === next ? 2 : 1, borderColor: props.theme.colors.foreground }}
-            onPress={() => { setBrowseState(next); }}><Text style={text}>{issueBrowseStateTitle(next)}</Text></Pressable>)}
+          {issueBrowseStates.map(next => <ActionButton key={next} label={issueBrowseStateTitle(next)} accessibilityName={`Browse ${next} issues`}
+            selected={browseState === next} theme={props.theme} onPress={() => { setBrowseState(next); }} />)}
         </View>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {[null, ...issueLabelShortcuts].map(next => <Pressable key={next ?? 'all'} accessibilityRole="button"
-            accessibilityLabel={next === null ? 'All labels' : `Filter by label ${next}`} accessibilityState={{ selected: label === next }}
-            style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, borderWidth: label === next ? 2 : 1, borderColor: props.theme.colors.foreground }}
-            onPress={() => setLabel(next)}><Text style={text}>{next ?? 'All labels'}</Text></Pressable>)}
+          {[null, ...issueLabelShortcuts].map(next => <ActionButton key={next ?? 'all'} label={next ?? 'All labels'}
+            accessibilityName={next === null ? 'All labels' : `Filter by label ${next}`} selected={label === next}
+            theme={props.theme} onPress={() => setLabel(next)} />)}
         </View>
       </View>
       <View testID="orbi-work-issues" style={{ gap: 4 }}>
@@ -152,24 +145,17 @@ export function Work(props: PluginScreenProps & {
         {empty && <Text testID="orbi-work-empty" style={text}>{page.hasNextPage
           ? 'No issues on this page. Pull-request entries are excluded; continue in Issues.'
           : `No ${browseState === 'all' ? '' : `${browseState} `}issues found.`}</Text>}
-        {page?.hasNextPage && <Pressable accessibilityRole="button" accessibilityLabel="Continue browsing issues"
-          style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.65 : 1 })}
-          onPress={() => props.openScreen({ screenId: 'issues', params: { deploymentId: selected.id } })}>
-          <Text style={text}>More issues are available; continue in Issues.</Text>
-        </Pressable>}
-        <Pressable accessibilityRole="button" accessibilityLabel="Refresh issues" disabled={!issues.canRefresh}
-          accessibilityState={{ disabled: !issues.canRefresh, busy: issues.refreshing }}
-          style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', borderWidth: 1, borderColor: props.theme.colors.foreground, borderRadius: 8, paddingHorizontal: 12, opacity: !issues.canRefresh ? 0.5 : pressed ? 0.7 : 1 })}
-          onPress={issues.refresh}><Text style={text}>{issues.refreshing ? 'Refreshing' : 'Refresh issues'}</Text></Pressable>
+        {page?.hasNextPage && <ActionButton label="More issues are available; continue in Issues." accessibilityName="Continue browsing issues"
+          theme={props.theme} onPress={() => props.openScreen({ screenId: 'issues', params: { deploymentId: selected.id } })} />}
+        <ActionButton label={issues.refreshing ? 'Refreshing' : 'Refresh issues'} accessibilityName="Refresh issues"
+          disabled={!issues.canRefresh} busy={issues.refreshing} theme={props.theme} onPress={() => { void issues.refresh(); }} />
         {props.connected && !props.foreground && <Text style={text}>App is in the background. Issue reads are paused.</Text>}
       </View>
     </>}
     <View testID="orbi-work-services" style={{ gap: 8 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Services (technical details)" accessibilityState={{ expanded: servicesOpen }}
-        style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.65 : 1 })}
-        onPress={() => setServicesOpen(value => !value)}>
-        <Text style={text}>{servicesOpen ? 'Hide services (technical details)' : 'Services (technical details)'}</Text>
-      </Pressable>
+      <ActionButton label={servicesOpen ? 'Hide services (technical details)' : 'Services (technical details)'}
+        accessibilityName="Services (technical details)" expanded={servicesOpen} theme={props.theme}
+        onPress={() => setServicesOpen(value => !value)} />
       {servicesOpen && <HostServices
         key={`${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`} surfaceKey={`${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`}
         hostId={props.host.id} hostLabel={props.host.label} connected={props.connected} foreground={props.foreground}

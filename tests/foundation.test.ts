@@ -429,7 +429,8 @@ describe('package_and_registration', () => {
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(0);
         if (setup) expect(json()).toContain(catalog.state);
         const action = renderer.root.findByProps({ accessibilityLabel: 'Set up repositories' });
-        expect(action.props).toMatchObject({ accessibilityRole: 'button', style: { minHeight: 44 } });
+        expect(action.props).toMatchObject({ accessibilityRole: 'button' });
+        expect(action.props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
         await act(async () => action.props.onPress());
       }
       expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(setup ? 1 : 0);
