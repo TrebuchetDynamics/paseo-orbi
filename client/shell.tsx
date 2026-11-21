@@ -73,8 +73,8 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} openScreen={openScreen} query={inventory}
     />}
     <View testID="orbi-catalog" style={{ gap: 8 }}>
-      {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Repository setup" accessibilityState={{ expanded: setupExpanded }}
-        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setSetupHost(setupExpanded ? null : props.host.id)}><Text style={text}>Repository setup</Text></Pressable>}
+      {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Set up repositories" accessibilityState={{ expanded: setupExpanded }}
+        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setSetupHost(setupExpanded ? null : props.host.id)}><Text style={text}>Set up repositories</Text></Pressable>}
       {route !== 'fleet' && <Text style={text}>Selected host: {props.host.label}</Text>}
       {!connected && route !== 'fleet' && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
       {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
@@ -83,8 +83,9 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       {catalog && (route !== 'fleet' || catalog.state !== 'configured' || setupExpanded) && <Text style={text}>Catalog: {catalog.state}</Text>}
       {setupExpanded && catalog && catalog.state !== 'configured' && <View accessibilityLabel="Orbi setup" style={{ gap: 8 }}>
         <Text style={text}>{catalog.state === 'unconfigured'
-          ? 'Unconfigured: ask the operator to provide an authorized JSON file through PASEO_ORBI_CONFIG and explicitly reload this plugin.'
-          : 'Invalid configuration: ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
+          ? 'Issue reads are unavailable: no validated repository catalog is configured for this host. Unconfigured: ask the operator to provide an authorized JSON file through PASEO_ORBI_CONFIG and explicitly reload this plugin.'
+          : 'Issue reads are unavailable: the configured repository catalog is invalid. Invalid configuration: ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
+        <Text style={text}>Host service inventory is independent: Overview still shows discovered Orbi units without a repository catalog.</Text>
         <Text style={text}>Refresh only reads the current startup catalog. It does not configure authorization or reload the plugin.</Text>
       </View>}
       {!catalog && setupExpanded && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}

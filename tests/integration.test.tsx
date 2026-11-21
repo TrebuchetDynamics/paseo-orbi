@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import serverEntry from '../index.server';
 import clientEntry from '../index.client';
 import { issuesList, issuesGet } from '../shared/issues';
+import { servicesInventory } from '../shared/services';
 import { ReadError, ReadPorts } from '../server/read-ports';
 import { fixture } from './helpers/fixtures';
 import records from './fixtures/runs/records.json';
@@ -249,6 +250,61 @@ it('four_views_read_only_journey', async () => {
   await vi.advanceTimersByTimeAsync(61000); expect(processPort).toHaveBeenCalledTimes(finalCalls);
   stopClient(); expect(removed).toHaveBeenCalledTimes(5);
   await stopServer(); expect(dispose).toHaveBeenCalled();
+});
+
+it('validated catalog enables bounded exact-repo issue reads while discovery-only inventory stays independent', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+  const f = await fixture(); cleanups.push(f.cleanup);
+  vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+  const operations: Array<{ id: string; operation: { kind: string; resource?: string; state?: string; page?: number } }> = [];
+  const processPort = vi.spyOn(ReadPorts.prototype, 'process').mockImplementation(async (id, operation) => {
+    operations.push({ id, operation });
+    if (operation.kind !== 'gh-api-get' || operation.resource !== 'issues') throw new Error('unexpected operation');
+    return response([{ number: 42, title: 'Issue 42', state: 'open', updated_at: stamp, labels: [{ name: 'ai-ready' }] }]);
+  });
+  const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockResolvedValue(
+    'orbi-demo@1.service loaded active running Orbi Runner\norbi-demo@1.timer loaded active waiting Orbi Timer\n');
+  const stops: Array<() => Promise<void>> = [];
+  cleanups.push(async () => { for (const stop of stops.splice(0)) await stop(); });
+  const register = () => {
+    const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+    stops.push(serverEntry({ handle: (contract: { name: string }, handler: (input: unknown) => Promise<unknown>) => { handlers.set(contract.name, handler); } } as unknown as PluginServerContext));
+    return handlers;
+  };
+  // Operator-reviewed catalog through the supported startup path: the exact
+  // repository association is the TOML source_repos value, never a service slug.
+  const configured = register();
+  expect(await configured.get('deployments.list')!({})).toMatchObject({
+    state: 'configured', entries: [{ id: 'demo', repo: f.entry.repo, status: 'available' }],
+  });
+  expect(f.toml).toContain(`source_repos = ["${f.entry.repo}"]`);
+  const page = issuesList.output.parse(await configured.get('issues.list')!({ deploymentId: 'demo', page: 1 }));
+  expect(page).toMatchObject({
+    state: 'available',
+    data: { repo: f.entry.repo, page: 1, hasNextPage: false, records: [{ number: 42, labels: ['ai-ready'], state: 'Ready candidate' }] },
+  });
+  expect(operations).toEqual([{ id: 'demo', operation: { kind: 'gh-api-get', resource: 'issues', state: 'all', page: 1 } }]);
+  expect(processPort.mock.calls[0]?.[2]).toBe(10000);
+  // Bounded page scope: the typed contract refuses out-of-range pages before any read.
+  expect(issuesList.input.parse({ deploymentId: 'demo', page: 10 })).toEqual({ deploymentId: 'demo', page: 10 });
+  for (const invalid of [0, 11]) expect(() => issuesList.input.parse({ deploymentId: 'demo', page: invalid })).toThrow();
+  // Discovery-only inventory works with the catalog and never resolves a repository.
+  const inventory = servicesInventory.output.parse(await configured.get('services.inventory')!({}));
+  expect(inventory).toMatchObject({ state: 'complete', groups: [{ label: 'orbi-demo', association: 'matched', deploymentId: 'demo' }] });
+  expect(processPort).toHaveBeenCalledTimes(1);
+  await stops.pop()!();
+  // Without a validated catalog there is no issue-read capability; the discovery
+  // inventory still answers independently of PASEO_ORBI_CONFIG.
+  vi.stubEnv('PASEO_ORBI_CONFIG', undefined);
+  const unconfigured = register();
+  expect(await unconfigured.get('deployments.list')!({})).toEqual({ state: 'unconfigured', entries: [], problems: [] });
+  const githubReads = processPort.mock.calls.length;
+  await expect(unconfigured.get('issues.list')!({ deploymentId: 'demo', page: 1 })).rejects.toThrow('deployment_unavailable');
+  expect(processPort.mock.calls.length).toBe(githubReads);
+  const independent = servicesInventory.output.parse(await unconfigured.get('services.inventory')!({}));
+  expect(independent).toMatchObject({ state: 'complete', groups: [{ label: 'orbi-demo' }] });
+  expect(processPort.mock.calls.length).toBe(githubReads);
+  expect(hostInventory).toHaveBeenCalledTimes(4);
 });
 
 it.each(pins)('source_profile $fixture fails closed before telemetry', async pin => {

@@ -423,7 +423,9 @@ describe('package_and_registration', () => {
       if (screen.id === 'fleet') {
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(0);
         if (setup) expect(json()).toContain(catalog.state);
-        await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Repository setup' }).props.onPress());
+        const action = renderer.root.findByProps({ accessibilityLabel: 'Set up repositories' });
+        expect(action.props).toMatchObject({ accessibilityRole: 'button', style: { minHeight: 44 } });
+        await act(async () => action.props.onPress());
       }
       expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(setup ? 1 : 0);
       expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(setup ? 0 : 1);
@@ -431,6 +433,14 @@ describe('package_and_registration', () => {
         expect(json()).toContain('PASEO_ORBI_CONFIG'); expect(json()).toContain('explicitly reload');
         expect(json()).toContain('does not configure authorization or reload');
         expect(json()).not.toMatch(/select a repository|Fleet — read-only/);
+        // One setup action explains why issue reads are unavailable while the
+        // discovery-only host service inventory keeps working independently. It
+        // never claims to save settings or discover authorization.
+        const setupText = () => renderer.root.findByProps({ accessibilityLabel: 'Orbi setup' })
+          .findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+        expect(setupText()).toContain('Issue reads are unavailable');
+        expect(setupText()).toContain('Host service inventory is independent');
+        expect(setupText()).not.toMatch(/Save|auto-?discover|Discover repositories/i);
       } else expect(json()).toContain(catalog.entries.length ? 'config_mismatch' : 'No configured deployments.');
       expect(json()).not.toMatch(/Observation status:|Last success:|Observed:|SECRET_CANARY/);
       expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
