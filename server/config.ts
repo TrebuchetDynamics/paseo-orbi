@@ -1,17 +1,37 @@
 import { dirname, resolve } from 'node:path';
 import { parse } from 'smol-toml';
 import { z } from 'zod';
-import { DeploymentId, type DeploymentCatalog, type Problem } from '../shared/common';
+import { DeploymentId, type ControlAction, type DeploymentCatalog, type Problem } from '../shared/common';
 import { absolutePath, boundedDirectory, readBytes, ReadError } from './read-ports';
 import { compatible, type SourceProfile } from './compatibility';
 
 const repoPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9_.-]{1,100}$/;
+// Operator control grant. Absent means the deployment stays read-only. A grant
+// names approved actions and one exact lifecycle argv per action; \{unit\} is the
+// single placeholder, replaced only by the server-derived validated unit name.
+// There is no shell, no glob, no environment expansion and no request-supplied argv.
+const argvToken = /^[^\p{C}]{1,200}$/u;
+const controlGrantSchema = z.object({
+  // The pinned host cannot distinguish viewers from operators, so the operator
+  // must state explicitly that admitted clients of this host may operate the
+  // approved targets. Without that statement no action is ever offered.
+  admittedClientsOperate: z.literal(true),
+  actions: z.array(z.enum(['start', 'stop', 'restart'])).min(1).max(3),
+  commands: z.object({
+    start: z.array(z.string()).min(1).max(8).optional(),
+    stop: z.array(z.string()).min(1).max(8).optional(),
+    restart: z.array(z.string()).min(1).max(8).optional(),
+  }).strict(),
+}).strict();
 const identity = z.object({
   id: DeploymentId, label: z.string().min(1).max(80).regex(/^[^\p{C}\p{Zl}\p{Zp}]+$/u),
   repo: z.string().regex(repoPattern).refine(v => !['.', '..'].includes(v.split('/')[1])),
   adapter: z.string().min(1).max(64).regex(/^[a-zA-Z0-9._-]+$/),
   configPath: z.string(), engineSourcePath: z.string(), repoDir: z.string(), deployHome: z.string(),
   trustedPublisherLogins: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?$/)).max(32),
+  // Validated entry-locally by parseControlGrant(), so a malformed grant rejects
+  // only its own deployment instead of hiding the whole catalog.
+  controls: z.unknown().optional(),
 }).strict();
 const configuration = z.object({ schema: z.literal(1), deployments: z.array(identity) }).strict();
 // Display-only association candidate for the host service inventory. A claim is
@@ -21,12 +41,45 @@ const configuration = z.object({ schema: z.literal(1), deployments: z.array(iden
 export type UnitFamilyClaim = Readonly<{
   id: string; unitName: string | null; status: 'available' | 'unsupported_source_profile';
 }>;
+// Explicit operator mutation authority for one deployment. It is separate from
+// every read capability: monitoring works without it and it grants no read.
+export type ControlGrantSpec = Readonly<{
+  actions: readonly ControlAction[];
+  commands: Readonly<Partial<Record<ControlAction, readonly string[]>>>;
+}>;
+export type ControlGrant =
+  | Readonly<{ ok: true; argv: readonly string[] }>
+  | Readonly<{ ok: false; reason: 'deployment_unavailable' | 'action_not_approved' | 'target_out_of_range' }>;
 export type ValidatedDeployment = Readonly<{
   id: string; repo: string; configPath: string; engineSourcePath: string; repoDir: string; deployHome: string;
   sourceProfile: SourceProfile; unitName: string | null; capacity: number; trustedPublisherLogins: readonly string[];
-  worktreeRetainHours: number; keepFailedWorktrees: boolean | null;
+  worktreeRetainHours: number; keepFailedWorktrees: boolean | null; controls: ControlGrantSpec | null;
 }>;
 const problem = (code: Problem['code'], source: Problem['source'] = 'config'): Problem => ({ source, code });
+// Validate the operator grant as inert data. Fail closed: a grant that cannot be
+// bound exactly is a configuration error, never a silently ignored one.
+export function parseControlGrant(value: unknown): ControlGrantSpec | null {
+  if (value === undefined) return null;
+  const parsed = controlGrantSchema.safeParse(value);
+  if (!parsed.success) throw new Error('config_mismatch');
+  const actions = [...parsed.data.actions];
+  if (new Set(actions).size !== actions.length) throw new Error('config_mismatch');
+  const commands = parsed.data.commands;
+  // Exactly one command per approved action and no command for an unapproved one.
+  if (Object.keys(commands).length !== actions.length) throw new Error('config_mismatch');
+  const bound: Partial<Record<ControlAction, readonly string[]>> = {};
+  for (const action of actions) {
+    const argv = commands[action];
+    if (!argv || argv.length === 0) throw new Error('config_mismatch');
+    // Only the single exact `{unit}` token may be substituted; any other brace,
+    // control character or over-long token is refused.
+    if (argv.some(token => !argvToken.test(token) || (/[{}]/.test(token) && token !== '{unit}'))) throw new Error('config_mismatch');
+    if (argv.filter(token => token === '{unit}').length !== 1) throw new Error('config_mismatch');
+    if (!absolutePath(argv[0])) throw new Error('config_mismatch');
+    bound[action] = Object.freeze([...argv]);
+  }
+  return Object.freeze({ actions: Object.freeze(actions), commands: Object.freeze(bound) });
+}
 function tomlPath(value: unknown, base: string) {
   if (typeof value !== 'string' || !value || /[$~\x00-\x1f\x7f]/.test(value)) throw new Error('config_mismatch');
   return resolve(base, value);
@@ -59,10 +112,13 @@ export class ConfigRepository {
       if (signal?.aborted) return invalid('disposed');
       const safe: DeploymentCatalog['entries'][number] = {
         id: entry.id, label: entry.label, repo: entry.repo, adapter: entry.adapter, status: 'invalid_config', problems: [],
+        // Read-only by default: a deployment gains actions only from a valid grant.
+        controls: null,
       };
       catalog.entries.push(safe);
       try {
         if (!absolutePath(entry.configPath)) throw new ReadError('unsafe_path');
+        const controls = parseControlGrant(entry.controls);
         await boundedDirectory(entry.repoDir, signal); await boundedDirectory(entry.deployHome, signal); await boundedDirectory(entry.engineSourcePath, signal);
         const toml = parse((await readBytes(dirname(entry.configPath), entry.configPath, signal)).toString('utf8'));
         const base = dirname(entry.configPath);
@@ -84,11 +140,15 @@ export class ConfigRepository {
         if (typeof worktreeRetainHours !== 'number' || !Number.isFinite(worktreeRetainHours) || worktreeRetainHours <= 0
           || (keepFailedWorktrees !== null && typeof keepFailedWorktrees !== 'boolean')) throw new Error('config_mismatch');
         safe.status = 'available';
+        // Capability projection only: approved actions and the approved slot bound.
+        // The lifecycle argv never leaves the daemon.
+        safe.controls = controls === null ? null : { actions: [...controls.actions], slots: capacity };
         claims.push(Object.freeze({ id: entry.id, unitName, status: 'available' }));
         valid.set(entry.id, Object.freeze({
           id: entry.id, repo: entry.repo, configPath: entry.configPath, engineSourcePath: entry.engineSourcePath,
           repoDir: entry.repoDir, deployHome: entry.deployHome, sourceProfile: entry.adapter as SourceProfile,
           unitName, capacity, worktreeRetainHours, keepFailedWorktrees, trustedPublisherLogins: Object.freeze([...entry.trustedPublisherLogins]),
+          controls,
         }));
       } catch (error) { safe.problems = [problem(error instanceof ReadError ? error.code : 'config_mismatch')]; }
     }
@@ -103,5 +163,21 @@ export class ConfigRepository {
     const deployment = this.deployments.get(id);
     if (!deployment) throw new Error('deployment_unavailable');
     return deployment;
+  }
+  // The only path to mutation authority. It re-checks the deployment, the
+  // approved action and the approved slot bound on every call, and returns the
+  // exact argv with the server-derived unit substituted for the `{unit}` token.
+  // A caller can never supply, extend or override any part of that target.
+  controlGrant(id: string, action: ControlAction, slot: number): ControlGrant {
+    const deployment = this.deployments.get(id);
+    if (!deployment) return { ok: false, reason: 'deployment_unavailable' };
+    const controls = deployment.controls;
+    if (controls === null || !controls.actions.includes(action)) return { ok: false, reason: 'action_not_approved' };
+    if (!Number.isInteger(slot) || slot < 1 || slot > deployment.capacity) return { ok: false, reason: 'target_out_of_range' };
+    const argv = controls.commands[action];
+    if (!argv) return { ok: false, reason: 'action_not_approved' };
+    const prefix = deployment.unitName === null ? 'orbi' : `orbi-${deployment.unitName}`;
+    const unit = `${prefix}@${slot}.service`;
+    return { ok: true, argv: Object.freeze(argv.map(token => token === '{unit}' ? unit : token)) };
   }
 }

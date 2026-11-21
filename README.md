@@ -1,10 +1,12 @@
 # paseo-orbi
 
 [Orbi](https://github.com/orbi-build/orbi) turns GitHub issues into tested pull
-requests. This read-only [Paseo](https://github.com/getpaseo/paseo) plugin shows
-that work in Paseo: which issues are in progress, what happened during a run, and
-why work stopped. It observes local Orbi deployments an operator has explicitly
-authorized, and it never retries, merges, edits or controls them. Work can stop
+requests. This [Paseo](https://github.com/getpaseo/paseo) plugin shows that work
+in Paseo: which issues are in progress, what happened during a run, and why work
+stopped. It observes local Orbi deployments an operator has explicitly
+authorized. It never retries, merges or edits Orbi work. Start, Stop and Restart
+are available only where the operator explicitly granted that action on that
+deployment; without a grant the deployment stays read-only. Work can stop
 deliberately, so not every issue ends in a merge.
 
 **An issue stopped moving?** Look in **Blockers** for the reported reason, then
@@ -12,16 +14,22 @@ deliberately, so not every issue ends in a merge.
 
 ## Views
 
-- **Overview** — host-scoped user service families, configured deployments, one loaded detail with timers/services, recorded health, capacity.
+- **Overview** — host-scoped user service families, configured deployments, one loaded detail with timers/services, recorded health, capacity, and an **Actions** disclosure (Start/Stop/Restart) for a deployment the operator granted controls on.
 - **Issues** — lifecycle pages, trusted structured reports, on-demand dependency evidence.
 - **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks.
 - **Blockers** — reported failures and waits, source attribution, metadata only; no recovery controls.
 
-Version 0.1 is strictly read-only: no timer control, execution-state change,
+Monitoring is read-only: no timer or unit mutation invented by this plugin, no
 merge, Orbi CLI, Git or shell execution, and no raw logs, prompts or reasoning.
-Reported retry safety is never permission to retry; recovery stays
-Orbi/operator-owned. Only deployments already configured on that host are
-visible — the plugin does not discover repositories. Offline checks cover
+Granted Start/Stop/Restart actions run only the operator's own bound Orbi
+lifecycle command, one at a time per deployment, and report a re-observed
+outcome; a timeout is reported as unknown and never retried. Reported retry
+safety is never permission to retry; recovery stays Orbi/operator-owned. Only
+deployments already configured on that host are visible — the plugin does not
+discover repositories. The pinned Paseo host cannot separate viewers from
+operators, so a grant is an explicit statement that every admitted client of
+that host may operate the approved targets; see the
+[operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#service-controls-operator-grant-default-off). Offline checks cover
 all four views; the Linux Electron qualification lane is implemented but has
 not been executed, iOS/Android are deferred, and live installation plus
 installed qualification remain unperformed.
