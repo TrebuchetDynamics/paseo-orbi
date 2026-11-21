@@ -181,7 +181,7 @@ describe('package_and_registration boundaries', () => {
   });
   it('limits transitive runtime capabilities to read-only named imports and fixed RPCs', () => {
     const nodeImports: Record<string, string[]> = {
-      'node:fs': ['constants'], 'node:fs/promises': ['lstat', 'realpath', 'stat', 'open', 'opendir'],
+      'node:fs': ['constants'], 'node:fs/promises': ['lstat', 'realpath', 'stat', 'open', 'opendir', 'statfs'],
       'node:path': ['dirname', 'resolve', 'isAbsolute', 'normalize', 'relative', 'sep'],
       'node:child_process': ['spawn'], 'node:crypto': ['createHash'],
     };
@@ -216,7 +216,7 @@ describe('package_and_registration boundaries', () => {
       }
       visit(source);
     }
-    expect(rpcNames.sort()).toEqual(['blockers.list', 'blockers.read', 'deployments.list', 'fleet.read', 'issues.get', 'issues.list', 'runs.list', 'runs.read', 'services.inventory']);
+    expect(rpcNames.sort()).toEqual(['blockers.list', 'blockers.read', 'deployments.list', 'fleet.read', 'issues.get', 'issues.list', 'runs.list', 'runs.read', 'services.inventory', 'workspace.shortcut']);
     const port = read('server/read-ports.ts');
     expect([...port.matchAll(/command = '([^']+)'/g)].map(m => m[1]).sort()).toEqual(['gh', 'journalctl', 'systemctl']);
     expect(port).toContain("'--method', 'GET'");
@@ -224,6 +224,16 @@ describe('package_and_registration boundaries', () => {
     expect(port).toContain('this.children.size >= 2');
     expect(port).toContain('length > 1024 * 1024');
     expect(port).toContain('timeoutMs > 10000');
+    // Presence/type only: the shortcut adapter has one fd-relative metadata read and
+    // no target read, enumeration, pathname fallback or write capability.
+    const shortcut = read('server/workspace-shortcut.ts');
+    expect(shortcut).toContain('constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW');
+    expect(shortcut).toContain('/proc/self/fd/${held.handle.fd}');
+    expect(shortcut).toContain('PROC_SUPER_MAGIC = 0x9fa0n');
+    // Comments may name the forbidden operations; no call may use them.
+    expect(shortcut.match(/\.(readlink|realpath|opendir|readdir|readFile|writeFile|appendFile|mkdir|unlink|rename)\s*\(/g) ?? []).toEqual([]);
+    expect(port).toContain('new WorkspaceShortcutInspector()');
+    expect(read('shared/workspace-shortcut.ts')).not.toMatch(/directory|target:|readlink/);
   });
   it('has no write, Orbi execution, Git, raw path RPC, or unconstrained command capability', () => {
     for (const file of ['index.server.ts', ...files('server')]) {

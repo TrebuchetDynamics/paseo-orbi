@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, normalize, resolve } from 'node:path';
 import { parse } from 'smol-toml';
 import { z } from 'zod';
 import { DeploymentId, type DeploymentCatalog, type Problem } from '../shared/common';
@@ -12,6 +12,9 @@ const identity = z.object({
   adapter: z.string().min(1).max(64).regex(/^[a-zA-Z0-9._-]+$/),
   configPath: z.string(), engineSourcePath: z.string(), repoDir: z.string(), deployHome: z.string(),
   trustedPublisherLogins: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?$/)).max(32),
+  // Optional additive descriptor. Any value is parsed by shortcutDescriptor below so a
+  // malformed descriptor disables only the shortcut instead of the whole catalog.
+  workspaceShortcut: z.unknown().optional(),
 }).strict();
 const configuration = z.object({ schema: z.literal(1), deployments: z.array(identity) }).strict();
 // Display-only association candidate for the host service inventory. A claim is
@@ -21,12 +24,37 @@ const configuration = z.object({ schema: z.literal(1), deployments: z.array(iden
 export type UnitFamilyClaim = Readonly<{
   id: string; unitName: string | null; status: 'available' | 'unsupported_source_profile';
 }>;
+// One operator-designated shortcut: a canonical absolute parent directory and a
+// single leaf basename. The target is never part of this descriptor.
+export type ShortcutDescriptor = Readonly<{ directory: string; name: string }>;
 export type ValidatedDeployment = Readonly<{
   id: string; repo: string; configPath: string; engineSourcePath: string; repoDir: string; deployHome: string;
   sourceProfile: SourceProfile; unitName: string | null; capacity: number; trustedPublisherLogins: readonly string[];
   worktreeRetainHours: number; keepFailedWorktrees: boolean | null;
+  workspaceShortcut: ShortcutDescriptor | null; shortcutProblem: Problem | null;
 }>;
 const problem = (code: Problem['code'], source: Problem['source'] = 'config'): Problem => ({ source, code });
+// Basename bound: 1-128 ASCII characters, alphanumeric first, then alphanumeric/dot/
+// underscore/hyphen. No separators, controls, leading dot/dash or dot segment fits.
+const shortcutName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const DIRECTORY_LIMIT = 4096;
+const COMPONENT_LIMIT = 64;
+// Syntactic validation only: nothing is touched or resolved here. The configured
+// directory is a dedicated canonical parent, never '/' and never a dot segment.
+export function shortcutDescriptor(value: unknown): ShortcutDescriptor | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).sort().join(',') !== 'directory,name') return null;
+  const { directory, name } = raw;
+  if (typeof directory !== 'string' || typeof name !== 'string') return null;
+  if (!isAbsolute(directory) || normalize(directory) !== directory || directory === '/') return null;
+  if (/[\x00-\x1f\x7f]/.test(directory) || Buffer.byteLength(directory, 'utf8') > DIRECTORY_LIMIT) return null;
+  const components = directory.slice(1).split('/');
+  if (components.length > COMPONENT_LIMIT) return null;
+  if (components.some(component => !component || component === '.' || component === '..')) return null;
+  if (!shortcutName.test(name)) return null;
+  return Object.freeze({ directory, name });
+}
 function tomlPath(value: unknown, base: string) {
   if (typeof value !== 'string' || !value || /[$~\x00-\x1f\x7f]/.test(value)) throw new Error('config_mismatch');
   return resolve(base, value);
@@ -56,6 +84,8 @@ export class ConfigRepository {
     const valid = new Map<string, ValidatedDeployment>();
     const claims: UnitFamilyClaim[] = [];
     for (const entry of parsed.data.deployments) {
+      const shortcut = shortcutDescriptor(entry.workspaceShortcut);
+      const shortcutProblem = entry.workspaceShortcut === undefined || shortcut !== null ? null : problem('shortcut_invalid');
       if (signal?.aborted) return invalid('disposed');
       const safe: DeploymentCatalog['entries'][number] = {
         id: entry.id, label: entry.label, repo: entry.repo, adapter: entry.adapter, status: 'invalid_config', problems: [],
@@ -85,10 +115,12 @@ export class ConfigRepository {
           || (keepFailedWorktrees !== null && typeof keepFailedWorktrees !== 'boolean')) throw new Error('config_mismatch');
         safe.status = 'available';
         claims.push(Object.freeze({ id: entry.id, unitName, status: 'available' }));
+        if (shortcutProblem) safe.problems = [shortcutProblem];
         valid.set(entry.id, Object.freeze({
           id: entry.id, repo: entry.repo, configPath: entry.configPath, engineSourcePath: entry.engineSourcePath,
           repoDir: entry.repoDir, deployHome: entry.deployHome, sourceProfile: entry.adapter as SourceProfile,
           unitName, capacity, worktreeRetainHours, keepFailedWorktrees, trustedPublisherLogins: Object.freeze([...entry.trustedPublisherLogins]),
+          workspaceShortcut: shortcut, shortcutProblem,
         }));
       } catch (error) { safe.problems = [problem(error instanceof ReadError ? error.code : 'config_mismatch')]; }
     }
