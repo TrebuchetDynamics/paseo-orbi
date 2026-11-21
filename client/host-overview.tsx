@@ -165,18 +165,25 @@ function failureSummary(group: InventoryGroup): string | null {
   const label = first.slot === null ? `${first.kind} failed` : `Slot ${first.slot} · ${first.kind} failed`;
   return failures.length === 1 ? label : `${label} · +${failures.length - 1} more`;
 }
+// A numeric slot has two subjects: the worker that runs a delivery and the timer
+// that schedules the check. Both are named in reading order, and a fact about one
+// never implies a fact about the other.
 function slotState(unit: InventoryUnit | undefined, timer = false): string {
-  const prefix = timer ? 'Timer ' : '';
-  if (!unit) return timer ? 'Timer not observed' : 'Service not observed';
+  const subject = timer ? 'Timer' : 'Worker';
+  if (!unit) return `${subject} not observed`;
   const runtime = unit.runtime;
-  if (!runtime) return `${prefix}${timer ? 'unknown' : 'Unknown'}`;
-  if (runtime.activeState === 'failed' || runtime.subState === 'failed') return `${prefix}${timer ? 'failed' : 'Failed'}`;
-  if (runtime.loadState === 'not-found') return timer ? 'Timer not found' : 'Service not found';
-  if (runtime.loadState !== 'loaded') return `${prefix}Load ${runtime.loadState} · ${runtime.activeState}/${runtime.subState}`;
-  if (runtime.activeState === 'inactive' && runtime.subState === 'dead') return timer ? 'Timer idle' : 'Idle';
-  if (runtime.activeState === 'active' && runtime.subState === (timer ? 'waiting' : 'running')) return timer ? 'Timer waiting' : 'Running';
-  return `${prefix}${runtime.activeState}/${runtime.subState}`;
+  if (!runtime) return `${subject} unknown`;
+  if (runtime.activeState === 'failed' || runtime.subState === 'failed') return `${subject} failed`;
+  if (runtime.loadState === 'not-found') return `${subject} not found`;
+  if (runtime.loadState !== 'loaded') return `${subject} load ${runtime.loadState} · ${runtime.activeState}/${runtime.subState}`;
+  if (runtime.activeState === 'inactive' && runtime.subState === 'dead') return `${subject} idle`;
+  if (runtime.activeState === 'active' && runtime.subState === (timer ? 'waiting' : 'running')) return timer ? 'Timer waiting' : 'Worker running';
+  return `${subject} ${runtime.activeState}/${runtime.subState}`;
 }
+// One explanation for the whole list, not once per slot: the two subjects are
+// parts of one slot, so neither an idle worker nor a waiting timer is a second
+// service and a waiting timer does not establish that an issue is queued.
+const slotExplanation = 'The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.';
 function slotLines(group: InventoryGroup): string[] {
   const slots = new Map<string, { service?: InventoryUnit; timer?: InventoryUnit }>();
   for (const unit of group.units) {
@@ -381,6 +388,9 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
   const entry = group === null ? null : authorizedEntry(group, entries);
+  // Only a group with numeric slots gets the explanation: an absent slot is not
+  // invented and an empty list gains no diagnostic clutter.
+  const slots = group === null ? [] : slotLines(group);
   return <View testID="orbi-service-details" style={{ gap: 8 }}>
     <Text accessibilityRole="header" testID="orbi-service-details-heading" style={text}>{`Service details · ${hostLabel}`}</Text>
     <ActionButton label="Back to services" accessibilityName="Back to services" theme={theme} onPress={onBack} />
@@ -390,7 +400,8 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
         <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
         {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
         <Text style={text}>{associationText(group, entry)}</Text>
-        {slotLines(group).map(line => <Text key={line} style={text}>{line}</Text>)}
+        {slots.length > 0 && <Text testID="orbi-service-slot-explanation" style={text}>{slotExplanation}</Text>}
+        {slots.map(line => <Text key={line} style={text}>{line}</Text>)}
         <Text style={text}>Unit activity does not establish issue delivery. Raw unit data follows.</Text>
         <View testID="orbi-service-units" style={{ gap: 2 }}>
           {group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={secondary}>{unitLine(unit)}</Text>)}

@@ -68,9 +68,10 @@ test(titles[0], async ({ page, lease }) => {
   // Keyboard-only diagnostics; raw unit data stays off every row.
   await pressEnter(page, 'button', 'Details for Example/project');
   await expect(page.getByTestId('orbi-service-details-heading')).toHaveText(/^Service details · /);
-  await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toBeVisible();
-  await expect(page.getByText('Slot 2 · activating/start · Timer failed', { exact: true })).toBeVisible();
-  await expect(page.getByText('Slot 3 · active/exited · Timer not observed', { exact: true })).toBeVisible();
+  await expect(page.getByText('The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 1 · Worker running · Timer waiting', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 2 · Worker activating/start · Timer failed', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 3 · Worker active/exited · Timer not observed', { exact: true })).toBeVisible();
   await expect(page.getByTestId('orbi-service-units')).toContainText('orbi-demo@1.service');
   // Back restores the same list, in the same failure-first order.
   await pressEnter(page, 'button', 'Back to services');
@@ -166,16 +167,16 @@ test(titles[6], async ({ page, lease }) => {
   await switchHost(page, primary);
   await expect(page.getByTestId('orbi-services-heading')).toHaveText('Services · Qualification');
   await pressEnter(page, 'button', 'Details for Example/project');
-  await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 1 · Worker running · Timer waiting', { exact: true })).toBeVisible();
   await page.getByTestId('plugin-host-filter-trigger').click();
   await page.getByRole('button', { name: 'Qualification', exact: true }).nth(secondary).click();
   await expect(page.getByTestId('orbi-services-heading')).toHaveText('Services · Qualification');
   // Identical labels: only the selected host identity decides the rows, and the
   // previous host's diagnostic view never survives the switch.
   await expect(page.getByTestId('orbi-service-details')).toHaveCount(0);
-  await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Slot 1 · Worker running · Timer waiting', { exact: true })).toHaveCount(0);
   await pressEnter(page, 'button', 'Details for Example/project');
-  await expect(page.getByText('Slot 4 · Running · Timer waiting', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 4 · Worker running · Timer waiting', { exact: true })).toBeVisible();
 });
 
 test(titles[7], async ({ page, lease, network }) => {
@@ -190,9 +191,9 @@ test(titles[7], async ({ page, lease, network }) => {
   await pressEnter(page, 'button', 'Refresh services');
   await switchHost(page, secondary);
   await pressEnter(page, 'button', 'Details for Example/project');
-  await expect(page.getByText('Slot 4 · Running · Timer waiting', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 4 · Worker running · Timer waiting', { exact: true })).toBeVisible();
   await page.waitForTimeout(2200);
-  await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Slot 1 · Worker running · Timer waiting', { exact: true })).toHaveCount(0);
   await setScenario(a, 'available');
   // Back restores the same host-B list before the disconnect.
   await pressEnter(page, 'button', 'Back to services');

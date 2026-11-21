@@ -155,13 +155,13 @@ describe('Services screen without accordions', () => {
     expect(host.readInventory.mock.calls.length).toBe(reads);
     expect(host.readControl).not.toHaveBeenCalled();
     const details = text(renderer);
-    expect(details).toContain('Slot 1 · Idle · Timer waiting');
-    expect(details).toContain('Slot 2 · active/exited · Timer not observed');
-    expect(details).toContain('Slot 3 · Unknown · Timer not observed');
-    expect(details).toContain('Slot 4 · Running · Timer failed');
-    expect(details.indexOf('Slot 4 · Running · Timer failed')).toBeLessThan(details.indexOf('Slot 1 · Idle · Timer waiting'));
-    expect(details).toContain('Slot 01 · activating/start · Timer not observed');
-    expect(details).toContain('Slot 10 · Service not observed · Timer waiting');
+    expect(details).toContain('Slot 1 · Worker idle · Timer waiting');
+    expect(details).toContain('Slot 2 · Worker active/exited · Timer not observed');
+    expect(details).toContain('Slot 3 · Worker unknown · Timer not observed');
+    expect(details).toContain('Slot 4 · Worker running · Timer failed');
+    expect(details.indexOf('Slot 4 · Worker running · Timer failed')).toBeLessThan(details.indexOf('Slot 1 · Worker idle · Timer waiting'));
+    expect(details).toContain('Slot 01 · Worker activating/start · Timer not observed');
+    expect(details).toContain('Slot 10 · Worker not observed · Timer waiting');
     expect(details).toContain('orbi@.service: runtime not observed; unit file enabled (template, not a running service)');
     expect(details).toContain('Discovery is not authority');
     expect(details).toContain('Unit activity does not establish issue delivery');
@@ -170,6 +170,73 @@ describe('Services screen without accordions', () => {
     expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
     expect(detailRows(renderer).map(node => node.props.testID)).toEqual(['orbi-family-orbi']);
     expect(rowPage(renderer, 'orbi')).not.toContain('orbi@');
+  });
+
+  it('names the worker and the timer in each slot and explains both once before the summaries', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
+      unit('orbi@3.service', 'service', 'failed', 'failed'),
+      unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@1.timer', 'timer', 'active', 'waiting'),
+    ])] }));
+    const { renderer, press } = await render();
+    await press('Details for orbi');
+    const details = text(renderer);
+    expect(details).toContain('Slot 3 · Worker failed · Timer not observed');
+    expect(details).toContain('Slot 1 · Worker idle · Timer waiting');
+    expect(details.indexOf('Slot 3 · Worker failed · Timer not observed')).toBeLessThan(details.indexOf('Slot 1 · Worker idle · Timer waiting'));
+    // One explanation for the list, in reading order before every slot summary.
+    const explanation = renderer.root.findAllByProps({ testID: 'orbi-service-slot-explanation' });
+    expect(explanation).toHaveLength(1);
+    expect(explanation[0].props.children).toBe('The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.');
+    expect(details.indexOf('The timer schedules a check.')).toBeLessThan(details.indexOf('Slot 3 · Worker failed'));
+    expect(details.match(/The timer schedules a check\./g)).toHaveLength(1);
+    // Waiting is a timer fact only: it never claims a queued issue or a second worker.
+    expect(details).toContain('Unit activity does not establish issue delivery');
+    expect(details).not.toMatch(/queued|two workers run/i);
+  });
+
+  it('changes only the worker fact when an idle worker starts and the timer keeps waiting', async () => {
+    const group = (worker: [string, string]) => inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
+      unit('orbi@1.service', 'service', ...worker), unit('orbi@1.timer', 'timer', 'active', 'waiting'),
+    ])] });
+    host.readInventory.mockResolvedValue(group(['inactive', 'dead']));
+    const { renderer, press } = await render();
+    await press('Details for orbi');
+    expect(text(renderer)).toContain('Slot 1 · Worker idle · Timer waiting');
+    host.readInventory.mockResolvedValue(group(['active', 'running']));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
+    const details = text(renderer);
+    expect(details).toContain('Slot 1 · Worker running · Timer waiting');
+    expect(details).not.toContain('Worker idle');
+    expect(details).toContain('Timer waiting');
+  });
+
+  it('keeps an unobserved, transitional or unreadable worker named as the worker instead of claiming it stopped', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
+      unit('orbi@1.service', 'service', null, null),
+      unit('orbi@2.service', 'service', 'active', 'exited'),
+      unit('orbi@3.service', 'service', 'inactive', 'dead', 'error'),
+      unit('orbi@4.timer', 'timer', 'active', 'waiting'),
+    ])] }));
+    const { renderer, press } = await render();
+    await press('Details for orbi');
+    const details = text(renderer);
+    expect(details).toContain('Slot 1 · Worker unknown · Timer not observed');
+    expect(details).toContain('Slot 2 · Worker active/exited · Timer not observed');
+    expect(details).toContain('Slot 3 · Worker load error · inactive/dead · Timer not observed');
+    expect(details).toContain('Slot 4 · Worker not observed · Timer waiting');
+    expect(details).not.toMatch(/Worker (?:stopped|not running)/i);
+    expect(details).not.toMatch(/Idle/);
+  });
+
+  it('adds no slot explanation when the group has no numeric slot', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
+      unit('orbi@.service', 'service', null, null),
+    ])] }));
+    const { renderer, press } = await render();
+    await press('Details for orbi');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-slot-explanation' })).toHaveLength(0);
+    expect(text(renderer)).not.toContain('The timer schedules a check.');
+    expect(text(renderer)).toContain('orbi@.service: runtime not observed');
   });
 
   it('does not infer absent counterparts from partial inventory and retains partial evidence as a success', async () => {
@@ -181,8 +248,8 @@ describe('Services screen without accordions', () => {
     expect(text(renderer)).toContain('0 of 1 observed groups need attention');
     await press('Details for orbi');
     const details = text(renderer);
-    expect(details).toContain('Slot 1 · Idle · Timer not observed');
-    expect(details).toContain('Slot 2 · Service not observed · Timer waiting');
+    expect(details).toContain('Slot 1 · Worker idle · Timer not observed');
+    expect(details).toContain('Slot 2 · Worker not observed · Timer waiting');
     expect(details).not.toMatch(/missing|not found/);
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({ state: 'partial', lastSuccessfulAt: stamp });
     await press('Back to services');
@@ -192,7 +259,7 @@ describe('Services screen without accordions', () => {
     expect(text(renderer)).toContain('Stale · current activity unknown');
     expect(rowPage(renderer, 'orbi')).toContain('Last seen ' + stamp);
     await press('Details for orbi');
-    expect(text(renderer)).toContain('Slot 2 · Service not observed · Timer waiting');
+    expect(text(renderer)).toContain('Slot 2 · Worker not observed · Timer waiting');
     // The diagnostic view labels retained raw data with its last successful time.
     expect(text(renderer)).toContain(`Last seen ${stamp}. Current activity unknown.`);
   });
@@ -206,7 +273,7 @@ describe('Services screen without accordions', () => {
     expect(rowPage(renderer, 'orbi')).not.toContain('Idle');
     await press('Details for orbi');
     expect(text(renderer)).not.toMatch(/Idle|Timer idle/);
-    expect(text(renderer)).toContain(loadState === 'not-found' ? 'Service not found · Timer not found' : `Load ${loadState} · inactive/dead`);
+    expect(text(renderer)).toContain(loadState === 'not-found' ? 'Worker not found · Timer not found' : `Worker load ${loadState} · inactive/dead`);
   });
 
   it('resolves final mixed raw/short display-name collisions to exact family labels', async () => {
@@ -658,7 +725,7 @@ describe('operator-authorized service controls on the diagnostic view', () => {
     await press('Actions for orbi-demo');
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 1' })).toHaveLength(1);
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 2' })).toHaveLength(0);
-    expect(text(renderer)).toContain('Slot 1 · Idle');
+    expect(text(renderer)).toContain('Slot 1 · Worker idle');
     expect(host.readControl).not.toHaveBeenCalled();
   });
 
