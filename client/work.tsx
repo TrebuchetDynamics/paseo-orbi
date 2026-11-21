@@ -86,7 +86,9 @@ export function Work(props: PluginScreenProps & {
     read: () => read({ deploymentId: selected!.id, page: 1, state: browseState, ...(label === null ? {} : { label }) }),
   });
   const observation = issues.observation;
-  const state = observation?.state ?? 'loading';
+  // An offline host or a backgrounded app allows no read at all, so the section
+  // never claims activity it cannot have: it says unavailable and names the cause.
+  const state = observation?.state ?? (props.connected && props.foreground ? 'loading' : 'unavailable');
   const page = observation?.data ?? null;
   const codes = (observation?.problems ?? []).map(problem => problem.code);
   const repair = codes.includes('auth_denied') || codes.includes('rate_limited') ? issueReadRepair : '';
@@ -142,6 +144,7 @@ export function Work(props: PluginScreenProps & {
       <View testID="orbi-work-issues" style={{ gap: 4 }}>
         <Text testID="orbi-work-issues-status" style={text}>{`Issues: ${state === 'available' ? 'current' : state}`}</Text>
         {state === 'stale' && <Text testID="orbi-work-issues-stale" style={text}>{`Last seen ${observation?.lastSuccessfulAt ?? 'never'}. Current activity unknown; retained rows may be out of date.`}</Text>}
+        {!props.connected && <Text testID="orbi-work-issues-offline" style={text}>Selected host is offline. Issue reads are paused and no other host is used. Reconnect the selected host, then Refresh issues.</Text>}
         {!!codes.length && <Text accessibilityRole="alert" style={text}>{(observation?.problems ?? []).map(problem => `${problem.source}: ${problem.code}`).join('; ')}</Text>}
         {!!repair && <Text style={text}>{repair}</Text>}
         {page?.records.map(issue => <WorkIssue key={issue.number} issue={issue} repo={page.repo} hostId={props.host.id}

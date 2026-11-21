@@ -226,6 +226,23 @@ describe('Work first screen', () => {
     expect(text(limited.renderer)).not.toContain('No open issues found.');
   });
 
+  it('never claims a read in progress when a pending host goes offline', async () => {
+    let finish!: (value: unknown) => void;
+    host.readIssues.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const { renderer, switchTo } = await render();
+    // The read is in flight and has published nothing yet.
+    expect(text(renderer)).not.toContain('#42 Issue 42');
+    host.hosts[0].status = 'offline';
+    await switchTo('host-a');
+    const offline = text(renderer);
+    expect(offline).toContain('Issues: unavailable');
+    expect(offline).not.toContain('Issues: loading');
+    expect(offline).toContain('Selected host is offline.');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh issues' }).props.disabled).toBe(true);
+    await act(async () => { finish(pageAt([issue(42)])); await settle(); });
+    expect(text(renderer)).not.toContain('#42 Issue 42');
+  });
+
   it('retains rows as stale after a failed refresh with Last seen and no absence or count claim', async () => {
     host.readIssues.mockResolvedValue(pageAt([issue(42), issue(43)]));
     const { renderer, press } = await render();

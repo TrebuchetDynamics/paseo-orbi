@@ -90,7 +90,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         <Text style={text}>{catalog.state === 'unconfigured'
           ? 'Issue reads are unavailable: no validated repository catalog is configured for this host. Unconfigured: ask the operator to provide an authorized JSON file through PASEO_ORBI_CONFIG and explicitly reload this plugin.'
           : 'Issue reads are unavailable: the configured repository catalog is invalid. Invalid configuration: ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
-        <Text style={text}>Host service inventory is independent: Overview still shows discovered Orbi units without a repository catalog.</Text>
+        <Text style={text}>Host service inventory is independent: Work still shows discovered Orbi units under Services (technical details) without a repository catalog.</Text>
         <Text style={text}>Refresh only reads the current startup catalog. It does not configure authorization or reload the plugin.</Text>
       </View>}
       {!catalog && setupExpanded && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}
