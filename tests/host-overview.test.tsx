@@ -2,11 +2,10 @@ import './helpers/host';
 import { host } from './helpers/host';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
-import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PluginScreenProps } from '@getpaseo/plugin/client';
 import { Shell } from '../client/shell';
-import { resetHostOverviewState } from '../client/host-overview';
 import type { DeploymentCatalog } from '../shared/common';
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
 
@@ -53,7 +52,6 @@ const second = { ...demo, id: 'second', label: 'Second', repo: 'Other/repository
 const catalog = (entries: DeploymentCatalog['entries']): DeploymentCatalog => ({ state: 'configured', problems: [], entries });
 const props = (id = 'host-a'): PluginScreenProps => ({ theme: { colors: { surface0: '#111', surface1: '#222', surface2: '#2a2a2a', border: '#555', foreground: '#eee', foregroundMuted: '#aaa', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } }, host: { id, label: host.hosts.find(item => item.serverId === id)?.label ?? (id === 'host-a' ? 'Host A' : 'Host B') }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps);
 beforeEach(() => {
-  resetHostOverviewState();
   host.readControl.mockReset();
   host.readCatalog.mockReset().mockResolvedValue(catalog([demo]));
   host.readInventory.mockReset().mockResolvedValue(inventory({ state: 'off' }));
@@ -61,80 +59,81 @@ beforeEach(() => {
   for (const read of [host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) read.mockClear();
 });
 const settle = async () => { for (let n = 0; n < 3; n++) await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
-async function render(params: PluginScreenProps['params'] = {}) {
+// The Services screen is its own route: no Work, no Configured repositories.
+async function render(params: PluginScreenProps['params'] = {}, route = 'services') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   cleanups.push(() => client.clear());
   const openScreen = vi.fn();
-  const tree = (id = 'host-a', route = 'fleet') => <QueryClientProvider client={client}><Shell {...props(id)} params={params} route={route} openScreen={openScreen} /></QueryClientProvider>;
+  const tree = (id = 'host-a', nextRoute = route, next = params) => <QueryClientProvider client={client}><Shell {...props(id)} params={next} route={nextRoute} openScreen={openScreen} /></QueryClientProvider>;
   let renderer!: ReactTestRenderer;
   vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
   await act(async () => { renderer = create(tree()); });
   cleanups.push(async () => { await act(async () => renderer.unmount()); });
   await settle();
   const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); };
-  // Work is the default surface: these fixtures target the host service inventory,
-  // which on this route lives behind one technical-details disclosure.
-  const openServices = async () => {
-    const disclosure = renderer.root.findAllByProps({ accessibilityLabel: 'Services (technical details)' });
-    if (disclosure.length > 0 && disclosure[0].props.accessibilityState?.expanded === false) await press('Services (technical details)');
-  };
-  const switchTo = async (id: string, route = 'fleet') => { await act(async () => renderer.update(tree(id, route))); await settle(); if (route === 'fleet') await openServices(); };
-  await openServices();
+  const switchTo = async (id: string, nextRoute = route, next = params) => { await act(async () => renderer.update(tree(id, nextRoute, next))); await settle(); };
   return { renderer, client, press, switchTo, openScreen };
 }
 const text = (renderer: ReactTestRenderer) => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
 const row = (renderer: ReactTestRenderer, label: string) => renderer.root.findByProps({ testID: `orbi-family-${label}` });
-const rowPage = (renderer: ReactTestRenderer, label: string) => row(renderer, label).findAllByType('Text' as any)
-  .filter(node => !String(node.props.testID ?? '').startsWith('orbi-chevron-'))
-  .map(node => node.children.join('')).join('\n');
+const rowPage = (renderer: ReactTestRenderer, label: string) => row(renderer, label).findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
 const repositoryActions = (renderer: ReactTestRenderer) => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.startsWith('View repository'));
-// The host service inventory only; Work's own repository context is not service evidence.
+// The host service inventory only; nothing else on this screen is service evidence.
 const servicesText = (renderer: ReactTestRenderer) => renderer.root.findByProps({ testID: 'orbi-host-services' })
   .findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+const detailRows = (renderer: ReactTestRenderer) => renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'));
+const detailsName = (label: string) => `Details for ${label}`;
+const rowName = (renderer: ReactTestRenderer, label: string) => row(renderer, label).findAllByType('Text' as any)[0].children.join('');
 
-describe('compact host overview', () => {
-  it('leads with inventory, uses catalog repository titles and keeps default family text short without raw unit IDs', async () => {
+describe('Services screen without accordions', () => {
+  it('lists every observed group failures first with repository titles, worker/timer facts and no raw unit data', async () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, openScreen, press } = await render();
     const page = text(renderer);
-    // Work is the default surface; the host service inventory follows it behind
-    // the technical-details disclosure this helper opens.
-    expect(page.startsWith('Work · Host A\nRepository: Demo (Example/project)')).toBe(true);
-    expect(page.indexOf('Work · Host A')).toBeLessThan(page.indexOf('Host A · Fleet'));
-    expect(page.indexOf('Host A · Fleet')).toBeLessThan(page.indexOf('Set up repositories'));
+    // One Services heading, no duplicated Fleet/page title, no Work surface.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-work' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ testID: 'orbi-services-heading' }).props.children).toBe('Services · Host A');
+    expect(renderer.root.findByProps({ testID: 'orbi-services-heading' }).props.accessibilityRole).toBe('header');
+    expect(page).not.toContain('· Fleet');
     expect(page).toContain('1 of 5 groups needs attention');
-    const ids = renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-')).map(node => node.props.testID);
+    const ids = detailRows(renderer).map(node => node.props.testID);
     expect(ids).toEqual(['orbi', 'orbi-demo', 'orbi-aux', 'orbi-clash', 'orbi-core'].map(id => `orbi-family-${id}`));
-    expect(rowPage(renderer, 'orbi')).toBe('orbi\nSlot 1 · Worker failed\nRunning\nTimer waiting\nUnlinked');
-    expect(rowPage(renderer, 'orbi-demo')).toBe('Example/project\nIdle\nTimer waiting\nView repository');
+    // Verified repository name for the unique authorized match, display names otherwise.
+    expect(rowName(renderer, 'orbi-demo')).toBe('Example/project');
+    expect(rowName(renderer, 'orbi')).toBe('orbi');
+    // Every row is fully visible without a tap: no chevron, no expansion control.
+    for (const label of ['orbi', 'orbi-demo', 'orbi-aux', 'orbi-clash', 'orbi-core']) {
+      const content = rowPage(renderer, label);
+      expect(content).not.toMatch(/▸|▾|@|load |runtime/i);
+      expect(content).not.toMatch(/^(Expand|Collapse) /m);
+      expect(row(renderer, label).findAllByProps({ accessibilityLabel: `Expand ${label}` })).toHaveLength(0);
+    }
+    expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Worker failed');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    expect(rowPage(renderer, 'orbi')).toContain('Timer waiting');
+    expect(rowPage(renderer, 'orbi')).toContain('Unlinked');
+    expect(rowPage(renderer, 'orbi-demo')).toContain('Idle');
+    expect(rowPage(renderer, 'orbi-demo')).toContain('Timer waiting');
     expect(rowPage(renderer, 'orbi-aux')).toContain('Installed');
     for (const id of ['orbi-core', 'orbi-clash']) {
       expect(rowPage(renderer, id)).toContain('Unknown / transitional');
       expect(rowPage(renderer, id)).not.toContain('Idle');
     }
-    for (const group of hostA.groups) {
-      expect(rowPage(renderer, group.label).length).toBeLessThan(100);
-      expect(rowPage(renderer, group.label)).not.toMatch(/@|association|configured deployment/);
-    }
-    for (const testID of ['orbi-host-services', 'orbi-catalog']) expect(renderer.root.findByProps({ testID }).findAllByProps({ accessibilityRole: 'alert' }).filter(node => !node.props.children)).toHaveLength(0);
+    for (const group of hostA.groups) expect(rowPage(renderer, group.label).length).toBeLessThan(160);
     expect(repositoryActions(renderer).map(node => node.props.accessibilityLabel)).toEqual(['View repository Demo']);
     await press('View repository Demo');
     expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
+    // Services reads this host's inventory only: no repository detail or GitHub read.
     expect(host.readFleet).not.toHaveBeenCalled();
-    expect(page).not.toContain('Fleet — read-only');
-    expect(page).not.toContain('@1.service');
-    await press('Expand orbi-core'); await press('Unit details for orbi-core');
-    expect(rowPage(renderer, 'orbi-core')).toContain('does not mean the runner is broken');
-    await press('Expand orbi-clash'); await press('Unit details for orbi-clash');
-    expect(rowPage(renderer, 'orbi-clash')).toContain('makes the association unique');
-    // Work reads exactly page one of the open issues for the selected repository;
-    // no service row, detail or other feature read is issued by this surface.
-    expect(host.readIssues).toHaveBeenCalledTimes(1);
-    expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 1, state: 'open' });
-    for (const read of [host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) expect(read).not.toHaveBeenCalled();
+    expect(host.readIssues).not.toHaveBeenCalled();
+    expect(host.readCatalog).toHaveBeenCalledTimes(1);
+    expect(host.readInventory).toHaveBeenCalledTimes(1);
+    for (const testID of ['orbi-host-services', 'orbi-catalog']) {
+      expect(renderer.root.findByProps({ testID }).findAllByProps({ accessibilityRole: 'alert' }).filter(node => !node.props.children)).toHaveLength(0);
+    }
   });
 
-  it('pairs exact numeric slots, preserves missing/unknown/transitional states and separates unit details', async () => {
+  it('pairs exact numeric slots and separates raw unit data and states on the diagnostic view', async () => {
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
       unit('orbi@10.timer', 'timer', 'active', 'waiting'), unit('orbi@1.timer', 'timer', 'active', 'waiting'),
       unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@2.service', 'service', 'active', 'exited'),
@@ -143,30 +142,34 @@ describe('compact host overview', () => {
       unit('orbi@.service', 'service', null, null),
     ])] }));
     const { renderer, press } = await render();
-    const expand = renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' });
-    expect(expand.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
-    expect(expand.props.style({ pressed: false })).toMatchObject({ minHeight: 44, opacity: 1 });
     expect(rowPage(renderer, 'orbi')).toContain('Slot 4 · Timer failed');
     expect(rowPage(renderer, 'orbi')).toContain('Running');
     expect(rowPage(renderer, 'orbi')).toContain('Timer waiting');
-    await press('Expand orbi');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' }).props.accessibilityState.expanded).toBe(true);
-    const slots = rowPage(renderer, 'orbi');
-    expect(slots).toContain('Slot 1 · Idle · Timer waiting');
-    expect(slots).toContain('Slot 2 · active/exited · Timer not observed');
-    expect(slots).toContain('Slot 3 · Unknown · Timer not observed');
-    expect(slots).toContain('Slot 4 · Running · Timer failed');
-    expect(slots.indexOf('Slot 4 · Running · Timer failed')).toBeLessThan(slots.indexOf('Slot 1 · Idle · Timer waiting'));
-    expect(slots).toContain('Slot 01 · activating/start · Timer not observed');
-    expect(slots).toContain('Slot 10 · Service not observed · Timer waiting');
-    expect(slots).not.toContain('@');
-    expect(slots).not.toContain('Discovery is not authority');
-    await press('Unit details for orbi');
-    expect(rowPage(renderer, 'orbi')).toContain('orbi@.service: runtime not observed; unit file enabled (template, not a running service)');
-    expect(rowPage(renderer, 'orbi')).toContain('Discovery is not authority');
-    expect(rowPage(renderer, 'orbi')).toContain('Unit activity does not establish issue delivery');
-    await press('Unit details for orbi');
-    expect(rowPage(renderer, 'orbi')).not.toContain('@');
+    const reads = host.readInventory.mock.calls.length;
+    await press('Details for orbi');
+    // The row's list is replaced by the separate host-scoped diagnostic view.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ testID: 'orbi-service-details-heading' }).props.children).toBe('Service details · Host A');
+    expect(renderer.root.findByProps({ testID: 'orbi-service-details-heading' }).props.accessibilityRole).toBe('header');
+    // Opening details performs no read and no control action.
+    expect(host.readInventory.mock.calls.length).toBe(reads);
+    expect(host.readControl).not.toHaveBeenCalled();
+    const details = text(renderer);
+    expect(details).toContain('Slot 1 · Idle · Timer waiting');
+    expect(details).toContain('Slot 2 · active/exited · Timer not observed');
+    expect(details).toContain('Slot 3 · Unknown · Timer not observed');
+    expect(details).toContain('Slot 4 · Running · Timer failed');
+    expect(details.indexOf('Slot 4 · Running · Timer failed')).toBeLessThan(details.indexOf('Slot 1 · Idle · Timer waiting'));
+    expect(details).toContain('Slot 01 · activating/start · Timer not observed');
+    expect(details).toContain('Slot 10 · Service not observed · Timer waiting');
+    expect(details).toContain('orbi@.service: runtime not observed; unit file enabled (template, not a running service)');
+    expect(details).toContain('Discovery is not authority');
+    expect(details).toContain('Unit activity does not establish issue delivery');
+    // Back returns to the same list, with the same rows and order.
+    await press('Back to services');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
+    expect(detailRows(renderer).map(node => node.props.testID)).toEqual(['orbi-family-orbi']);
+    expect(rowPage(renderer, 'orbi')).not.toContain('orbi@');
   });
 
   it('does not infer absent counterparts from partial inventory and retains partial evidence as a success', async () => {
@@ -174,83 +177,98 @@ describe('compact host overview', () => {
       unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@2.timer', 'timer', 'active', 'waiting'),
     ])], problems: [{ source: 'runtime', code: 'row_limit' }] }));
     const { renderer, press, client } = await render();
-    await press('Expand orbi');
-    expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Idle · Timer not observed');
-    expect(rowPage(renderer, 'orbi')).toContain('Slot 2 · Service not observed · Timer waiting');
-    expect(rowPage(renderer, 'orbi')).not.toMatch(/missing|not found/);
+    expect(text(renderer)).toContain('Partial · units may be missing.');
+    expect(text(renderer)).toContain('0 of 1 observed groups need attention');
+    await press('Details for orbi');
+    const details = text(renderer);
+    expect(details).toContain('Slot 1 · Idle · Timer not observed');
+    expect(details).toContain('Slot 2 · Service not observed · Timer waiting');
+    expect(details).not.toMatch(/missing|not found/);
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({ state: 'partial', lastSuccessfulAt: stamp });
+    await press('Back to services');
     host.readInventory.mockRejectedValue(new Error('failed'));
     await press('Refresh services');
     expect(text(renderer)).toContain(`Last success: ${stamp}`);
     expect(text(renderer)).toContain('Stale · current activity unknown');
-    expect(rowPage(renderer, 'orbi')).toContain('Slot 2 · Service not observed · Timer waiting');
+    expect(rowPage(renderer, 'orbi')).toContain('Last seen ' + stamp);
+    await press('Details for orbi');
+    expect(text(renderer)).toContain('Slot 2 · Service not observed · Timer waiting');
+    // The diagnostic view labels retained raw data with its last successful time.
+    expect(text(renderer)).toContain(`Last seen ${stamp}. Current activity unknown.`);
   });
 
-  it.each(['not-found', 'error', 'unknown'])('never labels %s load as Idle at family or slot level', async loadState => {
+  it.each(['not-found', 'error', 'unknown'])('never labels %s load as Idle at row or slot level', async loadState => {
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
       unit('orbi@1.service', 'service', 'inactive', 'dead', loadState), unit('orbi@1.timer', 'timer', 'inactive', 'dead', loadState),
     ])] }));
     const { renderer, press } = await render();
     expect(rowPage(renderer, 'orbi')).toContain('Unknown / transitional');
     expect(rowPage(renderer, 'orbi')).not.toContain('Idle');
-    await press('Expand orbi');
-    expect(rowPage(renderer, 'orbi')).not.toMatch(/Idle|Timer idle/);
-    expect(rowPage(renderer, 'orbi')).toContain(loadState === 'not-found' ? 'Service not found · Timer not found' : `Load ${loadState} · inactive/dead`);
+    await press('Details for orbi');
+    expect(text(renderer)).not.toMatch(/Idle|Timer idle/);
+    expect(text(renderer)).toContain(loadState === 'not-found' ? 'Service not found · Timer not found' : `Load ${loadState} · inactive/dead`);
   });
 
   it('resolves final mixed raw/short display-name collisions to exact family labels', async () => {
     const labels = ['orbi-12345678', 'orbi-orbi-12345678-12345678'];
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: labels.map(label => family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', 'inactive', 'dead')])) }));
     const { renderer } = await render();
-    for (const label of labels) expect(rowPage(renderer, label)).toBe(`${label}\nIdle\nUnlinked`);
+    for (const label of labels) {
+      expect(rowName(renderer, label)).toBe(label);
+      expect(rowPage(renderer, label)).toContain('Idle');
+      expect(rowPage(renderer, label)).toContain('Unlinked');
+    }
     expect(repositoryActions(renderer)).toHaveLength(0);
   });
 
-  it('falls back to the Overview heading when the retained expanded family disappears', async () => {
+  it('resolves a details label that left the evidence honestly instead of trusting it', async () => {
     host.readInventory.mockResolvedValue(hostA);
-    const { renderer, press, switchTo } = await render();
-    await press('Expand orbi');
-    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: hostA.groups.filter(group => group.label !== 'orbi') }));
-    await press('Refresh services');
-    await switchTo('host-a', 'issues');
-    await switchTo('host-a');
-    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Collapse orbi' })).toHaveLength(0);
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' })).toBeDefined();
-    expect(renderer.root.findByProps({ testID: 'orbi-overview-heading' }).props.accessibilityRole).toBe('header');
+    const { renderer, press } = await render();
+    await press('Details for Example/project');
+    expect(text(renderer)).toContain('Example/project');
+    // The selected host's next observation no longer contains that family.
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: hostA.groups.filter(group => group.label !== 'orbi-demo') }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
+    const missing = renderer.root.findByProps({ testID: 'orbi-service-details-missing' });
+    expect(missing.props.children).toContain('not in the current host evidence');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-units' })).toHaveLength(0);
+    expect(text(renderer)).not.toContain('orbi-demo@1.service');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
+    // Back returns to the surviving list without the removed family.
+    await press('Back to services');
+    expect(detailRows(renderer).map(node => node.props.testID)).toEqual(['orbi-family-orbi', 'orbi-family-orbi-aux', 'orbi-family-orbi-clash', 'orbi-family-orbi-core']);
   });
 
   it('shortens only known prefixes for display, disambiguates slug collisions and never invents repository links', async () => {
     const labels = ['orbi-short-trunc-1234abcd', 'orbi-same-1234abcd', 'orbi-same-9876abcd'];
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: labels.map(label => family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', 'inactive', 'dead')])) }));
     const { renderer, press } = await render();
-    expect(rowPage(renderer, labels[0])).toBe('short-trunc\nIdle\nUnlinked');
-    expect(rowPage(renderer, labels[1])).toBe('same · 1234abcd\nIdle\nUnlinked');
-    expect(rowPage(renderer, labels[2])).toBe('same · 9876abcd\nIdle\nUnlinked');
+    expect(rowName(renderer, labels[0])).toBe('short-trunc');
+    expect(rowName(renderer, labels[1])).toBe('same · 1234abcd');
+    expect(rowName(renderer, labels[2])).toBe('same · 9876abcd');
     expect(repositoryActions(renderer)).toHaveLength(0);
     expect(text(renderer)).not.toContain(labels[0]);
-    await press(`Expand ${labels[0]}`);
-    await press(`Unit details for ${labels[0]}`);
-    expect(rowPage(renderer, labels[0])).toContain(labels[0]);
+    await press('Details for short-trunc');
+    expect(text(renderer)).toContain(labels[0]);
   });
 
-  it('retains one expanded family on in-page remount and resets expansion and setup on host switch', async () => {
+  it('keeps the selected details host-scoped and resets selection and setup on host switch', async () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press, switchTo } = await render();
-    await press('Expand orbi');
-    await switchTo('host-a', 'issues');
-    await switchTo('host-a');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' })).toBeDefined();
-    await press('Expand orbi-demo');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' })).toBeDefined();
-    await press('Set up repositories');
+    await press('Details for Example/project');
+    expect(text(renderer)).toContain('orbi-demo@1.service');
     host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
     host.readInventory.mockResolvedValue(hostB);
     await switchTo('host-b');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' })).toBeDefined();
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Set up repositories' }).props.accessibilityState.expanded).toBe(false);
+    // A host switch shows the new host's list, never the previous host's detail.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-details' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ testID: 'orbi-services-heading' }).props.children).toBe('Services · Host B');
+    expect(rowPage(renderer, 'orbi')).toContain('Running');
+    expect(text(renderer)).not.toContain('Example/project');
+    expect(text(renderer)).not.toContain('orbi-demo@1.service');
     await switchTo('host-a');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Set up repositories' }).props.accessibilityState.expanded).toBe(false);
-    expect(renderer.root.findByProps({ testID: 'orbi-overview-heading' }).props.accessibilityRole).toBe('header');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-details' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ testID: 'orbi-services-heading' }).props.children).toBe('Services · Host A');
   });
 
   it('keeps a cancelled pending host-A result out of host B with the same family and slot', async () => {
@@ -260,7 +278,7 @@ describe('compact host overview', () => {
     expect(text(renderer)).toContain('Reading services…');
     host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
     await switchTo('host-b');
-    expect(text(renderer)).toContain('Host B · Fleet');
+    expect(text(renderer)).toContain('Services · Host B');
     expect(rowPage(renderer, 'orbi')).toContain('Running');
     await act(async () => finishA(hostA)); await settle();
     expect(text(renderer)).not.toContain('Failed');
@@ -274,48 +292,24 @@ describe('compact first-screen triage', () => {
     host.readInventory.mockResolvedValue(nineGroups('failed', 'failed'));
     const { renderer, press } = await render();
     const page = text(renderer);
-    expect(renderer.root.findByProps({ testID: 'orbi-overview-heading' }).props.children).toBe('BlueBlack · Fleet');
+    expect(renderer.root.findByProps({ testID: 'orbi-services-heading' }).props.children).toBe('Services · BlueBlack');
     expect(page).toContain('1 of 9 groups needs attention');
     const refresh = renderer.root.findByProps({ accessibilityLabel: 'Refresh services' });
     expect(refresh.props).toMatchObject({ accessibilityRole: 'button', disabled: false, accessibilityState: { disabled: false, busy: false } });
-    expect(refresh.findAllByType('Text' as any).map(node => node.children.join('')).join('')).toBe('Refresh services');
     // Nine distinct groups, failed group first: the first row is the affected one.
-    expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'))
-      .map(node => node.props.testID)).toEqual(['orbi', 'orbi-g1', 'orbi-g2', 'orbi-g3', 'orbi-g4', 'orbi-g5', 'orbi-g6', 'orbi-g7', 'orbi-g8']
+    expect(detailRows(renderer).map(node => node.props.testID)).toEqual(['orbi', 'orbi-g1', 'orbi-g2', 'orbi-g3', 'orbi-g4', 'orbi-g5', 'orbi-g6', 'orbi-g7', 'orbi-g8']
       .map(label => `orbi-family-${label}`));
-    const disclosure = renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' });
-    expect(disclosure.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
-    expect(disclosure.findAllByType('Text' as any).map(node => node.children.join('')).join('\n')).toContain('Slot 3 · Worker failed · +1 more');
+    const failedRow = row(renderer, 'orbi');
     expect(rowPage(renderer, 'orbi')).toContain('Slot 3 · Worker failed · +1 more');
     expect(rowPage(renderer, 'orbi')).toContain('Running');
-    // Proxy for "visible before scrolling" in the compact renderer: the first
-    // failure is above every later group and below only the header controls.
+    // "Visible before scrolling" in the compact renderer: the failed row is above
+    // every later group, with no tap or disclosure in between.
     const lines = page.split('\n');
-    expect(lines[0]).toBe('Work · BlueBlack');
-    expect(lines.indexOf('BlueBlack · Fleet')).toBeGreaterThan(0);
-    expect(lines.indexOf('BlueBlack · Fleet')).toBeLessThan(lines.indexOf('1 of 9 groups needs attention'));
+    expect(lines.indexOf('Services · BlueBlack')).toBeLessThan(lines.indexOf('1 of 9 groups needs attention'));
     expect(lines.indexOf('1 of 9 groups needs attention')).toBeLessThan(lines.indexOf('Refresh services'));
-    expect(lines.indexOf('Refresh services')).toBeLessThan(lines.indexOf('Slot 3 · Worker failed · +1 more'));
     expect(lines.indexOf('Slot 3 · Worker failed · +1 more')).toBeLessThan(lines.indexOf('orbi-g1'));
-    // The row is one accessibility element, so its visible status is announced too.
-    expect(disclosure.props.accessibilityHint).toBe('Slot 3 · Worker failed · +1 more · Running · Unlinked');
-    // The full row is one 44-unit disclosure with pressed feedback and a chevron.
-    expect(disclosure.props.style({ pressed: false })).toMatchObject({ minHeight: 44, opacity: 1 });
-    expect(disclosure.props.style({ pressed: true }).opacity).toBeLessThan(1);
-    expect(renderer.root.findByProps({ testID: 'orbi-chevron-orbi' }).props.children).toBe('▸');
-    expect(disclosure.findAllByProps({ accessibilityLabel: 'Unit details for orbi' })).toHaveLength(0);
-    // One tap expands numeric slot detail; Unit details stays a separate control.
-    await press('Expand orbi');
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Collapse orbi' }).props.accessibilityState.expanded).toBe(true);
-    expect(renderer.root.findByProps({ testID: 'orbi-chevron-orbi' }).props.children).toBe('▾');
-    expect(rowPage(renderer, 'orbi')).toContain('Slot 3 · Failed · Timer failed');
-    expect(rowPage(renderer, 'orbi')).toContain('Slot 4 · Running · Timer not observed');
-    const details = renderer.root.findByProps({ accessibilityLabel: 'Unit details for orbi' });
-    expect(details.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
-    expect(details.props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
-    expect(disclosure.findAllByProps({ accessibilityLabel: 'Unit details for orbi' })).toHaveLength(0);
-    await press('Unit details for orbi');
-    expect(rowPage(renderer, 'orbi')).toContain('orbi@3.service: failed/failed');
+    expect(failedRow.findAllByProps({ accessibilityLabel: 'Details for orbi' })).toHaveLength(1);
+    expect(failedRow.findAll(node => node.type === ('Pressable' as any)).map(node => node.props.accessibilityLabel)).toEqual(['Details for orbi']);
     // Refresh services rereads inventory only, never the repository catalog.
     await press('Refresh services');
     expect(host.readInventory).toHaveBeenCalledTimes(2);
@@ -333,7 +327,6 @@ describe('compact first-screen triage', () => {
     expect(rowPage(renderer, 'orbi-g1')).toContain('Unknown / transitional');
     host.readInventory.mockResolvedValue(nineGroups('running', 'waiting', false));
     await press('Refresh services');
-    // Only the worker fact moves; the timer stays waiting.
     expect(rowPage(renderer, 'orbi')).toContain('Running');
     expect(rowPage(renderer, 'orbi')).toContain('Timer waiting');
     expect(rowPage(renderer, 'orbi')).not.toContain('Idle');
@@ -346,12 +339,9 @@ describe('compact first-screen triage', () => {
       family('orbi-unobserved', 'unmatched', null, [unit('orbi-unobserved@1.service', 'service', 'inactive', 'dead'), unit('orbi-unobserved@2.service', 'service', null, null)]),
     ] }));
     const { renderer } = await render();
-    // One idle worker does not let the group claim Idle while another worker is
-    // transitional or not observed.
     for (const label of ['orbi', 'orbi-unobserved']) {
       expect(rowPage(renderer, label)).toContain('Unknown / transitional');
       expect(rowPage(renderer, label)).not.toContain('Idle');
-      expect(renderer.root.findByProps({ accessibilityLabel: `Expand ${label}` }).props.accessibilityHint).toBe('Unknown / transitional · Unlinked');
     }
   });
 });
@@ -361,7 +351,6 @@ describe('host states and authority', () => {
     const { renderer, press, switchTo } = await render();
     expect(text(renderer)).toContain('Service check off · activity unknown');
     expect(text(renderer)).not.toContain('groups need attention');
-    expect(text(renderer)).not.toContain('Not observed in this host service check');
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
     expect(text(renderer)).not.toContain('PASEO_ORBI_HOST_INVENTORY=1');
     await press('Set up service access');
@@ -379,17 +368,14 @@ describe('host states and authority', () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, client } = await render();
     expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Worker failed');
-    expect(rowPage(renderer, 'orbi')).toContain('Running');
     expect(rowPage(renderer, 'orbi-demo')).toContain('Example/project');
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({ lastSuccessfulAt: stamp });
-    // Monitoring is revoked on the host; the next background check receives off.
     host.readInventory.mockResolvedValue(inventory({ state: 'off', observedAt: null, sources: [] }));
     await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
     expect(text(renderer)).toContain('Service check off · activity unknown');
     expect(text(renderer)).not.toContain('Stale');
     expect(text(renderer)).not.toContain('Last success:');
-    // Former rows are gone rather than retained as stale evidence.
-    expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'))).toHaveLength(0);
+    expect(detailRows(renderer)).toHaveLength(0);
     expect(servicesText(renderer)).not.toMatch(/orbi-demo|orbi@|Example\/project|Failed|Running/);
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toMatchObject({
@@ -416,7 +402,7 @@ describe('host states and authority', () => {
     expect(text(renderer)).not.toContain('SECRET');
   });
 
-  it('retains this host families as stale after failed refresh, without current counts', async () => {
+  it('retains this host rows as stale after a failed refresh, without current counts', async () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press } = await render();
     host.readInventory.mockRejectedValue(new Error('SECRET'));
@@ -424,7 +410,6 @@ describe('host states and authority', () => {
     expect(text(renderer)).toContain('Stale · current activity unknown');
     expect(text(renderer)).toContain(`Last success: ${stamp}`);
     expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Worker failed');
-    expect(rowPage(renderer, 'orbi')).toContain('Running');
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     // Every retained row is marked inside the row itself, so the marker survives
     // the header scrolling offscreen; the retained facts read as last seen, not current.
@@ -432,8 +417,6 @@ describe('host states and authority', () => {
       expect(rowPage(renderer, group.label)).toContain(`Last seen ${stamp}`);
       expect(row(renderer, group.label).findByProps({ testID: `orbi-last-seen-${group.label}` })).toBeDefined();
     }
-    expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi' }).props.accessibilityHint).toContain(`Last seen ${stamp}`);
-    // A successful reread clears every marker and restores the current count.
     host.readInventory.mockResolvedValue(hostA);
     await press('Refresh services');
     for (const group of hostA.groups) expect(rowPage(renderer, group.label)).not.toContain('Last seen');
@@ -449,15 +432,13 @@ describe('host states and authority', () => {
     host.hosts[0].status = 'offline';
     await switchTo('host-a');
     expect(text(renderer)).toContain('Offline · current activity unknown');
-    // A retained snapshot publishes no current attention count while offline.
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     expect(text(renderer)).not.toMatch(/\d+ of \d+ (?:observed )?groups? needs? attention/);
     for (const group of hostA.groups) expect(rowPage(renderer, group.label)).toContain(`Last seen ${stamp}`);
     expect(row(renderer, 'orbi-demo').findByProps({ testID: 'orbi-last-seen-orbi-demo' })).toBeDefined();
-    // Host B reads its own fresh snapshot: no host-A row or marker is reused.
     host.readInventory.mockResolvedValue(hostB);
     await switchTo('host-b');
-    expect(text(renderer)).toContain('Host B · Fleet');
+    expect(text(renderer)).toContain('Services · Host B');
     expect(rowPage(renderer, 'orbi')).toContain('Running');
     expect(rowPage(renderer, 'orbi')).not.toContain('Last seen');
     expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-last-seen-'))).toHaveLength(0);
@@ -471,14 +452,12 @@ describe('host states and authority', () => {
     ];
     host.readInventory.mockResolvedValue(inventory({ state: 'partial', groups, problems: [{ source: 'installed', code: 'process_failed' }] }));
     const { renderer, press } = await render();
-    // Partial readings qualify their numbers as observed, never as host totals.
     expect(text(renderer)).toContain('1 of 2 observed groups needs attention');
     expect(text(renderer)).toContain('Partial · units may be missing.');
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups }));
     await press('Refresh services');
     expect(text(renderer)).toContain('1 of 2 groups needs attention');
     expect(text(renderer)).not.toContain('observed groups');
-    // Empty partial evidence is never complete absence; empty complete evidence is.
     host.readInventory.mockResolvedValue(inventory({ state: 'partial', groups: [], problems: [{ source: 'runtime', code: 'process_failed' }] }));
     await press('Refresh services');
     expect(text(renderer)).toContain('Partial · no units confirmed; units may be missing.');
@@ -500,9 +479,8 @@ describe('host states and authority', () => {
     if (state === 'partial') expect(text(renderer)).toContain('units may be missing');
     else {
       expect(text(renderer)).toContain('Unavailable · current activity unknown');
-      expect(text(renderer)).not.toContain('Observed in this host service check');
       await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
-      expect(renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join('')).join('\n')).not.toContain('Last success:');
+      expect(servicesText(renderer)).not.toContain('Last success:');
     }
   });
 
@@ -516,64 +494,47 @@ describe('host states and authority', () => {
     expect(host.readInventory).not.toHaveBeenCalled();
   });
 
-  it.each(['unconfigured', 'invalid'] as const)('keeps %s visible with guidance collapsed below inventory and grants no repository authority', async state => {
+  it.each(['unconfigured', 'invalid'] as const)('keeps %s visible with the guide collapsed and grants no repository authority', async state => {
     host.readCatalog.mockResolvedValue({ state, entries: [], problems: [] });
     host.readInventory.mockResolvedValue(hostA);
-    const { renderer, press, switchTo } = await render();
-    expect(text(renderer)).toContain(`Catalog: ${state}`);
-    expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
-    const servicesHeading = text(renderer).indexOf('Host A · Fleet');
-    expect(servicesHeading).toBeGreaterThan(text(renderer).indexOf('Work · Host A'));
-    expect(servicesHeading).toBeLessThan(text(renderer).indexOf(`Catalog: ${state}`));
-    // A confirmed unconfigured catalog explains the missing repository detail once
-    // above the rows instead of repeating the badge on every row.
+    const { renderer, press } = await render();
     if (state === 'unconfigured') {
+      // One notice above the rows; a confirmed unconfigured catalog explains the
+      // missing repository detail once instead of repeating the badge on every row.
+      expect(text(renderer)).toContain('Repositories aren’t linked. Link repositories to see GitHub issues.');
       expect(rowPage(renderer, 'orbi-demo')).not.toContain('Unlinked');
-      expect(renderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' }).props.accessibilityHint).not.toContain('Unlinked');
     } else expect(rowPage(renderer, 'orbi-demo')).toContain('Unlinked');
+    if (state === 'unconfigured') expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
     expect(repositoryActions(renderer)).toHaveLength(0);
-    await press('Expand orbi-demo'); await press('Unit details for orbi-demo');
-    expect(rowPage(renderer, 'orbi-demo')).toContain('not in the current authorized catalog');
-    await press('Set up repositories');
-    expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
-    // The same action states why issue reads are unavailable while the
-    // discovery-only host service inventory remains independent.
-    expect(text(renderer)).toContain(`Issue reads are unavailable: ${state === 'unconfigured'
-      ? 'no validated repository catalog is configured for this host.' : 'the configured repository catalog is invalid.'}`);
-    expect(text(renderer)).toContain('Host service inventory is independent');
-    await switchTo('host-a', 'issues');
+    await press('Details for orbi-demo');
+    expect(text(renderer)).toContain('not in the current authorized catalog');
+    await press('Back to services');
+    await press('Setup guide');
     expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
     for (const read of [host.readFleet, host.readIssues, host.readIssue, host.readRuns, host.readRun, host.readBlockers, host.readBlocker]) expect(read).not.toHaveBeenCalled();
   });
 
   it('explains a confirmed unconfigured catalog once above the rows and offers inventory-only refresh', async () => {
-    const explanation = "Showing host services. Repository details aren't configured.";
+    const explanation = 'Repositories aren’t linked. Link repositories to see GitHub issues.';
     host.readCatalog.mockResolvedValue({ state: 'unconfigured', entries: [], problems: [] });
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press } = await render();
     const servicesTexts = () => renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join(''));
-    // One explanation, above the first host service row.
-    expect(servicesTexts().filter(item => item === explanation)).toHaveLength(1);
-    expect(servicesTexts().indexOf(explanation)).toBeLessThan(servicesTexts().indexOf('orbi'));
-    // The setup action is a real disclosure with a 44-unit target.
-    const instructions = () => renderer.root.findByProps({ accessibilityLabel: 'Setup instructions' });
+    // Exactly one notice on the screen, above the first host service row.
+    expect(text(renderer).split(explanation)).toHaveLength(2);
+    expect(text(renderer).indexOf(explanation)).toBeLessThan(text(renderer).indexOf('orbi'));
+    const instructions = () => renderer.root.findByProps({ accessibilityLabel: 'Setup guide' });
     expect(instructions().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
     expect(instructions().props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
-    expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
-    await press('Setup instructions');
+    await press('Setup guide');
     expect(instructions().props.accessibilityState.expanded).toBe(true);
     expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');
     expect(text(renderer)).toContain('explicitly reload');
-    expect(servicesTexts().filter(item => item === explanation)).toHaveLength(1);
-    // No repeated Unlinked badge: this catalog state already explains the missing repository details.
+    expect(text(renderer).split(explanation)).toHaveLength(2);
     for (const group of hostA.groups) expect(rowPage(renderer, group.label)).not.toContain('Unlinked');
     expect(repositoryActions(renderer)).toHaveLength(0);
-    // No catalog refresh in this state, even with the setup panel open.
-    expect(renderer.root.findByProps({ testID: 'orbi-catalog' }).findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
-    await press('Set up repositories');
-    expect(text(renderer)).toContain('Catalog: unconfigured');
-    expect(renderer.root.findByProps({ testID: 'orbi-catalog' }).findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
-    // Separate spies: "Refresh services" reads inventory only and never the repository catalog.
+    // The guide applies no settings: no catalog Refresh and no extra catalog read.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-catalog' }).flatMap(node => node.findAllByProps({ accessibilityLabel: 'Refresh' }))).toHaveLength(0);
     const catalogReads = host.readCatalog.mock.calls.length;
     const inventoryReads = host.readInventory.mock.calls.length;
     await press('Refresh services');
@@ -581,17 +542,18 @@ describe('host states and authority', () => {
     expect(host.readCatalog.mock.calls.length).toBe(catalogReads);
   });
 
-  it('keeps loading, invalid and offline states distinguishable from unconfigured', async () => {
-    const explanation = "Showing host services. Repository details aren't configured.";
+  it('keeps loading, invalid and offline catalog states distinguishable from unconfigured', async () => {
+    const explanation = 'Repositories aren’t linked. Link repositories to see GitHub issues.';
     let finishCatalog!: (value: DeploymentCatalog) => void;
     host.readCatalog.mockImplementationOnce(() => new Promise(resolve => { finishCatalog = resolve; }));
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, switchTo } = await render();
     expect(text(renderer)).toContain('Catalog: loading');
     expect(text(renderer)).not.toContain(explanation);
-    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup instructions' })).toHaveLength(0);
+    expect(text(renderer)).toContain('Loading the selected host catalog.');
     await act(async () => finishCatalog({ state: 'invalid', entries: [], problems: [] })); await settle();
-    expect(text(renderer)).toContain('Catalog: invalid');
+    expect(text(renderer)).toContain('the configured repository catalog is invalid');
+    expect(text(renderer)).not.toContain('Catalog: loading');
     expect(text(renderer)).not.toContain(explanation);
     host.hosts[0].status = 'offline';
     await switchTo('host-a');
@@ -599,34 +561,38 @@ describe('host states and authority', () => {
     expect(text(renderer)).not.toContain(explanation);
   });
 
-  it('keeps catalog stale/unavailable visible while setup is collapsed', async () => {
-    const { renderer, press } = await render();
+  it('keeps a failed catalog read visible with its retry and never as unconfigured', async () => {
+    const { renderer } = await render();
     host.readCatalog.mockRejectedValue(new Error('SECRET'));
-    await press('Set up repositories');
-    await act(async () => renderer.root.findByProps({ testID: 'orbi-catalog' }).findByProps({ accessibilityLabel: 'Refresh' }).props.onPress()); await settle();
-    await press('Set up repositories');
+    await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
     expect(text(renderer)).toContain('Catalog: stale');
     expect(text(renderer)).toContain('filesystem: refresh_failed');
+    expect(text(renderer)).toContain('Catalog read failed');
+    expect(text(renderer)).not.toContain('Repositories aren’t linked.');
     expect(text(renderer)).not.toContain('SECRET');
+    const refresh = renderer.root.findByProps({ testID: 'orbi-catalog' }).findByProps({ accessibilityLabel: 'Refresh' });
+    expect(refresh.props).toMatchObject({ disabled: false, accessibilityState: { disabled: false, busy: false } });
+    host.readCatalog.mockResolvedValue(catalog([demo]));
+    await act(async () => refresh.props.onPress()); await settle();
+    expect(text(renderer)).not.toContain('Catalog read failed');
+    expect(text(renderer)).not.toContain('Catalog: stale');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(0);
   });
 
   it('keeps initial catalog failure visible with retry and refuses repository detail', async () => {
     host.readCatalog.mockRejectedValue(new Error('SECRET'));
     host.readInventory.mockResolvedValue(hostA);
-    const { renderer, press } = await render();
+    const { renderer } = await render();
     expect(text(renderer)).toContain('Catalog: unavailable');
     expect(text(renderer)).not.toContain('SECRET');
-    // A real read failure keeps the catalog retry and never reads as unconfigured.
-    expect(text(renderer)).not.toContain("Showing host services. Repository details aren't configured.");
-    await press('Set up repositories');
-    expect(text(renderer)).toContain('Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.');
+    expect(text(renderer)).not.toContain('Repositories aren’t linked.');
     expect(renderer.root.findByProps({ testID: 'orbi-catalog' }).findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(1);
     expect(repositoryActions(renderer)).toHaveLength(0);
     expect(host.readFleet).not.toHaveBeenCalled();
   });
 
-  it('mounts rich repositories only on expansion, stops collapsed polling and resets on host switch', async () => {
-    const { renderer, press, switchTo } = await render();
+  it('mounts rich repositories only on expansion from Work, stops collapsed polling and resets on host switch', async () => {
+    const { renderer, press, switchTo } = await render({}, 'fleet');
     const disclosure = () => renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' });
     expect(disclosure().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
     expect(disclosure().props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
@@ -634,24 +600,24 @@ describe('host states and authority', () => {
     await press('Configured repositories');
     expect(disclosure().props.accessibilityState.expanded).toBe(true);
     expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId)).toEqual(['demo']);
-    expect(text(renderer)).toContain('Fleet — read-only');
     await press('Configured repositories');
-    expect(text(renderer)).not.toContain('Fleet — read-only');
     const calls = host.readFleet.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
     expect(host.readFleet).toHaveBeenCalledTimes(calls);
     await press('Configured repositories');
     host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
-    await switchTo('host-b');
+    await switchTo('host-b', 'fleet');
     expect(disclosure().props.accessibilityState.expanded).toBe(false);
-    await switchTo('host-a');
+    await switchTo('host-a', 'fleet');
     expect(disclosure().props.accessibilityState.expanded).toBe(false);
   });
 
   it('lists unobserved configured deployments, loads only one detail and preserves selected navigation', async () => {
     host.readCatalog.mockResolvedValue(catalog([demo, second]));
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi-second', 'matched', 'second', [unit('orbi-second@1.service', 'service', 'active', 'running')])] }));
-    const { renderer, press, openScreen } = await render({ deploymentId: 'demo' });
+    const { renderer, press, openScreen } = await render({ deploymentId: 'demo' }, 'fleet');
+    // An explicit deployment deep link opens the configured-repository detail.
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.accessibilityState.expanded).toBe(true);
     expect(text(renderer)).toContain('Not observed in this host service check');
     expect(text(renderer)).toContain('Observed in this host service check');
     expect(host.readFleet.mock.calls.map(([input]) => input.deploymentId)).toEqual(['demo']);
@@ -661,39 +627,38 @@ describe('host states and authority', () => {
     expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs', params: { deploymentId: 'demo' } });
     expect(renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.accessibilityState.expanded).toBe(true);
     await press('Configured repositories');
-    expect(text(renderer)).not.toContain('Fleet — read-only');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.accessibilityState.expanded).toBe(false);
   });
 });
 
-describe('operator-authorized service controls', () => {
+describe('operator-authorized service controls on the diagnostic view', () => {
   const controlled: DeploymentCatalog['entries'][number] = { ...demo, controls: { actions: ['start', 'stop', 'restart'], slots: 2 } };
   const answer = (overrides: Record<string, unknown> = {}) => ({
     operationId: 'ctl-1', deploymentId: 'demo', slot: 1, action: 'start', outcome: 'succeeded', reason: null,
     actor: null, submittedAt: stamp, finishedAt: stamp,
     observed: { loadState: 'loaded', activeState: 'active', subState: 'running' }, ...overrides,
   });
-  const openActions = async (press: (label: string) => Promise<void>) => { await press('Expand orbi-demo'); await press('Actions for orbi-demo'); };
+  const openActions = async (press: (label: string) => Promise<void>) => { await press('Details for Example/project'); await press('Actions for orbi-demo'); };
 
   it('offers actions only for a linked repository the operator granted, bounded to approved slots', async () => {
     host.readCatalog.mockResolvedValue(catalog([controlled]));
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press } = await render();
     // Unlinked, ambiguous and incompatible rows never gain control actions.
-    for (const label of ['orbi', 'orbi-clash', 'orbi-core', 'orbi-aux']) {
-      await press('Expand ' + label);
+    for (const [label, name] of [['orbi', 'orbi'], ['orbi-clash', 'orbi-clash'], ['orbi-core', 'orbi-core'], ['orbi-aux', 'orbi-aux']] as const) {
+      await press(`Details for ${name}`);
       expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for ' + label })).toHaveLength(0);
+      await press('Back to services');
     }
-    await press('Expand orbi-demo');
+    await press('Details for Example/project');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props)
       .toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
     expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props.style({ pressed: false }))
       .toMatchObject({ minHeight: 44 });
     await press('Actions for orbi-demo');
-    // Exactly the observed slots inside the operator-approved bound.
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 1' })).toHaveLength(1);
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 2' })).toHaveLength(0);
-    expect(rowPage(renderer, 'orbi-demo')).toContain('Slot 1 · Idle');
+    expect(text(renderer)).toContain('Slot 1 · Idle');
     expect(host.readControl).not.toHaveBeenCalled();
   });
 
@@ -716,7 +681,6 @@ describe('operator-authorized service controls', () => {
     await press('Start slot 1');
     await press('Confirm start slot 1');
     expect(host.readControl).toHaveBeenCalledTimes(1);
-    // The request names only an approved deployment, slot and action.
     expect(host.readControl.mock.calls[0][0]).toEqual({ deploymentId: 'demo', slot: 1, action: 'start' });
     expect(text(renderer)).toContain('Start succeeded · Slot 1 · Running');
   });
@@ -731,8 +695,6 @@ describe('operator-authorized service controls', () => {
     await press('Start slot 1');
     await press('Confirm start slot 1');
     expect(host.readControl).toHaveBeenCalledTimes(1);
-    // While one submission is in flight every control is disabled and a second
-    // confirm press cannot submit again.
     expect(renderer.root.findByProps({ accessibilityLabel: 'Confirm start slot 1' }).props)
       .toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: true } });
     expect(renderer.root.findByProps({ accessibilityLabel: 'Start slot 1' }).props.disabled).toBe(true);
@@ -792,8 +754,6 @@ describe('operator-authorized service controls', () => {
     await act(async () => finish(answer())); await settle();
     expect(text(renderer)).not.toContain('Start succeeded');
     expect(rowPage(renderer, 'orbi-demo')).toContain('Example/project');
-    // The host A action was addressed to host A; a later host A mount keeps no
-    // result from the request that finished while another host was selected.
     host.readInventory.mockResolvedValue(hostA);
     await switchTo('host-a');
     expect(text(renderer)).not.toContain('Start succeeded');
@@ -803,9 +763,8 @@ describe('operator-authorized service controls', () => {
     host.readCatalog.mockResolvedValue(catalog([demo]));
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press } = await render();
-    await press('Expand orbi-demo');
+    await press('Details for Example/project');
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
-    expect(renderer.root.findByProps({ accessibilityLabel: 'View repository Demo' })).toBeDefined();
     expect(host.readControl).not.toHaveBeenCalled();
   });
 
@@ -819,8 +778,6 @@ describe('operator-authorized service controls', () => {
     await openActions(press);
     const control = (name: string) => renderer.root.findByProps({ accessibilityLabel: name });
     const controlStyle = (name: string) => control(name).props.style({ pressed: false });
-    // One filled primary for the main action, an outlined navigation action and a
-    // danger outline for the supported destructive Stop.
     expect(control('Start slot 1').findAllByType('Text' as any).map(node => node.children.join(''))).toEqual(['Start']);
     expect(controlStyle('Start slot 1')).toMatchObject({ backgroundColor: colors.accent, borderColor: colors.accent });
     expect(control('Start slot 1').findByType('Text' as any).props.style.color).toBe(colors.accentForeground);
@@ -828,12 +785,9 @@ describe('operator-authorized service controls', () => {
     expect(control('Stop slot 1').findByType('Text' as any).props.style.color).toBe(colors.statusDanger);
     expect(controlStyle('Restart slot 1')).toMatchObject({ backgroundColor: colors.surface1, borderColor: colors.border });
     expect(control('Restart slot 1').findByType('Text' as any).props.style.color).toBe(colors.foreground);
-    // Danger is used only by the destructive action; no status line borrows it.
     const danger = renderer.root.findAll(node => node.type === ('Pressable' as any))
       .filter(node => typeof node.props.style === 'function' && node.props.style({ pressed: false }).borderColor === colors.statusDanger);
     expect(danger.map(node => node.props.accessibilityLabel)).toEqual(['Stop slot 1']);
-    // Confirming is the main action of the confirmation and stays a filled
-    // primary; Cancel remains an outlined secondary.
     await press('Start slot 1');
     expect(controlStyle('Confirm start slot 1')).toMatchObject({ backgroundColor: colors.accent, borderColor: colors.accent });
     expect(controlStyle('Cancel start slot 1')).toMatchObject({ backgroundColor: colors.surface1, borderColor: colors.border });
@@ -844,16 +798,11 @@ describe('operator-authorized service controls', () => {
     expect(busy.props.accessibilityState).toEqual({ disabled: true, busy: true });
     expect(busy.findByType('Text' as any).children.join('')).toBe('Submitting…');
     expect(busy.props.style({ pressed: false }).opacity).toBeLessThan(0.7);
-    // A second tap on the busy confirmation cannot submit again, and the cancel
-    // path stays disabled until that one submission reports back.
     await act(async () => { busy.props.onPress(); await vi.advanceTimersByTimeAsync(2); });
     expect(host.readControl).toHaveBeenCalledTimes(1);
     expect(control('Cancel start slot 1').props.disabled).toBe(true);
     await act(async () => { finish(answer()); }); await settle();
     expect(text(renderer)).toContain('Start succeeded · Slot 1 · Running');
-    expect(host.readControl).toHaveBeenCalledTimes(1);
-    // A Stop confirmation carries the destructive styling; Cancel still closes
-    // it without sending anything.
     await press('Stop slot 1');
     expect(controlStyle('Confirm stop slot 1')).toMatchObject({ borderColor: colors.statusDanger, backgroundColor: colors.surface1 });
     await press('Cancel stop slot 1');

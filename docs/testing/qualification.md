@@ -256,9 +256,10 @@ The redesign stand-in accepts exactly the two fixed `systemctl` argv forms issue
 
 | Journey | What is running? | How certain? | Where next? | Result |
 | --- | --- | --- | --- | --- |
-| failed timer beside a running service; starting/active-exited vs running | family facts `Failed`/`Running` and per-slot text | text states, not color | slots expand under the family | NOT_RUN |
-| unique repository drill-down, keyboard expand/technical detail/return | running family with `View repository` | `Matches configured deployment … by unit name` (display-only) | Issues for the authorized repository; heading/retained row on return | NOT_RUN |
-| no configured repository | discovered family, `Unlinked` | `Discovered on this host only …` | no repository detail offered | NOT_RUN |
+| failed timer beside a running service; starting/active-exited vs running | row facts `Running`/`Timer waiting`/`Slot 2 · Timer failed` then per-slot text | text states, not color; no row accordion | `Details` opens the host-scoped diagnostic view | NOT_RUN |
+| unique repository drill-down, keyboard diagnostics and return | running family with `View repository` | `Matches configured deployment … by unit name` (display-only) | Issues for the authorized repository; Back restores the Services list | NOT_RUN |
+| no configured repository | discovered family, `Unlinked`; one notice and `Setup guide` | `Discovered on this host only …` | no repository detail offered | NOT_RUN |
+| configured landing and unconfigured default | Work issue rows and label chips; unconfigured lands on Services | `Services · <host>` without a tap | Work/Services/Runs tabs and explicit Work navigation | NOT_RUN |
 | inventory off with authorized repository | `Service check off · activity unknown` | no observation claimed | setup copy names `PASEO_ORBI_HOST_INVENTORY=1`; catalog still navigable | NOT_RUN |
 | unsupported source profile | family may run | `incompatible`, not a broken runner | detail refused, operator repair | NOT_RUN |
 | partial/denied read | confirmed runtime families only | `Partial · units may be missing.` + `installed: process_failed` | refresh/repair, never a zero count | NOT_RUN |
@@ -269,7 +270,7 @@ Operator-walkthrough answers to the same three questions are separate and **NOT_
 
 ### Capture and inspection contract
 
-Chromium at deviceScaleFactor 1: Overview at 375×667, 768×1024 and 1920×1080 in light and dark (6), plus four distinct states: compact expanded slots at 375 light, unconfigured/missing-config detail refusal at 1920 light, partial/denied read at 375 dark and a long mobile family name with reachable status/actions at 375 light (**10 mandatory images**, no substitutes). Each `.shot.json` names the covered state, host alias, Paseo/daemon/app/Playwright/browser versions, plugin SHA, fixture profile/hash, viewport, actual PNG dimensions, SHA-256 and `inspection: null`. Automatic capture cannot bless its own image; the execution owner must view each PNG and record `horizontalClipping`, `scrollReachable`, `contrast`, `touchTargets`, `focus`, `stateVisible`, reviewer and time — the labels/wrapping, tap-target, keyboard-focus and contrast checks in both themes. Clipping, wrong host, hidden actions, misleading status, private content, missing/hash-mismatched images or uninspected images keep the result partial/fail.
+Chromium at deviceScaleFactor 1: Services at 375×667, 768×1024 and 1920×1080 in light and dark (6), plus four distinct states: the host-scoped diagnostic view at 375 light, unconfigured/missing-config notice and guide at 1920 light, partial/denied read at 375 dark and a long mobile family name with reachable status/actions at 375 light (**10 mandatory images**, no substitutes). Each `.shot.json` names the covered state, host alias, Paseo/daemon/app/Playwright/browser versions, plugin SHA, fixture profile/hash, viewport, actual PNG dimensions, SHA-256 and `inspection: null`. Automatic capture cannot bless its own image; the execution owner must view each PNG and record `horizontalClipping`, `scrollReachable`, `contrast`, `touchTargets`, `focus`, `stateVisible`, reviewer and time — the labels/wrapping, tap-target, keyboard-focus and contrast checks in both themes. Clipping, wrong host, hidden actions, misleading status, private content, missing/hash-mismatched images or uninspected images keep the result partial/fail.
 
 ### Commands (Node 22.19.0, from the repository root)
 

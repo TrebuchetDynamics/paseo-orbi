@@ -100,16 +100,6 @@ export function observedDeploymentIds(inventory: ServiceInventory | null | undef
   return [...new Set(inventory.groups.filter(group => group.association === 'matched' && group.deploymentId !== null).map(group => group.deploymentId!))];
 }
 
-// A route change mounts a fresh Overview screen. One expanded family is retained
-// per host+repository surface so in-page navigation keeps the host-scoped family,
-// and it is discarded when that host or repository identity changes.
-let retained: { surface: string; label: string | null } = { surface: '', label: null };
-export function resetHostOverviewState() { retained = { surface: '', label: null }; }
-function useExpandedFamily(surface: string) {
-  const [expanded, setExpanded] = useState<string | null>(retained.surface === surface ? retained.label : null);
-  return [expanded, (label: string | null) => { retained = { surface, label }; setExpanded(label); }] as const;
-}
-
 const unitLine = (unit: InventoryUnit) => {
   const runtime = unit.runtime === null ? 'runtime not observed' : `${unit.runtime.activeState}/${unit.runtime.subState}, load ${unit.runtime.loadState}`;
   const template = unit.id.includes('@.') ? ' (template, not a running service)' : '';
@@ -338,14 +328,19 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
   </View>;
 }
 
-function FamilyRow({ group, hostId, hostLabel, theme, entries, openScreen, expanded, toggle, name, showUnlinked, lastSeen }: {
-  group: InventoryGroup; hostId: string; hostLabel: string; theme: PluginHostProps['theme'];
+// One row per observed group. There is no disclosure, chevron or hidden
+// inventory: the row names the group, its verified repository (or unlinked
+// display name), the readable worker/scheduler facts and the first failed slot
+// without a tap. Raw unit data stays on the diagnostic view, never on a row.
+function ServiceRow({ group, name, theme, entries, openScreen, showUnlinked, lastSeen, onDetails }: {
+  group: InventoryGroup; name: string; theme: PluginHostProps['theme'];
   entries: DeploymentCatalog['entries'] | null; openScreen: PluginClientContext['openScreen'];
-  expanded: boolean; toggle: () => void; name: string; showUnlinked: boolean;
+  showUnlinked: boolean;
   // Set only when the whole snapshot is retained after a failed refresh or a
   // disconnect. It lives on the row so the retained facts never read as current
   // once the header has scrolled away.
   lastSeen: string | null;
+  onDetails: () => void;
 }) {
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
@@ -354,66 +349,89 @@ function FamilyRow({ group, hostId, hostLabel, theme, entries, openScreen, expan
   // A named failure already carries the failed fact; do not repeat "Failed".
   const status = facts.filter(fact => fact !== 'failed' || failure === null);
   const entry = authorizedEntry(group, entries);
-  const [technical, setTechnical] = useState(false);
-  // This row is one accessibility element, so its visible status text is not
-  // exposed on its own: the disclosure carries it as the accessible hint.
-  const description = [
-    ...(lastSeen === null ? [] : [`Last seen ${lastSeen}`]),
-    ...(failure === null ? [] : [failure]),
-    ...status.map(fact => familyFactText[fact]),
-    ...(entry || !showUnlinked ? [] : ['Unlinked']),
-  ].join(' · ');
-  return <View testID={`orbi-family-${group.label}`} style={{ gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
-    <ActionButton accessibilityName={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityHint={description}
-      expanded={expanded} theme={theme} style={{ alignSelf: 'stretch', justifyContent: 'space-between', gap: 8 }} onPress={toggle}>
-      <View style={{ flexShrink: 1, gap: 4 }}>
-        <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {lastSeen !== null && <Text testID={`orbi-last-seen-${group.label}`} style={secondary}>{`Last seen ${lastSeen}`}</Text>}
-          {failure !== null && <Text style={secondary}>{failure}</Text>}
-          {status.map(fact => <Text key={fact} style={secondary}>{familyFactText[fact]}</Text>)}
-          {showUnlinked && !entry && <Text style={secondary}>Unlinked</Text>}
-        </View>
-      </View>
-      <Text testID={`orbi-chevron-${group.label}`} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={text}>{expanded ? '▾' : '▸'}</Text>
-    </ActionButton>
-    {entry !== null && <ActionButton label="View repository" accessibilityName={`View repository ${entry.label}`} theme={theme}
-      onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })} />}
-    {expanded && <View style={{ gap: 2 }}>
-      {slotLines(group).map(line => <Text key={line} style={text}>{line}</Text>)}
-      {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} />}
-      <ActionButton label="Unit details" accessibilityName={`Unit details for ${group.label}`} expanded={technical} theme={theme}
-        onPress={() => setTechnical(value => !value)} />
-      {technical && <View style={{ gap: 2 }}>
-        <Text style={text}>{group.label}</Text>
-        <Text style={text}>{associationText(group, entry)}</Text>
-        <Text style={text}>Unit activity does not establish issue delivery.</Text>
-        {group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={text}>{unitLine(unit)}</Text>)}
-      </View>}
-    </View>}
+  return <View testID={`orbi-family-${group.label}`} style={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
+    <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      {lastSeen !== null && <Text testID={`orbi-last-seen-${group.label}`} style={secondary}>{`Last seen ${lastSeen}`}</Text>}
+      {failure !== null && <Text style={secondary}>{failure}</Text>}
+      {status.map(fact => <Text key={fact} style={secondary}>{familyFactText[fact]}</Text>)}
+      {showUnlinked && !entry && <Text style={secondary}>Unlinked</Text>}
+    </View>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      <ActionButton label="Details" accessibilityName={`Details for ${name}`} theme={theme} onPress={onDetails} />
+      {entry !== null && <ActionButton label="View repository" accessibilityName={`View repository ${entry.label}`} theme={theme}
+        onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })} />}
+    </View>
   </View>;
 }
 
-export function HostServices({ hostId, hostLabel, surfaceKey, connected, foreground, theme, compact, entries, catalogUnconfigured, openScreen, query }: {
-  hostId: string; hostLabel: string; surfaceKey: string; connected: boolean; foreground: boolean;
-  theme: PluginHostProps['theme']; compact: boolean;
+// Host-scoped diagnostic view. A selected label is only a selection: every fact
+// is resolved again from the selected host's current inventory evidence, so a
+// passed or stale unit/path can never become authority for what is shown.
+export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries, openScreen, onBack, lastSeen }: {
+  hostId: string; hostLabel: string; theme: PluginHostProps['theme'];
+  group: InventoryGroup | null; name: string | null;
+  entries: DeploymentCatalog['entries'] | null;
+  openScreen: PluginClientContext['openScreen'];
+  onBack: () => void;
+  // Retained evidence keeps its last successful time here too, so the raw unit
+  // data on this view never reads as a current observation.
+  lastSeen: string | null;
+}) {
+  const text = { color: theme.colors.foreground };
+  const secondary = { ...text, fontSize: 12 };
+  const entry = group === null ? null : authorizedEntry(group, entries);
+  return <View testID="orbi-service-details" style={{ gap: 8 }}>
+    <Text accessibilityRole="header" testID="orbi-service-details-heading" style={text}>{`Service details · ${hostLabel}`}</Text>
+    <ActionButton label="Back to services" accessibilityName="Back to services" theme={theme} onPress={onBack} />
+    {group === null || name === null
+      ? <Text testID="orbi-service-details-missing" style={text}>This service is not in the current host evidence. Refresh services to re-read this host; no other host or passed unit is used.</Text>
+      : <>
+        <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
+        {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
+        <Text style={text}>{associationText(group, entry)}</Text>
+        {slotLines(group).map(line => <Text key={line} style={text}>{line}</Text>)}
+        <Text style={text}>Unit activity does not establish issue delivery. Raw unit data follows.</Text>
+        <View testID="orbi-service-units" style={{ gap: 2 }}>
+          {group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={secondary}>{unitLine(unit)}</Text>)}
+        </View>
+        {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} />}
+      </>}
+  </View>;
+}
+
+// The Services screen owns the observed host inventory list. It is scoped to the
+// selected host, shows every observed group failures first, and hands one group
+// at a time to the diagnostic view; it reads nothing else.
+export function HostServices({ hostId, hostLabel, theme, compact, connected, foreground, entries, catalogUnconfigured, openScreen, query, selected, onSelect, onBack }: {
+  hostId: string; hostLabel: string; theme: PluginHostProps['theme']; compact: boolean;
+  connected: boolean; foreground: boolean;
   entries: DeploymentCatalog['entries'] | null; catalogUnconfigured: boolean;
   openScreen: PluginClientContext['openScreen'];
   query: ReturnType<typeof useHostServicesQuery>;
+  // One selected family label; the list survives Back without a remount.
+  selected: string | null;
+  onSelect: (label: string) => void;
+  onBack: () => void;
 }) {
   const text = { color: theme.colors.foreground };
-  const [expanded, setExpanded] = useExpandedFamily(surfaceKey);
   const [setupExpanded, setSetupExpanded] = useState(false);
-  const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const observation = query.observation;
   const data = observation?.data ?? null;
   const families = sortFamilies(data?.groups ?? []);
   const names = displayNames(families, entries);
+  const stale = observation?.state === 'stale' && observation.lastSuccessfulAt !== null;
+  if (selected !== null) {
+    const group = families.find(candidate => candidate.label === selected) ?? null;
+    return <ServiceDetails hostId={hostId} hostLabel={hostLabel} theme={theme} group={group}
+      name={group === null ? null : names.get(group.label)!} entries={entries} openScreen={openScreen} onBack={onBack}
+      lastSeen={stale ? observation!.lastSuccessfulAt : null} />;
+  }
   const attention = families.filter(group => summarizeFamily(group).facts.includes('failed')).length;
   const off = data?.state === 'off';
   // A confirmed unconfigured catalog explains the missing repository detail once
-  // here instead of repeating a badge on every row. 'off' shows no service rows
-  // at all, so the explanation belongs to the rows this state actually shows.
+  // on the Services screen instead of repeating a badge on every row. 'off' shows
+  // no service rows at all, so the explanation belongs to the rows this state shows.
   const unconfigured = catalogUnconfigured && !off;
   const state = data?.state ?? (!connected || !foreground ? 'unavailable' : 'loading');
   // Only fresh evidence may publish counts, and only a fresh complete empty
@@ -430,7 +448,6 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   const problems = [...inventoryProblems, ...transportProblems].join('; ');
   const limited = (data?.problems ?? []).some(problem => ['malformed_record', 'read_limit', 'row_limit'].includes(problem.code));
   const failed = (data?.problems ?? []).some(problem => ['process_failed', 'process_timeout', 'process_limit'].includes(problem.code));
-  const stale = observation?.state === 'stale' && observation.lastSuccessfulAt !== null;
   // Retained rows keep their last observed facts, labelled per row; no count or
   // absence claim survives a failed refresh or disconnect.
   const lastSeen = stale ? observation!.lastSuccessfulAt : null;
@@ -446,7 +463,7 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
   ].filter(Boolean);
   const panel = { gap: compact ? 8 : 12 };
   return <View testID="orbi-host-services" style={panel}>
-    <Text accessibilityRole="header" testID="orbi-overview-heading" style={text}>{`${hostLabel} · Fleet`}</Text>
+    <Text accessibilityRole="header" testID="orbi-services-heading" style={text}>{`Services · ${hostLabel}`}</Text>
     <Text style={text}>{off ? 'Service check off · activity unknown' : stale ? 'Stale · current activity unknown' : `Services: ${state === 'complete' ? 'Current' : state}`}</Text>
     {countEvidence && families.length > 0 && <Text testID="orbi-attention-count" style={text}>{`${attention} of ${families.length} ${data?.state === 'partial' ? 'observed ' : ''}groups ${attention === 1 ? 'needs' : 'need'} attention`}</Text>}
     {!connected && <Text style={text}>Offline · current activity unknown</Text>}
@@ -462,17 +479,8 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
     </View> : <ActionButton label={query.refreshing ? 'Refreshing' : 'Refresh services'} accessibilityName="Refresh services"
       disabled={!query.canRefresh} busy={query.refreshing} theme={theme} onPress={() => { void query.refresh(); }} />}
     {copies.map(copy => <Text key={copy} style={text}>{copy}</Text>)}
-    {unconfigured && <View testID="orbi-host-services-unconfigured" style={{ gap: 8 }}>
-      <Text style={text}>Showing host services. Repository details aren't configured.</Text>
-      <ActionButton label="Setup instructions" accessibilityName="Setup instructions" expanded={instructionsExpanded}
-        theme={theme} onPress={() => setInstructionsExpanded(value => !value)} />
-      {instructionsExpanded && <View accessibilityLabel="Repository setup instructions" style={{ gap: 8 }}>
-        <Text style={text}>Repository details come from an authorized JSON file the operator provides through PASEO_ORBI_CONFIG at plugin startup. The operator must provide or repair that file, then explicitly reload this plugin.</Text>
-        <Text style={text}>The host service rows below need no repository configuration. Refresh services only rereads this host's inventory; it does not configure the repository catalog or enable access.</Text>
-      </View>}
-    </View>}
-    {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} hostLabel={hostLabel} theme={theme} entries={entries} openScreen={openScreen}
-      name={names.get(group.label)!} showUnlinked={!unconfigured} lastSeen={lastSeen}
-      expanded={expanded === group.label} toggle={() => setExpanded(expanded === group.label ? null : group.label)} />)}
+    {families.map(group => <ServiceRow key={`${hostId}:${group.label}`} group={group} name={names.get(group.label)!}
+      theme={theme} entries={entries} openScreen={openScreen} showUnlinked={!unconfigured} lastSeen={lastSeen}
+      onDetails={() => onSelect(group.label)} />)}
   </View>;
 }

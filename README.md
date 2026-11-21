@@ -22,7 +22,8 @@ nothing.
 
 ## Views
 
-- **Work** — the default view for a configured repository: issue rows with open-issue icon, number, wrapping title, label chips and read-only Inspect/Open-on-GitHub actions in the first viewport, plus open/closed/all and exact-label filters. Host service families, configured deployments, one loaded detail with timers/services, recorded health, capacity and one explicit presence/type check of an optional designated shortcut stay behind a technical-details disclosure, which also holds the **Actions** disclosure (Start/Stop/Restart) for a deployment the operator granted controls on.
+- **Work** — the default view for a configured repository: issue rows with open-issue icon, number, wrapping title, label chips and read-only Inspect/Open-on-GitHub actions, plus open/closed/all and exact-label filters. One health summary links straight to Services; configured deployments, one loaded detail with timers/services, recorded health, capacity and one explicit presence/type check of an optional designated shortcut stay under **Configured repositories**.
+- **Services** — the host-scoped service screen and the default landing for a host without linked repositories: every observed group failures first, with worker and scheduler facts, the first failed slot and no hidden inventory. **Details** opens a separate host-scoped diagnostic view with raw unit data and, only for an operator-granted deployment, Start/Stop/Restart; **Back to services** returns to the list.
 - **Issues** — lifecycle pages, trusted structured reports, on-demand dependency evidence.
 - **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks.
 - **Blockers** — reported failures and waits, source attribution, metadata only; no recovery controls.
@@ -49,12 +50,13 @@ declares admission `>0.15.0`, which only decides whether Paseo installs or
 loads the plugin; installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain
 NOT_RUN (#23).
 
-**Already installed and configured?** Open the **Orbi** entry on the intended host. An
-unconfigured or invalid catalog shows a **Set up repositories** action naming the
-missing authorization and stating that issue reads are unavailable while
-discovery-only host service inventory keeps working independently; the operator
-supplies the authorization and explicitly reloads the plugin.
-Refresh only rereads startup configuration; it cannot configure or reload.
+**Already installed and configured?** Open the **Orbi** entry on the intended host.
+A host without linked repositories lands on **Services** and shows one notice —
+"Repositories aren’t linked. Link repositories to see GitHub issues." — with a
+**Setup guide** that only explains the operator procedure; an invalid catalog
+names the repair instead. The operator supplies the authorization and explicitly
+reloads the plugin. Refresh only rereads startup configuration; it cannot
+configure or reload.
 
 ### Authorized installation (not performed here)
 

@@ -11,11 +11,11 @@ import { useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
 import { GitHubEvidenceLink } from './github-evidence-link';
 import { LabelChips } from './label-chip';
-import { HostServices, serviceAttention, useHostServicesQuery } from './host-overview';
+import { serviceAttention, useHostServicesQuery } from './host-overview';
 
 // Work is the default view for a configured repository. It renders page-one
-// issue rows for one available deployment and keeps the host service inventory
-// one technical-details disclosure away. Every fact here is a bounded, read-only
+// issue rows for one available deployment and links to the host Services screen
+// through one health summary. Every fact here is a bounded, read-only
 // observation: no retry, mutation, label change or repository discovery.
 
 // Concise age for a row; the exact timestamp stays in the Issues detail.
@@ -57,8 +57,6 @@ const issueHeading = (state: IssueBrowseState) => state === 'open' ? 'Open issue
 export function Work(props: PluginScreenProps & {
   openScreen: PluginClientContext['openScreen'];
   catalog: DeploymentCatalog | null;
-  // Confirmed unconfigured projection from the catalog owner, never a read failure.
-  catalogUnconfigured: boolean;
   connected: boolean; foreground: boolean;
   query: ReturnType<typeof useHostServicesQuery>;
 }) {
@@ -73,7 +71,6 @@ export function Work(props: PluginScreenProps & {
     ?? available[0] ?? null;
   const [browseState, setBrowseState] = useState<IssueBrowseState>('open');
   const [label, setLabel] = useState<string | null>(null);
-  const [servicesOpen, setServicesOpen] = useState(false);
   const read = useRpc(issuesList);
   // The identity matches the Issues screen's page-one observation, so a filter
   // switch, host change or late response can never publish into another scope.
@@ -105,12 +102,15 @@ export function Work(props: PluginScreenProps & {
     : attention.failed === 0
       ? `Services: ${attention.partial ? 'partial' : 'current'} · ${attention.total} ${attention.partial ? 'observed ' : ''}groups, no failed groups`
       : `Services: ${attention.partial ? 'partial' : 'current'} · ${attention.failed} of ${attention.total} ${attention.partial ? 'observed ' : ''}groups ${attention.failed === 1 ? 'needs' : 'need'} attention`;
+  // A confirmed unconfigured catalog has no issue read to explain here: the
+  // shared notice above the surface says it once. Every other catalog state
+  // keeps its own bounded explanation.
   const blocked = props.catalog === null
     ? (props.connected && props.foreground ? 'Reading the selected host repository catalog…' : 'Repository catalog unavailable. Reconnect the selected host or ask the operator to check the plugin.')
     : props.catalog.state === 'unconfigured'
-      ? 'Issue reads need a validated repository catalog, which this host does not have. Set up repositories below explains the missing authorization.'
+      ? null
       : props.catalog.state === 'invalid'
-        ? 'Issue reads need a validated repository catalog, and this host configuration is invalid. Set up repositories below explains the repair.'
+        ? 'Issue reads need a validated repository catalog, and this host configuration is invalid. The Setup guide above explains the repair.'
         : 'No available configured repository. Configured repositories below lists the rejected entries.';
   const empty = page !== null && page.records.length === 0 && state === 'available';
   return <View testID="orbi-work" style={{ gap: 8 }}>
@@ -120,8 +120,10 @@ export function Work(props: PluginScreenProps & {
       {available.map(entry => <ActionButton key={entry.id} label={`${entry.label} (${entry.repo})`} accessibilityName={`Work repository ${entry.label}`}
         selected={entry.id === selected?.id} theme={props.theme} onPress={() => setChosen(entry.id)} />)}
     </View>}
-    <Text testID="orbi-work-services-summary" style={text}>{summary}</Text>
-    {selected === null ? <Text testID="orbi-work-blocked" style={text}>{blocked}</Text> : <>
+    {/* The health summary is the direct route to Services: one line, one action. */}
+    <ActionButton label={summary} accessibilityName="Services summary" testID="orbi-work-services-summary"
+      theme={props.theme} onPress={() => props.openScreen({ screenId: 'services', params: selected ? { deploymentId: selected.id } : {} })} />
+    {selected === null ? blocked !== null && <Text testID="orbi-work-blocked" style={text}>{blocked}</Text> : <>
       <Text accessibilityRole="header" testID="orbi-work-issues-heading" style={text}>{issueHeading(browseState)}</Text>
       <View testID="orbi-work-filters" style={{ gap: 8 }}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -152,16 +154,5 @@ export function Work(props: PluginScreenProps & {
         {props.connected && !props.foreground && <Text style={text}>App is in the background. Issue reads are paused.</Text>}
       </View>
     </>}
-    <View testID="orbi-work-services" style={{ gap: 8 }}>
-      <ActionButton label={servicesOpen ? 'Hide services (technical details)' : 'Services (technical details)'}
-        accessibilityName="Services (technical details)" expanded={servicesOpen} theme={props.theme}
-        onPress={() => setServicesOpen(value => !value)} />
-      {servicesOpen && <HostServices
-        key={`${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`} surfaceKey={`${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`}
-        hostId={props.host.id} hostLabel={props.host.label} connected={props.connected} foreground={props.foreground}
-        theme={props.theme} compact={props.layout.compact}
-        entries={props.catalog?.entries ?? null} catalogUnconfigured={props.catalogUnconfigured}
-        openScreen={props.openScreen} query={props.query} />}
-    </View>
   </View>;
 }
