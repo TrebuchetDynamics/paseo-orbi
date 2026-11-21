@@ -316,3 +316,61 @@ Global setup executes the stand-in before any daemon, in the layout a launched h
 | Native Linux lane (#13) | NOT_RUN | unchanged; browser viewports are not native proof |
 
 Exclusions: no modification of historical PR #22 or reuse of failed output/old SHA; no service control, real `systemctl`/journald enumeration, operator data, credentials, symlinks, personal host or production operation; no shortcut RPC, alias fixture, repository-shortcut screenshot or #31 dependency; no substitution for #12's evidence, #13's native requirements or #23's matched-version matrix. A later live run requires a fresh committed candidate, fresh homes/ports/output and its own approval; this section records preparation, not qualification.
+
+## Phone Services and Work review (issue #91)
+
+**Offline record delivered; every phone case is NOT_RUN.** #89 and #90 delivered the labelled action buttons, the permanent Services list and the separate diagnostic view; this review is the human phone check of those two screens. It has not been executed: no owner instruction names a phone, a disposable test host and catalog, a candidate installation, or the capture handling and cleanup, so this section records the consent gate, the exact pre-checks, the 12 required cases and the pass/fail vocabulary instead of a phone result. A desktop or Chromium viewport at 375×667 — including the #32 lane images and the 360/390/430 layout declarations in `tests/work.test.tsx` — is supplementary evidence only and is never phone proof.
+
+### Permission and prerequisite gate
+
+The review needs all of:
+
+- an owner comment that names the phone (model and OS build), the disposable test host and catalog, and the exact committed candidate (40-lowercase-hex SHA) to install, and that approves synthetic repository and service evidence, on-device capture, redaction and removal;
+- a source-bound disposable host running that candidate with `PASEO_ORBI_HOST_INVENTORY=1` at startup, a synthetic catalog and synthetic service families, and the operator control grant only if Start/Stop/Restart is meant to be reviewed;
+- the recorded phone facts for every case: candidate SHA, daemon and app version, phone model and OS, CSS viewport width×height and device pixel ratio, the Paseo app browser engine, the theme and the system text scale.
+
+A URL, CLI flag, bot comment, green offline suite or author identity is not technical proof of consent; the execution owner must read and verify the recorded instruction. Missing consent or prerequisite keeps every case NOT_RUN, never PASS. Issue #91 excludes production grant or catalog changes, worker control, real service mutations and public screenshots without consent: never use a real host, real repository telemetry or the operator's own phone as this fixture.
+
+### Pre-checks on the exact candidate
+
+Before any phone step, on the exact committed candidate and the documented baseline (Linux, Node 22.19.0):
+
+```sh
+timeout 60 npm run test:e2e:typecheck
+timeout 240 env -u PASEO_ORBI_HOST_INVENTORY npm test
+```
+
+Both must exit 0. A nonzero exit stops the review with that command's own output: repair the candidate or pin a new committed SHA and rerun, and never record a phone case against an unverified revision. A local host whose Node differs (for example 26.8.2) can show harness-only failures from the Node 22.19.0 process-registration lanes, such as `Process registration requires Linux Node 22.19.0 with process.execve; no spawn fallback`; the PR's GitHub Actions checks are the test authority, and neither a green local suite nor a green CI run is a phone result.
+
+### Cases (all NOT_RUN)
+
+| Case | Required phone observation | Result | Evidence | Outstanding defect |
+| --- | --- | --- | --- | --- |
+| `unconfigured-first-screen` | first phone viewport lists the observed service names and the failure with no tap, expansion or horizontal clipping, below one setup notice | NOT_RUN | none | unknown until the authorized run |
+| `configured-work` | configured Work still exposes issue rows with wrapping titles and label chips, and chips stay flat rather than looking like actions | NOT_RUN | none | unknown until the authorized run |
+| `services-list` | the failed service is findable at a glance: failed-first order, attention count, worker and scheduler facts and the first failed slot with no hidden row inventory | NOT_RUN | none | unknown until the authorized run |
+| `diagnostic-detail` | Details opens the separate host-scoped view with numeric slot summaries, raw unit data and Actions only for a deployment the operator granted | NOT_RUN | none | unknown until the authorized run |
+| `back-to-services` | Back to services restores the same list, selection and scroll position on the phone | NOT_RUN | none | unknown until the authorized run |
+| `setup-guide` | Setup guide expands once, explains the operator procedure and applies nothing | NOT_RUN | none | unknown until the authorized run |
+| `stale-read` | after a failed refresh or disconnect every retained row reads Last seen with its last successful time and no current count | NOT_RUN | none | unknown until the authorized run |
+| `touch-actions` | filled, outlined and danger buttons operate by touch and look distinct from status text and GitHub label chips | NOT_RUN | none | unknown until the authorized run |
+| `normal-text` | every action label is readable and no action clips at the phone's normal text scale | NOT_RUN | none | unknown until the authorized run |
+| `large-text` | the same at that phone's largest system text scale | NOT_RUN | none | unknown until the authorized run |
+| `contrast` | light and dark themes keep text, status and button contrast readable | NOT_RUN | none | unknown until the authorized run |
+| `safe-area` | no control sits under the notch, rounded corner or home indicator, and the last action stays reachable | NOT_RUN | none | unknown until the authorized run |
+
+### Evidence rules and vocabulary
+
+PASS or FAIL replaces NOT_RUN only with an inspected artifact for that case: the capture path, its SHA-256, the observed result, and the inspecting operator with the ISO time. A DOM assertion, an unviewed file, a generated placeholder image or another host's screen cannot justify either. A FAIL also replaces the unknown defect with one concrete named defect plus the phone facts above; a PASS records "none observed".
+
+Publish only approved redacted captures: no tokens, private repository names, real host or unit names, personal screenshots or unredacted traces. Remove the disposable test host and catalog and delete the captures after the record unless the owner approves retaining them. This record names no defect and claims none fixed: without inspected phone artifacts an outstanding defect is unknown, not absent.
+
+### Result
+
+| Gate | Result | Missing input or note |
+| --- | --- | --- |
+| Offline pre-checks on the exact candidate (`npm run test:e2e:typecheck`, `env -u PASEO_ORBI_HOST_INVENTORY npm test`) | delivered through the repository's own commands | the PR's GitHub Actions checks are the authority; no phone case follows from them |
+| Owner consent naming phone, test host and catalog, candidate, capture handling and cleanup | NOT_RUN | no recorded owner instruction |
+| Candidate installed on the named phone and disposable host with synthetic evidence | NOT_RUN | no authorized installation, fixture or capture approval |
+| The 12 phone cases above | NOT_RUN | captured 0, inspected 0 |
+| Outstanding defects | unknown | no inspected phone artifact; nothing is claimed fixed |

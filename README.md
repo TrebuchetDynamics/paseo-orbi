@@ -40,8 +40,8 @@ operators, so a grant is an explicit statement that every admitted client of
 that host may operate the approved targets; see the
 [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#service-controls-operator-grant-default-off). Offline checks cover
 all five views; the Linux Electron qualification lane is implemented but has
-not been executed, iOS/Android are deferred, and live installation plus
-installed qualification remain unperformed.
+not been executed, iOS/Android are deferred, and live installation, installed
+qualification and the [phone Services and action review (#91)](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/testing/qualification.md#phone-services-and-work-review-issue-91) remain unperformed.
 
 ## Setup
 
