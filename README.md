@@ -42,8 +42,10 @@ loads the plugin; installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain
 NOT_RUN (#23).
 
 **Already installed and configured?** Open the **Orbi** entry on the intended host. An
-unconfigured or invalid catalog shows a setup panel naming the missing
-authorization; the operator supplies it and explicitly reloads the plugin.
+unconfigured or invalid catalog shows a **Set up repositories** action naming the
+missing authorization and stating that issue reads are unavailable while
+discovery-only host service inventory keeps working independently; the operator
+supplies the authorization and explicitly reloads the plugin.
 Refresh only rereads startup configuration; it cannot configure or reload.
 
 ### Authorized installation (not performed here)

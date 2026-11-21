@@ -46,7 +46,7 @@ export async function assertOverviewState(page: Page, state: 'complete' | 'parti
     await expect(page.getByText('Partial · units may be missing.', { exact: true })).toBeVisible();
     await expect(page.getByText('installed: process_failed', { exact: true })).toBeVisible();
   } else {
-    await page.getByRole('button', { name: 'Repository setup', exact: true }).click();
+    await page.getByRole('button', { name: 'Set up repositories', exact: true }).click();
     await expect(page.getByText(/Unconfigured: ask the operator/)).toBeVisible();
   }
   // No state may claim confirmed absence without a current complete empty read.
