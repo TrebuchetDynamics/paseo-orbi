@@ -23,7 +23,7 @@ describe('Issues', () => {
 import { afterEach, vi } from 'vitest';
 import { readFile, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ReportSelection, IssueDetail, IssuePage, issuesList, issuesGet, issueStates, neutralLabelColor, labelForeground } from '../shared/issues';
+import { ReportSelection, IssueDetail, IssuePage, issuesList, issuesGet, issueStates, neutralLabelColor, labelForeground, labelLuminance } from '../shared/issues';
 import { GitHubReader } from '../server/github';
 import { ReadPorts, type ProcessOperation } from '../server/read-ports';
 import { ConfigRepository } from '../server/config';
@@ -123,11 +123,17 @@ describe('lifecycle_and_pagination', () => {
       { name: 'hashy', color: neutralLabelColor },
     ]);
     expect(record).toMatchObject({ state: 'Blocked', badge: 'ai-blocked', provenance: 'github', warning: true });
-    expect(labelForeground('#00ff00')).toBe('#1f2328');
-    expect(labelForeground('#00FF00')).toBe('#1f2328');
-    expect(labelForeground('#0d1117')).toBe('#ffffff');
-    expect(labelForeground(neutralLabelColor)).toBe('#ffffff');
-    expect(labelForeground('not-a-color')).toBe('#ffffff');
+    // The chip ink is chosen at the black/white luminance crossover, so every
+    // accepted repository color clears WCAG AA 4.5:1 against its own fill.
+    const contrast = (left: string, right: string) => {
+      const [high, low] = [labelLuminance(left), labelLuminance(right)].sort((a, b) => b - a);
+      return (high + 0.05) / (low + 0.05);
+    };
+    for (const color of ['#00ff00', '#00FF00', '#0d1117', neutralLabelColor, 'not-a-color', '#808080', '#767676', '#aaaaaa', '#ffff00', '#0000ff']) {
+      const ink = labelForeground(color);
+      expect(ink).toBe(labelLuminance(color) > 0.179 ? '#000000' : '#ffffff');
+      expect(contrast(ink, /^#[0-9a-fA-F]{6}$/.test(color) ? color : neutralLabelColor)).toBeGreaterThanOrEqual(4.5);
+    }
     // Presentation metadata is validated at the contract boundary too.
     expect(() => IssuePage.parse({ ...page.data, records: [{ ...record, labelDetails: [{ name: 'x', color: 'red' }] }] })).toThrow();
     expect(IssuePage.parse({ ...page.data, records: [{ ...record, labelDetails: [{ name: 'x', color: '#00ff00' }] }] }).records[0].labelDetails).toEqual([{ name: 'x', color: '#00ff00' }]);
@@ -713,7 +719,7 @@ describe('Issues user journey', () => {
     const chips = renderer.root.findAll(node => node.props.testID === 'orbi-label-chip');
     expect(chips.map(chip => chip.findByType('Text' as any).children.join(''))).toEqual(['ai-ready', 'good first issue']);
     expect(chips[0].props.style).toMatchObject({ backgroundColor: '#00ff00', borderRadius: 999 });
-    expect(chips[0].findByType('Text' as any).props.style.color).toBe('#1f2328');
+    expect(chips[0].findByType('Text' as any).props.style.color).toBe('#000000');
     expect(chips[1].props.style.backgroundColor).toBe('#0d1117');
     expect(chips[1].findByType('Text' as any).props.style.color).toBe('#ffffff');
     expect(chips[0].parent?.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });

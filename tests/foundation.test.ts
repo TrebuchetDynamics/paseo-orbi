@@ -355,9 +355,14 @@ describe('package_and_registration', () => {
       expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'runs' || screen.id === 'blockers' ? 'select a repository to browse' : 'feature not implemented');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       if (screen.id === 'fleet') {
-        const fleetText = renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
-        expect(fleetText).toContain('Host A · Fleet');
-        expect(fleetText.indexOf('Host A · Fleet')).toBeLessThan(fleetText.indexOf('Fleet — read-only'));
+        const fleetText = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+        // Work is the default surface for the configured repository; the host
+        // service inventory is one technical-details disclosure away.
+        expect(fleetText()).toMatch(/^Work · Host A\nRepository: Demo \(Example\/project\)/);
+        expect(fleetText()).not.toContain('Host A · Fleet');
+        await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Services (technical details)' }).props.onPress());
+        expect(fleetText()).toContain('Host A · Fleet');
+        expect(fleetText().indexOf('Host A · Fleet')).toBeLessThan(fleetText().indexOf('Fleet — read-only'));
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Set up service access' })).toHaveLength(1);
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
@@ -374,7 +379,7 @@ describe('package_and_registration', () => {
       const navigation = renderer.root.findByProps({ testID: 'orbi-navigation' });
       expect(navigation.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
       const tabs = navigation.findAllByType('Pressable' as any);
-      expect(tabs.map(tab => tab.props.accessibilityLabel)).toEqual(['Open Overview', 'Open Issues', 'Open Runs', 'Open Blockers']);
+      expect(tabs.map(tab => tab.props.accessibilityLabel)).toEqual(['Open Work', 'Open Issues', 'Open Runs', 'Open Blockers']);
       for (const [index, tab] of tabs.entries()) {
         expect(tab.props.accessibilityRole).toBe('button'); // RN web supplies Enter/Space activation for onPress.
         expect(tab.props.accessibilityState).toEqual({ selected: screens[index].id === screen.id });
@@ -388,7 +393,7 @@ describe('package_and_registration', () => {
       await act(async () => renderer.update(tree(client, React.createElement(screen.Component, light))));
       expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(24);
       for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#222');
-      await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Open Overview' }).props.onPress());
+      await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Open Work' }).props.onPress());
       expect(openScreen).toHaveBeenLastCalledWith({ screenId: 'fleet', params: {} });
     }
     const renderer = await render(client, React.createElement(sidebar[0].Component, { ...props, currentScreen: null, openScreen, openPopover: vi.fn() }));
@@ -478,6 +483,10 @@ describe('package_and_registration', () => {
     }));
     host.readCatalog.mockReset().mockResolvedValue(unconfigured);
     const inventoryRenderer = await render(queryClient(), React.createElement(screens[0].Component, { ...props, params: { deploymentId: 'demo' } }));
+    expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
+    // The unconfigured catalog keeps discovery-only inventory behind the same
+    // technical-details disclosure, with no repository authority either way.
+    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Services (technical details)' }).props.onPress());
     expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
     expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(0);
     expect(inventoryRenderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('View repository'))).toHaveLength(0);
