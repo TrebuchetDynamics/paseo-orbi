@@ -134,13 +134,18 @@ it('four_views_read_only_journey', async () => {
   // Mounting the detail is not an operator request: no shortcut inspection is made.
   expect(text()).toContain('Workspace shortcut: Not inspected');
   expect(host.readShortcut).not.toHaveBeenCalled();
-  // Host inventory is not opted in here: the Overview keeps the #24 catalog
-  // semantics and adds no discovered family or repository action.
+  // Host inventory is not opted in here: Work is the default surface and the
+  // discovery-only host inventory stays behind its technical-details disclosure.
   expect(host.readInventory).toHaveBeenCalledTimes(1);
+  expect(text().startsWith('Work · Host A\nRepository: Demo (Example/project)')).toBe(true);
+  expect(text()).toContain('Issues: current');
+  expect(text()).toContain('#42 Issue 42');
+  expect(text().indexOf('#42 Issue 42')).toBeLessThan(text().indexOf('Services (technical details)'));
+  await press('Services (technical details)');
   expect(text()).toContain('Service check off · activity unknown');
   expect(text()).not.toContain('Observed unit families');
   expect(text()).not.toContain('last successful check');
-  expect(text().indexOf('Host A · Fleet')).toBeLessThan(text().indexOf('Demo (Example/project)'));
+  expect(text().indexOf('Host A · Fleet')).toBeLessThan(text().indexOf('Fleet — read-only'));
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
   await press('Set up service access');
   expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');

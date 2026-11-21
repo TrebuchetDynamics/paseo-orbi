@@ -13,13 +13,22 @@ export async function pressEnter(page: Page, role: 'button' | 'link', name: stri
   await page.keyboard.press('Enter');
 }
 
-// The shipped Overview title is sourced from client/shell.tsx title('fleet').
+// Work keeps the host service inventory behind one technical-details
+// disclosure. Open it idempotently so the service rows, counts and heading stay
+// observable after a fresh mount or a host change collapsed it again.
+export async function openServices(page: Page) {
+  const heading = page.getByTestId('orbi-overview-heading');
+  if (!(await heading.first().isVisible())) await pressEnter(page, 'button', 'Services (technical details)');
+  await expect(heading).toBeVisible();
+}
+
+// The shipped Work title is sourced from client/shell.tsx routeTitle('fleet').
 export async function openOverview(page: Page, host: LeaseHost) {
   await page.goto(host.url);
   await menu(page);
   await pressEnter(page, 'button', 'Orbi');
-  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Overview');
-  await expect(page.getByTestId('orbi-overview-heading')).toBeVisible();
+  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
+  await openServices(page);
 }
 
 export async function openRoute(page: Page, route: 'Issues' | 'Runs' | 'Blockers') {

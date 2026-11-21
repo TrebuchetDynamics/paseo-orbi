@@ -1,9 +1,9 @@
 import type { PluginClientContext } from '@getpaseo/plugin/client';
-import { routes, Shell, Sidebar } from './client/shell';
+import { routeTitle, routes, Shell, Sidebar } from './client/shell';
 
 export default function contribute(client: PluginClientContext) {
   const removers = routes.map(route => client.addScreen({
-    id: route, title: route[0].toUpperCase() + route.slice(1),
+    id: route, title: routeTitle(route),
     Component: props => <Shell {...props} route={route} openScreen={input => client.openScreen(input)} />,
   }));
   removers.push(client.addSidebarHeaderItem({ id: 'orbi', title: 'Orbi', Component: Sidebar }));

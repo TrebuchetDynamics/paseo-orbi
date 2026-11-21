@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 const state = vi.hoisted(() => ({
-  readBlockers: vi.fn(), readBlocker: vi.fn(), readRuns: vi.fn(), readRun: vi.fn(), openExternalUrl: vi.fn().mockResolvedValue(undefined), readCatalog: vi.fn(), readFleet: vi.fn().mockRejectedValue(new Error('fixture_unavailable')), readIssues: vi.fn(), readIssue: vi.fn(), readShortcut: vi.fn(), readInventory: vi.fn().mockResolvedValue({ state: 'off', observedAt: null, sources: [], groups: [], problems: [] }), hosts: [{ serverId: 'host-a', label: 'Host A', status: 'online' }],
+  readBlockers: vi.fn(), readBlocker: vi.fn(), readRuns: vi.fn(), readRun: vi.fn(), openExternalUrl: vi.fn().mockResolvedValue(undefined), readCatalog: vi.fn(), readFleet: vi.fn().mockRejectedValue(new Error('fixture_unavailable')), readIssues: vi.fn().mockResolvedValue({ state: 'unavailable', observedAt: '2026-11-19T18:00:00.000Z', lastSuccessfulAt: null, data: null, problems: [] }), readIssue: vi.fn(), readShortcut: vi.fn(), readInventory: vi.fn().mockResolvedValue({ state: 'off', observedAt: null, sources: [], groups: [], problems: [] }), hosts: [{ serverId: 'host-a', label: 'Host A', status: 'online' }],
   listeners: new Set<(state: string) => void>(),
 }));
 export const host = state;

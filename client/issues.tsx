@@ -1,17 +1,15 @@
 import { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useRpc, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
-import { issuesList, issuesGet, issueStates, issueBrowseStates, validIssueLabel, type IssueBrowseState, type IssueDetail, type IssuePage } from '../shared/issues';
+import { issuesList, issuesGet, issueStates, issueBrowseStates, issueBrowseStateTitle, issueLabelShortcuts, issueReadRepair, validIssueLabel, type IssueBrowseState, type IssueDetail, type IssuePage } from '../shared/issues';
 import { waitGuidance } from '../shared/blockers';
 import { ObservationView, useObservationQuery } from './observation';
 import { GitHubEvidenceLink } from './github-evidence-link';
 import { LabelChips } from './label-chip';
 
-type Props = { deploymentId: string; hostId: string; repo: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme']; openScreen: PluginClientContext['openScreen'] };
-// One exact label, or All labels: shortcuts for the workflow labels this plugin
-// already classifies, plus any other literal label through the text field.
-const labelShortcuts = ['ai-ready', 'ai-planning', 'ai-blocked', 'ai-in-progress'] as const;
-const stateTitle = (state: IssueBrowseState) => state === 'all' ? 'All states' : state[0].toUpperCase() + state.slice(1);
+type Props = { deploymentId: string; hostId: string; repo: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme']; openScreen: PluginClientContext['openScreen'];
+  // Work's Inspect action opens this screen with one exact issue already selected.
+  initialIssue?: number | null };
 function Detail({ data, ...props }: Props & { data: IssueDetail }) {
   const text = { color: props.theme.colors.foreground };
   // Only a complete report establishes the current run; any other read stays inert text.
@@ -52,7 +50,7 @@ export function Issues(props: Props) {
   const [browseState, setBrowseState] = useState<IssueBrowseState>('open');
   const [label, setLabel] = useState<string | null>(null);
   const [labelText, setLabelText] = useState('');
-  const [selected, select] = useState<number | null>(null);
+  const [selected, select] = useState<number | null>(props.initialIssue ?? null);
   const [issueText, setIssueText] = useState('');
   const read = useRpc(issuesList);
   const readDetail = useRpc(issuesGet);
@@ -76,7 +74,7 @@ export function Issues(props: Props) {
   </View>;
   return <View>
     <Text style={text}>Ready candidate does not promise pickup. Dependency status is unknown until an issue is selected. Labels are evidence, not execution instructions.</Text>
-    <Text style={text}>If auth_denied: ask the operator to repair the daemon user's existing gh authentication, then Refresh. rate_limited: wait for GitHub's retry/reset gate; Refresh cannot bypass it.</Text>
+    <Text style={text}>{issueReadRepair}</Text>
     <TextInput accessibilityLabel="Issue number to inspect" value={issueText} onChangeText={setIssueText} keyboardType="number-pad" style={{ ...text, borderColor: props.theme.colors.foreground, borderWidth: 1 }} />
     <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue by number" disabled={!lookup} onPress={() => { if (lookup) select(Number(issueText)); }}><Text style={text}>Inspect issue</Text></Pressable>
     {!listed && panel}
@@ -84,11 +82,11 @@ export function Issues(props: Props) {
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {issueBrowseStates.map(next => <Pressable key={next} accessibilityRole="button" accessibilityLabel={`Browse ${next} issues`} accessibilityState={{ selected: browseState === next }}
           style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, borderWidth: browseState === next ? 2 : 1, borderColor: props.theme.colors.foreground }}
-          onPress={() => applyFilter(next, label)}><Text style={text}>{stateTitle(next)}</Text></Pressable>)}
+          onPress={() => applyFilter(next, label)}><Text style={text}>{issueBrowseStateTitle(next)}</Text></Pressable>)}
       </View>
       <Text style={text}>Filter: {browseState} issues; label: {label ?? 'all labels'}.</Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {[null, ...labelShortcuts].map(next => <Pressable key={next ?? 'all'} accessibilityRole="button" accessibilityLabel={next === null ? 'All labels' : `Filter by label ${next}`}
+        {[null, ...issueLabelShortcuts].map(next => <Pressable key={next ?? 'all'} accessibilityRole="button" accessibilityLabel={next === null ? 'All labels' : `Filter by label ${next}`}
           accessibilityState={{ selected: label === next }} style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, borderWidth: label === next ? 2 : 1, borderColor: props.theme.colors.foreground }}
           onPress={() => { setLabelText(next ?? ''); applyFilter(browseState, next); }}><Text style={text}>{next ?? 'All labels'}</Text></Pressable>)}
       </View>

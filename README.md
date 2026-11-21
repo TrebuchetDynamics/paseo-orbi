@@ -20,7 +20,7 @@ nothing.
 
 ## Views
 
-- **Overview** — host-scoped user service families, configured deployments, one loaded detail with timers/services, recorded health, capacity, and one explicit presence/type check of an optional designated shortcut.
+- **Work** — the default view for a configured repository: issue rows with open-issue icon, number, wrapping title, label chips and read-only Inspect/Open-on-GitHub actions in the first viewport, plus open/closed/all and exact-label filters. Host service families, configured deployments, one loaded detail with timers/services, recorded health, capacity and one explicit presence/type check of an optional designated shortcut stay behind a technical-details disclosure.
 - **Issues** — lifecycle pages, trusted structured reports, on-demand dependency evidence.
 - **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks.
 - **Blockers** — reported failures and waits, source attribution, metadata only; no recovery controls.
@@ -69,7 +69,7 @@ at install time; it does not install a GitHub Release. This is not a promise
 that every `main` commit has passed live qualification: the plugin has offline
 checks only, and live installation plus installed qualification remain
 unperformed. Require `running` in `paseo plugin ls`, open the **Orbi** entry on
-Overview and select an authorized deployment. These commands are instructions,
+Work and select an authorized deployment. These commands are instructions,
 not observed results.
 
 An existing Git installation stays at its installed revision until the operator
@@ -81,8 +81,8 @@ approval; declining or a failed update keeps the installed content.
 `875c69a101a102a8f14b064f0664069b5e603f4f` is the revision of the recorded
 offline qualification run. It is not needed for a fresh install and is not a
 permanent update pin. It predates the current **Orbi** entry and host-first
-Overview: it lists Fleet, Issues, Runs and Blockers as separate sidebar rows,
-while current `main` opens one **Orbi** entry on Overview with in-app
+Work: it lists Fleet, Issues, Runs and Blockers as separate sidebar rows,
+while current `main` opens one **Orbi** entry on Work with in-app
 navigation. To reproduce that revision deliberately:
 
 ```sh
