@@ -23,7 +23,7 @@ describe('Issues', () => {
 import { afterEach, vi } from 'vitest';
 import { readFile, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ReportSelection, IssueDetail, IssuePage, issuesList, issuesGet, issueStates } from '../shared/issues';
+import { ReportSelection, IssueDetail, IssuePage, issuesList, issuesGet, issueStates, neutralLabelColor, labelForeground } from '../shared/issues';
 import { GitHubReader } from '../server/github';
 import { ReadPorts, type ProcessOperation } from '../server/read-ports';
 import { ConfigRepository } from '../server/config';
@@ -70,7 +70,7 @@ describe('lifecycle_and_pagination', () => {
     }
     expect(classifyIssue('open', ['ai-human-review']).state).toBe('Other');
   });
-  it('browses all-state pages, excludes PRs and never treats errors as empty/ready', async () => {
+  it('browses server-side open/closed/all state by default, excludes PRs and never treats errors as empty/ready', async () => {
     const f = fakeReader();
     f.process.mockResolvedValueOnce(response([rest.issue, { ...rest.issue, number: 9, pull_request: { url: 'https://example.invalid' } }]));
     const first = await f.reader.listIssues('demo', 1);
@@ -78,7 +78,14 @@ describe('lifecycle_and_pagination', () => {
     expect(IssuePage.parse(first.data).records.map(r => r.number)).toEqual([4]);
     expect(first.data?.records[0]).toMatchObject({ state: 'Blocked', warning: true, provenance: 'github' });
     expect(first.data?.dependencyStatus).toBe('unknown');
-    expect(f.process.mock.calls[0][1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'all', page: 1 });
+    // Open is the browse default and an explicit server-side state, never all.
+    expect(first.data).toMatchObject({ state: 'open', label: null });
+    expect(f.process.mock.calls[0][1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 });
+    for (const state of ['closed', 'all'] as const) {
+      f.advance(); f.process.mockResolvedValueOnce(response([rest.issue]));
+      expect((await f.reader.listIssues('demo', 1, state)).data).toMatchObject({ state, label: null });
+      expect(f.process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state, page: 1 });
+    }
     f.advance(); f.process.mockResolvedValueOnce(response({}, 401));
     const stale = await f.reader.listIssues('demo', 1);
     expect(stale).toMatchObject({ state: 'stale', data: first.data, lastSuccessfulAt: first.lastSuccessfulAt, problems: [{ code: 'auth_denied' }] });
@@ -87,6 +94,80 @@ describe('lifecycle_and_pagination', () => {
     const denied = fakeReader(); denied.process.mockResolvedValue(response({}, 401));
     expect(await denied.reader.listIssues('demo', 1)).toMatchObject({ state: 'unavailable', data: null, problems: [{ code: 'auth_denied' }] });
     expect(JSON.stringify(first)).not.toContain('BODY_CANARY');
+  });
+  it('keeps a continuation action for a page that contains only pull requests', async () => {
+    const f = fakeReader();
+    f.process.mockResolvedValue(response(Array.from({ length: 100 }, (_, index) => ({ ...rest.issue, number: index + 1, pull_request: { url: 'https://example.invalid' } }))));
+    const heavy = await f.reader.listIssues('demo', 1, 'open');
+    expect(heavy).toMatchObject({ state: 'available', data: { state: 'open', hasNextPage: true, records: [] } });
+    expect(heavy.data?.records).toEqual([]);
+  });
+  it('validates label colors, falls back to a neutral chip and keeps lifecycle/provenance unchanged', async () => {
+    const raw = { ...rest.issue, labels: [
+      { name: 'ai-ready', color: '00FF00' },
+      { name: 'ai-blocked' },
+      { name: 'needs triage', color: 'not-a-color' },
+      { name: 'odd', color: '00FF0' },
+      { name: 'hashy', color: '#00ff00' },
+    ] };
+    const f = fakeReader(); f.process.mockResolvedValue(response([raw]));
+    const page = await f.reader.listIssues('demo', 1);
+    const record = IssuePage.parse(page.data).records[0];
+    // Literal names stay classification evidence; colors are presentation only.
+    expect(record.labels).toEqual(['ai-ready', 'ai-blocked', 'needs triage', 'odd', 'hashy']);
+    expect(record.labelDetails).toEqual([
+      { name: 'ai-ready', color: '#00ff00' },
+      { name: 'ai-blocked', color: neutralLabelColor },
+      { name: 'needs triage', color: neutralLabelColor },
+      { name: 'odd', color: neutralLabelColor },
+      { name: 'hashy', color: neutralLabelColor },
+    ]);
+    expect(record).toMatchObject({ state: 'Blocked', badge: 'ai-blocked', provenance: 'github', warning: true });
+    expect(labelForeground('#00ff00')).toBe('#1f2328');
+    expect(labelForeground('#00FF00')).toBe('#1f2328');
+    expect(labelForeground('#0d1117')).toBe('#ffffff');
+    expect(labelForeground(neutralLabelColor)).toBe('#ffffff');
+    expect(labelForeground('not-a-color')).toBe('#ffffff');
+    // Presentation metadata is validated at the contract boundary too.
+    expect(() => IssuePage.parse({ ...page.data, records: [{ ...record, labelDetails: [{ name: 'x', color: 'red' }] }] })).toThrow();
+    expect(IssuePage.parse({ ...page.data, records: [{ ...record, labelDetails: [{ name: 'x', color: '#00ff00' }] }] }).records[0].labelDetails).toEqual([{ name: 'x', color: '#00ff00' }]);
+  });
+  it('encodes one exact label server-side and isolates observations per repository, state, label and page', async () => {
+    let now = Date.parse('2026-10-15T06:20:00Z'), issued = 0;
+    let currentRepo = repo;
+    const process = vi.fn<ReadPorts['process']>().mockImplementation(async () => { issued += 1; return response([{ ...rest.issue, number: issued }]); });
+    const reader = new GitHubReader({ resolve: () => ({ repo: currentRepo, trustedPublisherLogins: ['runner'] } as unknown as ReturnType<ConfigRepository['resolve']>) },
+      { process, clock: () => new Date(now) });
+    const first = await reader.listIssues('demo', 1, 'open', 'good first issue');
+    expect(first.data).toMatchObject({ state: 'open', label: 'good first issue', records: [{ number: 1 }] });
+    expect(process.mock.calls[0][1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'good first issue', page: 1 });
+    // Same identity is a cache hit; a different state, label, page or repository is not.
+    expect((await reader.listIssues('demo', 1, 'open', 'good first issue')).data?.records[0].number).toBe(1);
+    expect(process).toHaveBeenCalledTimes(1);
+    expect((await reader.listIssues('demo', 1, 'closed', 'good first issue')).data?.records[0].number).toBe(2);
+    expect((await reader.listIssues('demo', 1, 'open', 'ai-ready')).data?.records[0].number).toBe(3);
+    expect((await reader.listIssues('demo', 1, 'open')).data?.records[0].number).toBe(4);
+    expect((await reader.listIssues('demo', 2, 'open', 'good first issue')).data?.records[0].number).toBe(5);
+    currentRepo = 'Other/project';
+    expect(await reader.listIssues('demo', 1, 'open', 'good first issue')).toMatchObject({
+      data: { repo: 'Other/project', records: [{ number: 6, url: 'https://github.com/Other/project/issues/6' }] } });
+    expect(process).toHaveBeenCalledTimes(6);
+    currentRepo = repo;
+    expect((await reader.listIssues('demo', 1, 'open', 'good first issue')).data?.records[0].number).toBe(1);
+    expect(process).toHaveBeenCalledTimes(6);
+    // Bounds: an unsupported state or an inexact label never reaches the process port.
+    for (const [state, label] of [['merged', null], ['open', 'bad,label'], ['open', 'ai-ready\n'], ['open', 'x'.repeat(101)], ['open', ' leading']] as const) {
+      await expect(reader.listIssues('demo', 1, state as never, label)).rejects.toThrow('unsafe_path');
+    }
+    expect(process).toHaveBeenCalledTimes(6);
+    expect(() => issuesList.input.parse({ deploymentId: 'demo', page: 1, state: 'merged' })).toThrow();
+    expect(() => issuesList.input.parse({ deploymentId: 'demo', page: 1, label: 'bad,label' })).toThrow();
+    now += 1; await reader.listIssues('demo', 10, 'all', 'good first issue');
+    expect(process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'all', label: 'good first issue', page: 10 });
+    // A literal non-ASCII label is accepted as written; encoding is the port's job.
+    now += 1; await reader.listIssues('demo', 2, 'closed', 'bug ünïcode');
+    expect(process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'closed', label: 'bug ünïcode', page: 2 });
+    await expect(reader.listIssues('demo', 11, 'open')).rejects.toThrow('unsafe_path');
   });
   it('collects complete open membership across pages; capped/failed initial reads establish nothing', async () => {
     const f = fakeReader();
@@ -359,6 +440,10 @@ describe('github_boundary_and_backoff', () => {
     const operations: [ProcessOperation, string][] = [
       [{ kind: 'gh-api-get', resource: 'issues', state: 'all', page: 2 }, 'issues?state=all&sort=updated&direction=desc&per_page=100&page=2'],
       [{ kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 }, 'issues?state=open&sort=updated&direction=desc&per_page=100&page=1'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'closed', page: 1 }, 'issues?state=closed&sort=updated&direction=desc&per_page=100&page=1'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'good first issue', page: 3 }, 'issues?state=open&labels=good%20first%20issue&sort=updated&direction=desc&per_page=100&page=3'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'closed', label: 'type: bug', page: 1 }, 'issues?state=closed&labels=type%3A%20bug&sort=updated&direction=desc&per_page=100&page=1'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'bug ünïcode', page: 1 }, 'issues?state=open&labels=bug%20%C3%BCn%C3%AFcode&sort=updated&direction=desc&per_page=100&page=1'],
       [{ kind: 'gh-api-get', resource: 'comments', issue: 4, page: 3 }, 'issues/4/comments?per_page=100&page=3'],
       [{ kind: 'gh-api-get', resource: 'dependencies', issue: 4, page: 1 }, 'issues/4/dependencies/blocked_by?per_page=100&page=1'],
       [{ kind: 'gh-api-get', resource: 'issue', issue: 4, page: 1 }, 'issues/4'],
@@ -366,7 +451,13 @@ describe('github_boundary_and_backoff', () => {
       [{ kind: 'gh-api-get', resource: 'checks', sha: 'a'.repeat(40), page: 1 }, `commits/${'a'.repeat(40)}/check-runs?per_page=100&page=1`],
     ];
     for (const [operation, endpoint] of operations) expect(JSON.parse(await ports.process('demo', operation))).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', `repos/${repo}/${endpoint}`]);
-    for (const operation of [{ kind: 'gh-api-get', resource: 'checks', sha: '../main', page: 1 }, { kind: 'gh-api-get', resource: 'pull', pr: 0, page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'closed', page: 1 }, { kind: 'gh-api-get', resource: 'comments', issue: -1, page: 1 }]) await expect(ports.process('demo', operation as ProcessOperation)).rejects.toThrow('unsafe_path');
+    for (const operation of [
+      { kind: 'gh-api-get', resource: 'checks', sha: '../main', page: 1 }, { kind: 'gh-api-get', resource: 'pull', pr: 0, page: 1 }, { kind: 'gh-api-get', resource: 'comments', issue: -1, page: 1 },
+      // Server-side state and label are closed enums; no arbitrary query text passes.
+      { kind: 'gh-api-get', resource: 'issues', state: 'merged', page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'bad,label', page: 1 },
+      { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'ai-ready\n', page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'x'.repeat(101), page: 1 },
+      { kind: 'gh-api-get', resource: 'issues', state: 'open', page: 11 },
+    ]) await expect(ports.process('demo', operation as ProcessOperation)).rejects.toThrow('unsafe_path');
     const http = response({}, 429, { 'Retry-After': '90' });
     await writeFile(script, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(http)});process.stderr.write('STDERR_CANARY');process.exit(1);`);
     expect(await ports.process('demo', operations[0][0])).toBe(http);
@@ -395,6 +486,12 @@ import type { PluginScreenProps } from '@getpaseo/plugin/client';
 import { Shell } from '../client/shell';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const screenProps = { theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id: 'host-a', label: 'Host A' }, layout: { compact: true, platform: 'web' }, params: { deploymentId: 'demo' }, route: 'issues', openScreen: vi.fn() } as unknown as React.ComponentProps<typeof Shell>;
+// Label chips derive their own contrast foreground from the repository color, so
+// they are the only Text exempt from the screen theme color.
+const themedTexts = (renderer: ReactTestRenderer) => renderer.root.findAllByType('Text' as any).filter(node => {
+  for (let current: typeof node | null = node; current; current = current.parent) if (current.props?.testID === 'orbi-label-chip') return false;
+  return true;
+});
 async function renderIssues() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   let renderer!: ReactTestRenderer;
@@ -454,14 +551,14 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain('(scene)');
     expect(JSON.stringify(renderer.toJSON())).toContain('Merge evidence: ');
     await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.onPress()); await settle(); await settle();
-    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 2 });
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 2, state: 'open' });
     expect(link('pull request', 42)).toBeUndefined();
     expect(host.openExternalUrl).toHaveBeenCalledTimes(2);
     await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Previous page' }).props.onPress()); await settle(); await settle();
-    expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 1 });
+    expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 1, state: 'open' });
     await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
 
-    const listKey = (hostId = 'host-a', id = 'demo', selectedRepo = repo) => ['paseo-orbi', hostId, id, `issues.list:${selectedRepo}:1`];
+    const listKey = (hostId = 'host-a', id = 'demo', selectedRepo = repo) => ['paseo-orbi', hostId, id, `issues.list:${selectedRepo}:open::1`];
     const detailKey = ['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:4`];
     const page = issuesList.output.parse(client.getQueryData(listKey()));
     const detail = issuesGet.output.parse(client.getQueryData(detailKey));
@@ -557,7 +654,7 @@ describe('Issues user journey', () => {
     expect(rpcCounts()).toEqual(beforeNewOpen);
     expect(host.openExternalUrl).toHaveBeenCalledTimes(5); // no render/selection/error-handler navigation
     // SDK does not revoke retained callbacks or cancel already-dispatched opens; no such claim here.
-    for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#eee');
+    for (const text of themedTexts(renderer)) expect(text.props.style.color).toBe('#eee');
   });
   it('opens safe selected repository, groups lifecycle evidence, paginates and inspects dependency/report uncertainty', async () => {
     vi.useFakeTimers();
@@ -585,9 +682,86 @@ describe('Issues user journey', () => {
     expect(visible).not.toMatch(/TARGET_CANARY|PROSE_CANARY|BODY_CANARY/);
     await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.onPress()); await settle(); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('#');
-    expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 2 });
+    expect(host.readIssues).toHaveBeenCalledWith({ deploymentId: 'demo', page: 2, state: 'open' });
     expect(renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.disabled).toBe(true);
-    for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#eee');
+    for (const text of themedTexts(renderer)) expect(text.props.style.color).toBe('#eee');
+  });
+  it('filters server-side state and one exact label, resets paging and renders literal wrapping label chips', async () => {
+    vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+    const record = (number: number, title: string) => ({ number, title, url: `https://github.com/${repo}/issues/${number}`,
+      githubState: 'open' as const, updatedAt: '2026-10-15T06:20:00Z', labels: ['ai-ready', 'good first issue'],
+      labelDetails: [{ name: 'ai-ready', color: '#00ff00' }, { name: 'good first issue', color: '#0d1117' }],
+      ...classifyIssue('open', ['ai-ready', 'good first issue']) });
+    const observation = (page: number, state: 'open' | 'closed' | 'all', label: string | null) => issuesList.output.parse({
+      state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+      data: { repo, page, hasNextPage: page === 1, dependencyStatus: 'unknown', state, label,
+        records: [record(page * 10 + 1, `${state.toUpperCase()}_${label ?? 'ALL'}_PAGE_${page}`)] },
+    });
+    host.readCatalog.mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+    host.readIssues.mockReset().mockImplementation(async input => observation(input.page, (input.state ?? 'open') as 'open' | 'closed' | 'all', input.label ?? null));
+    const { renderer, settle, client } = await renderIssues();
+    const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); await settle(); };
+    const setLabelText = async (value: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Exact label filter' }).props.onChangeText(value)); await settle(); };
+    const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+    // Open issues and all labels by default, requested server-side as state=open.
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 1, state: 'open' });
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Browse open issues' }).props.accessibilityState).toEqual({ selected: true });
+    expect(text()).toContain('OPEN_ALL_PAGE_1');
+    expect(text()).toContain('Filter: open issues; label: all labels.');
+    // GitHub-style chips: wrapping pills, literal names, validated colors and
+    // contrast-derived foregrounds, never a theme-colored or translated name.
+    const chips = renderer.root.findAll(node => node.props.testID === 'orbi-label-chip');
+    expect(chips.map(chip => chip.findByType('Text' as any).children.join(''))).toEqual(['ai-ready', 'good first issue']);
+    expect(chips[0].props.style).toMatchObject({ backgroundColor: '#00ff00', borderRadius: 999 });
+    expect(chips[0].findByType('Text' as any).props.style.color).toBe('#1f2328');
+    expect(chips[1].props.style.backgroundColor).toBe('#0d1117');
+    expect(chips[1].findByType('Text' as any).props.style.color).toBe('#ffffff');
+    expect(chips[0].parent?.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
+    // Paging, then a state change starts a new page 1 in a now filtered observation.
+    await press('Next page');
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 2, state: 'open' });
+    expect(text()).toContain('OPEN_ALL_PAGE_2');
+    await press('Browse closed issues');
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 1, state: 'closed' });
+    expect(text()).toContain('CLOSED_ALL_PAGE_1'); expect(text()).not.toContain('OPEN_ALL_PAGE_2');
+    await press('Browse all issues');
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 1, state: 'all' });
+    await press('Browse closed issues');
+    // One exact label shortcut and one exact literal label, both server-side only.
+    await press('Filter by label ai-ready');
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 1, state: 'closed', label: 'ai-ready' });
+    expect(text()).toContain('CLOSED_ai-ready_PAGE_1');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Filter by label ai-ready' }).props.accessibilityState).toEqual({ selected: true });
+    await setLabelText('good first issue');
+    await press('Apply label filter');
+    expect(host.readIssues).toHaveBeenLastCalledWith({ deploymentId: 'demo', page: 1, state: 'closed', label: 'good first issue' });
+    expect(text()).toContain('CLOSED_good first issue_PAGE_1');
+    // An invalid exact label disables Apply and issues no read at all.
+    await setLabelText('bad,label');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Apply label filter' }).props.disabled).toBe(true);
+    expect(text()).toContain('cannot contain commas');
+    const before = host.readIssues.mock.calls.length;
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Apply label filter' }).props.onPress()); await settle();
+    expect(host.readIssues).toHaveBeenCalledTimes(before);
+    const filteredReads = host.readIssues.mock.calls.length;
+    await press('All labels');
+    expect(text()).toContain('CLOSED_ALL_PAGE_1');
+    expect(host.readIssues).toHaveBeenCalledTimes(filteredReads);
+    // Cache/observation identity includes state, label and page, so switching back
+    // to a fresh observation is a cache hit rather than a new repository read.
+    expect(client.getQueryData(['paseo-orbi', 'host-a', 'demo', `issues.list:${repo}:closed::1`])).toBeDefined();
+    expect(client.getQueryData(['paseo-orbi', 'host-a', 'demo', `issues.list:${repo}:closed:ai-ready:1`])).toBeDefined();
+    expect(client.getQueryData(['paseo-orbi', 'host-a', 'demo', `issues.list:${repo}:open::2`])).toBeDefined();
+    const reads = host.readIssues.mock.calls.length;
+    await press('Browse open issues');
+    expect(text()).toContain('OPEN_ALL_PAGE_1');
+    expect(host.readIssues).toHaveBeenCalledTimes(reads);
+    // A retained page without issues still offers the pager for PR-heavy pages.
+    await act(async () => { client.setQueryData(['paseo-orbi', 'host-a', 'demo', `issues.list:${repo}:open::1`], issuesList.output.parse({
+      state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
+      data: { repo, page: 1, hasNextPage: true, dependencyStatus: 'unknown', state: 'open', label: null, records: [] } })); }); await settle();
+    expect(text()).toContain('Pull-request entries are excluded; continue to the next page.');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.disabled).toBe(false);
   });
   it('names comment authentication failure on the selected issue and repairs it through detail Refresh', async () => {
     vi.useFakeTimers();
@@ -703,7 +877,7 @@ it('places_the_selected_issue_detail_beside_its_row_on_a_full_page', async () =>
     data: { issue: record(number),
       reports: selectReports(repo, number, [comment(1, `${marker()}\n${block('progress', reports.progress)}`)], ['runner'], true),
       dependencies: { complete: true, observedAt: '2026-11-14T23:00:00Z', records: [], problems: [] }, mergeEvidence: 'unknown' } });
-  const listKey = ['paseo-orbi', 'host-a', 'demo', `issues.list:${repo}:1`];
+  const listKey = ['paseo-orbi', 'host-a', 'demo', `issues.list:${repo}:open::1`];
   host.readCatalog.mockResolvedValue(catalog);
   host.readIssues.mockReset().mockResolvedValue(issuesList.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z', lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [],
     data: { repo, page: 1, hasNextPage: true, dependencyStatus: 'unknown', records: Array.from({ length: 100 }, (_, index) => record(index + 1)) } }));

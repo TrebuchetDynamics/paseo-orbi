@@ -36,7 +36,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(deploymentsList, async () => (await repository).catalog());
   server.handle(servicesInventory, async input => (await inventory)(input));
   server.handle(workspaceShortcutStatus, async input => (await ports).shortcut(input.deploymentId));
-  server.handle(issuesList, async input => (await github).listIssues(input.deploymentId, input.page));
+  server.handle(issuesList, async input => (await github).listIssues(input.deploymentId, input.page, input.state, input.label ?? null));
   server.handle(issuesGet, async input => (await github).getIssue(input.deploymentId, input.issue));
   server.handle(fleetRead, async input => readFleet(await repository, await ports, input));
   server.handle(runsList, async input => (await runs).list(input));

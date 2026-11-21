@@ -3,6 +3,34 @@ import { z } from 'zod';
 import { DeploymentId, Problem, observationSchema } from './common';
 
 export const issueStates = ['Merged', 'Closed', 'Blocked', 'Needs detail', 'Coordination', 'Reviewing', 'Implementing', 'Planning', 'Paused', 'Ready candidate', 'Other'] as const;
+// GitHub's server-side issue state filter. Browse defaults to open; closed and
+// all are separate requests, never a local filter over one all-state page.
+export const issueBrowseStates = ['open', 'closed', 'all'] as const;
+export type IssueBrowseState = (typeof issueBrowseStates)[number];
+// One exact literal label: bounded printable text. A comma is excluded because
+// GitHub reads its labels parameter as a comma-separated list, and surrounding
+// whitespace would silently change the requested label. Everything else is
+// accepted as written and URL-encoded, never interpolated into a command.
+export function validIssueLabel(value: string) {
+  return value.length >= 1 && value.length <= 100 && !/[\u0000-\u001f\u007f,]/.test(value) && value.trim() === value;
+}
+// Presentation only: GitHub label colors are six-digit hex without '#'; anything
+// else is a neutral chip, never a guessed or invented color.
+export const neutralLabelColor = '#6e7781';
+export function labelColor(value: unknown): string {
+  return typeof value === 'string' && /^[0-9a-fA-F]{6}$/.test(value) ? `#${value.toLowerCase()}` : neutralLabelColor;
+}
+// WCAG relative luminance decides a readable foreground for the chip fill.
+export function labelForeground(color: string): string {
+  const hex = /^#[0-9a-fA-F]{6}$/.test(color) ? color : neutralLabelColor;
+  const [r, g, b] = [1, 3, 5].map(index => {
+    const channel = parseInt(hex.slice(index, index + 2), 16) / 255;
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? '#1f2328' : '#ffffff';
+}
+export const LabelPresentation = z.object({ name: z.string().max(100), color: z.string().regex(/^#[0-9a-f]{6}$/) }).strict();
+export type LabelPresentation = z.infer<typeof LabelPresentation>;
 const precedence = [
   ['ai-merged', 'Merged'], ['ai-blocked', 'Blocked'], ['ai-needs-detail', 'Needs detail'],
   ['ai-epic', 'Coordination'], ['ai-awaiting-merge', 'Reviewing'], ['ai-pr-opened', 'Reviewing'],
@@ -22,11 +50,17 @@ export function classifyIssue(state: 'open' | 'closed', labels: string[], verifi
 export const IssueSummary = z.object({
   number: z.number().int().positive(), title: z.string().max(1024), url: z.string(),
   githubState: z.enum(['open', 'closed']), updatedAt: z.iso.datetime(), labels: z.array(z.string().max(100)),
+  // Literal label names stay in `labels` for classification; colors are only
+  // presentation metadata and never change lifecycle state or provenance.
+  labelDetails: z.array(LabelPresentation).optional(),
   state: z.enum(issueStates), badge: z.string().nullable(), provenance: z.enum(['verified', 'reported', 'github']), warning: z.boolean(),
 }).strict();
 export type IssueSummary = z.infer<typeof IssueSummary>;
 export type CompleteCollection<T> = { complete: boolean; observedAt: string; records: T[]; problems: z.infer<typeof Problem>[] };
-export const IssuePage = z.object({ repo: z.string(), page: z.number().int().positive(), hasNextPage: z.boolean(), records: z.array(IssueSummary), dependencyStatus: z.literal('unknown') }).strict();
+export const IssuePage = z.object({
+  repo: z.string(), page: z.number().int().positive(), hasNextPage: z.boolean(), records: z.array(IssueSummary), dependencyStatus: z.literal('unknown'),
+  state: z.enum(issueBrowseStates).default('open'), label: z.string().nullable().default(null),
+}).strict();
 export type IssuePage = z.infer<typeof IssuePage>;
 const Attribution = z.object({ repo: z.string(), issue: z.number().int().positive(), commentId: z.number().int().positive(), updatedAt: z.iso.datetime() }).strict();
 const classified = <T extends z.ZodType>(data: T) => z.discriminatedUnion('status', [
@@ -46,5 +80,9 @@ export const ReportSelection = z.object({ selectedRunId: z.string().nullable(), 
 export type ReportSelection = z.infer<typeof ReportSelection>;
 export const IssueDetail = z.object({ issue: IssueSummary, reports: ReportSelection, dependencies: z.object({ complete: z.boolean(), observedAt: z.iso.datetime(), records: z.array(IssueSummary), problems: z.array(Problem) }).strict(), mergeEvidence: z.enum(['verified', 'reported', 'unknown']) }).strict();
 export type IssueDetail = z.infer<typeof IssueDetail>;
-export const issuesList = defineRpc({ name: 'issues.list', input: z.object({ deploymentId: DeploymentId, page: z.number().int().min(1).max(10) }).strict(), output: observationSchema(IssuePage) });
+export const issuesList = defineRpc({ name: 'issues.list', input: z.object({
+  deploymentId: DeploymentId, page: z.number().int().min(1).max(10),
+  state: z.enum(issueBrowseStates).default('open'),
+  label: z.string().max(100).refine(validIssueLabel).optional(),
+}).strict(), output: observationSchema(IssuePage) });
 export const issuesGet = defineRpc({ name: 'issues.get', input: z.object({ deploymentId: DeploymentId, issue: z.number().int().positive() }).strict(), output: observationSchema(IssueDetail) });
