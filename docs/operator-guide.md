@@ -4,7 +4,7 @@ Operational detail for [paseo-orbi](../README.md): authorization, data flow and 
 
 ## Status
 
-**Status:** Issues browsing and trusted report reading are implemented. Overview reads host-scoped user service families, then one selected deployment's timers, services and recorded health. Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers explains trusted failures, waits and stat-only evidence without executing recovery. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Assembled offline checks cover Fleet, Issues, Runs and Blockers through their real registrations, schemas and adapters. The tracked Git artifact is checked with isolated production-only preparation. This is installation readiness, not deployment; live installation and physical-client qualification remain unperformed.
+**Status:** Issues browsing and trusted report reading are implemented. Overview reads host-scoped user service families, then one selected deployment's timers, services and recorded health, and offers Start/Stop/Restart only for a deployment an operator explicitly granted controls on ([service controls](#service-controls-operator-grant-default-off)). Runs adds attributed run/session metadata, structured events and PR/head-check evidence. Blockers explains trusted failures, waits and stat-only evidence without executing recovery. The deployment selector and rejected-deployment cards use the safe `deployments.list` catalog. Assembled offline checks cover Fleet, Issues, Runs and Blockers through their real registrations, schemas and adapters. The tracked Git artifact is checked with isolated production-only preparation. This is installation readiness, not deployment; live installation and physical-client qualification remain unperformed.
 
 The plugin observes; it does not plan or execute work:
 
@@ -12,7 +12,7 @@ The plugin observes; it does not plan or execute work:
 - **Orbi** owns execution, recovery, code review, and PR delivery.
 - **Paseo** observes that work. This plugin is not another scheduler or orchestrator. Reported recovery actions and retry safety never grant permission; recovery stays Orbi/operator-owned.
 
-Version 0.1 is strictly read-only: no timer control, execution-state mutation, merging, Orbi CLI, Git commands, or arbitrary shell/path RPCs. No raw logs, prompts, reasoning, or interactive Pi attachment. External Pi sessions are not Paseo-managed sessions. Reading their projected activity does not establish interactive attachment, live steering, token streaming, or that a process is still alive. Future feature work may share entry files and must reconcile edits there.
+Monitoring stays read-only: no merging, Orbi CLI, Git commands, arbitrary shell/path RPCs, or timer/unit mutation invented by this plugin. Service controls are off unless the operator grants named actions on named deployments, and then they run only the operator's own bound lifecycle command (see [service controls](#service-controls-operator-grant-default-off)). No raw logs, prompts, reasoning, or interactive Pi attachment. External Pi sessions are not Paseo-managed sessions. Reading their projected activity does not establish interactive attachment, live steering, token streaming, or that a process is still alive. Future feature work may share entry files and must reconcile edits there.
 
 ## Setup
 
@@ -47,7 +47,7 @@ unit_name = "example"
 max_concurrency = 2
 ```
 
-Paths must be absolute in the JSON, canonical and free of symlink components or environment expansion. TOML paths resolve against its directory and must match those exact roots. One `source_repos` repository must match; capacity is 1..5. `unit_name` is optional (default Orbi units); when present, use letters, numbers, `_` or `-` (maximum 80 characters). IDs match `^[a-z][a-z0-9-]{0,63}$`; labels have 1..80 printable characters. At most 16 deployments; IDs and GitHub repositories are unique (repositories case-insensitively). No credentials belong in the authorization file. Unknown JSON fields are rejected.
+Paths must be absolute in the JSON, canonical and free of symlink components or environment expansion. TOML paths resolve against its directory and must match those exact roots. One `source_repos` repository must match; capacity is 1..5. `unit_name` is optional (default Orbi units); when present, use letters, numbers, `_` or `-` (maximum 80 characters). IDs match `^[a-z][a-z0-9-]{0,63}$`; labels have 1..80 printable characters. At most 16 deployments; IDs and GitHub repositories are unique (repositories case-insensitively). No credentials belong in the authorization file. Unknown JSON fields are rejected. An optional per-deployment `controls` object grants service actions; without it that deployment stays read-only.
 
 Only these source checkout subsets are supported:
 
@@ -182,7 +182,7 @@ Details keep independent source problems and timestamps. One inaccessible deploy
 
 The shared observation lifecycle polls foreground/connected surfaces (the host service check and the loaded detail) every 30 seconds. A failed refresh preserves previous data with a stale badge; after 60 seconds without success, data is visibly stale. Detail timestamps remain visible; compact host inventory shows last-success time when stale. Text uses theme tokens and compact layouts wrap within the viewport. These are design bounds, not measured performance claims. No new fleet daemon or scheduler is required.
 
-Shared observations declare descriptive loading/status accessibility labels and a stable alert region containing only safe problem source/code summaries, separate from timestamps and retained data. Age/offline staleness alone does not invent an error. Detail views keep **Refresh**; the host service section names its inventory-only read **Refresh services**. Both show Refresh/Refreshing and are disabled with dimmed theme-colored text and disabled/busy accessibility state while the selected host is offline, the app is backgrounded, or a read is in flight. Reconnect the selected host/return to the foreground and repair the reported source externally before retrying; no other host is used and no service/settings controls are added. Mocked renderer tests verify these declarative semantics, not actual screen-reader speech, announcement timing, or WCAG conformance. Installed desktop/native mobile screen-reader qualification remains unperformed.
+Shared observations declare descriptive loading/status accessibility labels and a stable alert region containing only safe problem source/code summaries, separate from timestamps and retained data. Age/offline staleness alone does not invent an error. Detail views keep **Refresh**; the host service section names its inventory-only read **Refresh services**. Both show Refresh/Refreshing and are disabled with dimmed theme-colored text and disabled/busy accessibility state while the selected host is offline, the app is backgrounded, or a read is in flight. Reconnect the selected host/return to the foreground and repair the reported source externally before retrying; no other host is used, and Refresh neither enables monitoring nor grants control actions. Mocked renderer tests verify these declarative semantics, not actual screen-reader speech, announcement timing, or WCAG conformance. Installed desktop/native mobile screen-reader qualification remains unperformed.
 
 The host-first Overview is covered by component fixtures in `tests/host-overview.test.tsx`: a synthetic nine-group compact first screen (selected-host heading, group attention count, first failed slot/unit and remaining count, full-row 44-unit disclosure, independent worker/timer facts), two hosts with an identical family label and slot, cancelled-generation isolation, expansion/selection state and accessible labels, plus distinct copy and next action for not enabled, complete-empty, partial-without-confirmed-rows, unavailable/denied and offline. Narrow/wide wrapping, theme contrast and real keyboard focus remain installed visual inspection owned by #32; these fixtures prove composition and declarative accessibility, not measured rendering.
 
@@ -207,11 +207,60 @@ The response is `off`, `complete`, `partial` or `unavailable` with observation t
 
 **Revocation.** The startup grant ends when the operator disables, removes or reloads this plugin, or stops the daemon. The plugin lifetime aborts: the in-memory snapshot is discarded, a read still in flight is abandoned before its next `systemctl` call, late output from an already-running read is never parsed, returned or cached, and later `services.inventory({})` calls answer `off` with zero host reads. Overview replaces the families it had observed with **Service check off · activity unknown** when it receives that answer; former unit names are not retained as stale rows.
 
-**No in-app Save on the pinned host.** The pinned native plugin settings surface exists, but session admission at the pinned and published versions grants every admitted client owner permissions, plugin observation and settings mutation share the `daemon.manage` capability, and the plugin handler context carries no independent authenticated operator identity. A settings write therefore cannot enforce viewer denial, so this plugin keeps the startup-only operator opt-in and offers no Save control, settings toggle or settings-write RPC. A per-host setting returns only when a supported host-enforced operator/viewer boundary exists and a real host proves operator allow and viewer deny; a client flag, hidden button, revision number or plugin-specific token is not that boundary.
+**No in-app Save on the pinned host.** The pinned native plugin settings surface exists, but session admission at the pinned and published versions grants every admitted client owner permissions, plugin observation and settings mutation share the `daemon.manage` capability, and the plugin handler context carries no independent authenticated operator identity. A settings write therefore cannot enforce viewer denial, so this plugin keeps the startup-only operator opt-in and offers no Save control, settings toggle or settings-write RPC. A per-host setting returns only when a supported host-enforced operator/viewer boundary exists and a real host proves operator allow and viewer deny; a client flag, hidden button, revision number or plugin-specific token is not that boundary. The same missing boundary is why service controls are a startup-only operator grant that must state `admittedClientsOperate`, and why no in-app grant, role switch or action history is offered.
 
 Repair: `process_failed` (including authorization/DBus failures), `process_timeout` or `process_limit` means the selected host's user `systemctl`/DBus access or child limits need external repair, then call again after the snapshot window (or reload for a startup opt-in change). `malformed_record`/`row_limit`/`read_limit` mean the host output exceeded the bounded parser/limits; do not infer an empty inventory. This RPC reports user-unit candidates only; it never controls, enables, disables or restarts a unit.
 
 The Overview screen consumes this snapshot as host evidence (`client/host-overview.tsx`), sorted and explained in [Fleet](#fleet). It is read only on Overview, keeps the host-qualified observation key, and is disabled with zero reads while the selected host is offline, the app is backgrounded, or a check is in flight. A cancelled host generation cannot publish into another host with the same family label and slot, and a host switch discards the previous host's expanded family. With inventory off, Overview keeps the #24 catalog/setup/deep-link behavior, shows no discovered families and clears families it displayed before an off answer arrived.
+
+## Service controls (operator grant, default off)
+
+A deployment is **read-only unless the operator grants controls on it**. The grant is part of the operator-owned startup authorization and is read once at startup, exactly like every other setting: changing it needs an explicitly authorized plugin reload, and no client, Refresh, or in-app control can grant, widen, or extend it. Absent `controls`, `deployments.list` reports `controls: null`, Overview shows no Actions disclosure and `services.control` answers `denied`/`action_not_approved` without running anything.
+
+**Trust model this grant states explicitly.** At the pinned and published Paseo versions, ordinary session admission grants every admitted client owner permissions, plugin RPCs share the `daemon.manage` capability, and a plugin handler is given only `{ paseo }` — no authenticated operator identity, no viewer/operator split. A viewer cannot be denied while an operator is allowed. The grant therefore requires `"admittedClientsOperate": true`: an explicit statement that every admitted client of this host may operate the approved targets. Do not grant controls when that is not acceptable; the plugin offers no client role flag, hidden button, caller-supplied identity or plugin token as a substitute for the missing host boundary. **An actual host authorization proof (operator allow, viewer deny) has not been run and is not claimed.** Recording the authenticated actor is likewise impossible here, so each result records `actor: null` instead of inventing one.
+
+```json
+{
+  "schema": 1,
+  "deployments": [{
+    "id": "example",
+    "label": "Example deployment",
+    "repo": "owner/repository",
+    "configPath": "/srv/example/orbi.toml",
+    "engineSourcePath": "/srv/orbi-source",
+    "repoDir": "/srv/example/repo",
+    "deployHome": "/srv/example/home",
+    "trustedPublisherLogins": ["trusted-publisher"],
+    "adapter": "orbi-0.7.41-release",
+    "controls": {
+      "admittedClientsOperate": true,
+      "actions": ["start", "stop"],
+      "commands": {
+        "start": ["/srv/example/bin/orbi-lifecycle", "start", "{unit}"],
+        "stop": ["/srv/example/bin/orbi-lifecycle", "stop", "{unit}"]
+      }
+    }
+  }]
+}
+```
+
+Grant rules, all entry-local (`invalid_config` for that entry only):
+
+- `actions` is a non-empty unique subset of `start`, `stop`, `restart`. Anything else is rejected.
+- `commands` must contain exactly one array per approved action and nothing else. Each argv has 1..8 non-empty tokens of at most 200 printable characters, exactly one literal `{unit}` token, and an `argv[0]` that is an absolute, canonical path under the same rules as every other authorized root. `{unit}` is replaced only by the server-derived, validated unit name `orbi[-<unit_name>]@<slot>.service`; a caller can never supply a unit, verb, path, argv or environment value.
+- Shell is never used: the tokens are passed as separate argv elements, so metacharacters are inert. There is no globbing, expansion, `sudo`, system-manager or other-user access.
+
+**Lifecycle ownership stays with Orbi.** This plugin never invokes `systemctl` start/stop/restart/enable/disable and never invents a restart sequence. The command above is the operator's binding to the supported Orbi lifecycle: for `start`/`stop` it must be the Orbi lifecycle entry point that preserves the runner's scheduler, draining, ownership checks and explicit pauses. The inspected Kit helper (`orbi_control.py`) exposes `status|setup|start|update|stop` and **no restart verb**, so a `restart` action must be bound to an operator-documented drained sequence; the plugin never substitutes a raw `systemctl restart`. In addition the plugin refuses `restart` unless the slot is observed `failed` or `inactive/dead` with a loaded unit, and refuses when that state cannot be read. A restart therefore never becomes an undocumented kill of an active delivery, and Start/Stop preserve the semantics of whatever Orbi lifecycle command the operator bound.
+
+**One submission per deployment.** Operations are serialized per deployment: a second request while one is in flight returns `pending`/`busy` and submits nothing. The result vocabulary is closed: `succeeded`, `failed`, `unknown`, `pending` and `denied`, always with the bounded reason code and the state re-read afterwards through the ordinary bounded `systemctl show` read. A timeout returns `unknown`/`process_timeout` — never success and never a claim that the submitted job was cancelled. A command that exited 0 but whose state could not be re-read returns `unknown`/`observe_failed`, so the UI never reports an unobserved success. Nothing is retried automatically; the operator rechecks the slot and decides.
+
+Denials happen before any execution: `deployment_unavailable` (unknown, rejected, foreign or stale deployment id), `action_not_approved` (no grant, or this action not granted), `target_out_of_range` (slot outside `1..max_concurrency`), `active_delivery` (restart refused for a running/transitional slot), `observe_failed` (restart state unreadable), `disposed` (grant withdrawn or plugin stopping), `busy` (another operation in flight). Authorization is rechecked immediately before execution, so a grant revoked while an earlier observation was awaited still refuses the action.
+
+**Revocation.** Disabling, removing or reloading the plugin, or stopping the daemon, aborts the grant lifetime: no new action starts, a pending authorization is rechecked and refused, and no result is retained. Each result carries a server-generated operation id, the approved deployment/slot/action and the outcome; no argv, path, environment value or secret is ever transported or logged.
+
+**Evidence limits.** Offline tests cover the grant parser, the adapter (exact target, denial, serialization, timeout/unknown, re-observation) and the Overview flow (confirmation, single submission, honest outcomes, host isolation) with injected ports and a real bounded child process. **Not run:** an actual host authorization proof, an installed lifecycle binding, and any live Start/Stop/Restart against an existing runner. Use only an explicitly approved disposable target with scoped cleanup for a live check — never an existing production worker.
+
+**UI flow.** Expand a linked repository row, open **Actions**, choose an action for an observed slot, and confirm. The confirmation names the selected host, the repository, the exact target (`orbi-example@1.service`) and the effect; confirmation is not authorization, and the daemon rechecks the grant. Every control is disabled while a submission is in flight, results are host-qualified (a result or an action can never appear on another host), and the row falls back to read-only when the catalog has no grant for that deployment.
 
 ## Authorized installation (not performed here)
 

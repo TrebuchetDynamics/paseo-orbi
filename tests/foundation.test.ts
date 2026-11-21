@@ -90,7 +90,7 @@ describe('config_and_compatibility', () => {
     await f.save([f.entry, { ...f.entry, id: 'other', repo: 'Other/repo', engineSourcePath: join(f.root, 'missing') }]);
     const catalog = await rpc(f.authorization);
     expect(catalog.entries.map(e => e.status)).toEqual(['available', 'invalid_config']);
-    expect(Object.keys(catalog.entries[0]).sort()).toEqual(['adapter', 'id', 'label', 'problems', 'repo', 'status']);
+    expect(Object.keys(catalog.entries[0]).sort()).toEqual(['adapter', 'controls', 'id', 'label', 'problems', 'repo', 'status']);
     expect(JSON.stringify(catalog)).not.toContain(f.root);
     const repository = await ConfigRepository.load(f.authorization);
     repository.catalog().entries[0].id = 'tampered';
