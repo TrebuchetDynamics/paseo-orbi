@@ -53,7 +53,7 @@ describe('operator-granted service controls', () => {
     expect(second.runs).toEqual([[process.execPath, '-e', 'process.exit(0)', 'orbi-demo@1.service']]);
   });
 
-  it('denies viewer, forged, unknown, stale, revoked and unapproved requests before mutation', async () => {
+  it('denies forged, unknown, stale, revoked and unapproved requests before mutation', async () => {
     // No operator grant at all: monitoring still works, controls do not exist.
     const unapproved = await loaded();
     const none = port();
