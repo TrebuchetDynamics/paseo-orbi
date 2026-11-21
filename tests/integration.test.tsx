@@ -66,8 +66,16 @@ it('four_views_read_only_journey', async () => {
     const repo = id === 'demo' ? 'Example/project' : 'Other/repository';
     if (op.kind === 'systemctl-show') return 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=static\nResult=success\nExecMainStatus=0\nEnvironment=ENV_SECRET_CANARY\n';
     if (op.kind === 'journalctl') return JSON.stringify({ ...records.journal, MESSAGE: records.journal.MESSAGE.replace('Example/project', repo) }) + '\n';
-    const issue = (n: number) => ({ number: n, title: `Issue ${n}`, state: n === 99 ? 'closed' : 'open', updated_at: stamp, labels: [{ name: n === 4 ? 'ai-blocked' : 'ai-in-progress' }], body: 'BODY_SECRET_CANARY' });
-    if (op.resource === 'issues') return response([42, 420, 4, ...(op.state === 'open' ? [] : [99, ...(op.page === 1 ? Array.from({ length: 96 }, (_, i) => 1000 + i) : [])])].map(issue));
+    // Filler issues keep the default open page full for pagination without
+    // becoming active runs: only the two attributed worktrees are in progress.
+    const issue = (n: number) => ({ number: n, title: `Issue ${n}`, state: n === 99 ? 'closed' : 'open', updated_at: stamp, labels: [{ name: n === 4 ? 'ai-blocked' : n >= 1000 ? 'backlog' : 'ai-in-progress' }], body: 'BODY_SECRET_CANARY' });
+    // Open browse pages stay full so pagination is exercised on the default state;
+    // only the wider states expose the closed issue 99.
+    if (op.resource === 'issues') {
+      const head = op.page === 1 ? [42, 420, 4, ...(op.state === 'open' ? [] : [99])] : [];
+      const fillers = op.page === 1 ? Array.from({ length: op.state === 'open' ? 97 : 96 }, (_, i) => 1000 + i) : [1007];
+      return response([...head, ...fillers].map(issue));
+    }
     if (op.resource === 'issue') return response(issue(op.issue));
     if (op.resource === 'comments') {
       const run = op.issue === 42 ? '22222222' : op.issue === 420 ? '33333333' : op.issue === 4 ? '12345678' : '11111111';
@@ -144,14 +152,18 @@ it('four_views_read_only_journey', async () => {
   expect(text()).toContain('Occupancy: unknown'); partial = false;
   await press('Active work for Demo'); expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
   await act(async () => renderer.update(tree('issues'))); await settle();
-  expect(text()).toContain('Issue 42');
+  expect(text()).toContain('#42 Issue 42');
   await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed'); expect(text()).toContain('Reported run: 22222222; reports complete');
   // Same deployment ID on another online host must remount local selection,
   // while a cancelled old-host detail cannot publish late into either generation.
   expect(host.readCatalog).toHaveBeenCalledTimes(2); // initial + the 30-second poll, no second owner on Issues
   expect(renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.disabled).toBe(false);
   await press('Next page'); expect(text()).toContain('Page 2.');
-  await press('Inspect issue 42');
+  // Issue 42 is not on this page; a by-number lookup keeps one local detail
+  // observation that the host switch below must discard with the whole surface.
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Issue number to inspect' }).props.onChangeText('42'));
+  await press('Inspect issue by number');
+  expect(text()).toContain('Issue #42 — detail read by number; not a browse-page membership claim.');
   const oldDetail = query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:Example/project:42']);
   expect(oldDetail).toMatchObject({ data: { issue: { number: 42 }, reports: { selectedRunId: '22222222' } } });
   expect(text()).toContain('Dependencies: no open blockers observed');
@@ -176,7 +188,7 @@ it('four_views_read_only_journey', async () => {
   await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed');
   // Catalog reassignment is a client seam, not a server startup reconfiguration.
   // Supply distinguishable B data at the typed transport seam with B pending.
-  const aPage = query.getQueryData<any>(['paseo-orbi', 'host-b', 'demo', 'issues.list:Example/project:1']);
+  const aPage = query.getQueryData<any>(['paseo-orbi', 'host-b', 'demo', 'issues.list:Example/project:open::1']);
   const bPage = issuesList.output.parse(JSON.parse(JSON.stringify(aPage).replaceAll('Example/project', 'Reassigned/project')));
   bPage.data!.records.forEach(issue => { issue.title = `Reassigned issue ${issue.number}`; });
   const bDetail = issuesGet.output.parse(JSON.parse(JSON.stringify(result).replaceAll('Example/project', 'Reassigned/project')));
@@ -283,10 +295,13 @@ it('validated catalog enables bounded exact-repo issue reads while discovery-onl
     state: 'available',
     data: { repo: f.entry.repo, page: 1, hasNextPage: false, records: [{ number: 42, labels: ['ai-ready'], state: 'Ready candidate' }] },
   });
-  expect(operations).toEqual([{ id: 'demo', operation: { kind: 'gh-api-get', resource: 'issues', state: 'all', page: 1 } }]);
+  // Browse defaults to server-side open state, never one all-state page filtered locally.
+  expect(operations).toEqual([{ id: 'demo', operation: { kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 } }]);
   expect(processPort.mock.calls[0]?.[2]).toBe(10000);
   // Bounded page scope: the typed contract refuses out-of-range pages before any read.
-  expect(issuesList.input.parse({ deploymentId: 'demo', page: 10 })).toEqual({ deploymentId: 'demo', page: 10 });
+  expect(issuesList.input.parse({ deploymentId: 'demo', page: 10 })).toEqual({ deploymentId: 'demo', page: 10, state: 'open' });
+  expect(issuesList.input.parse({ deploymentId: 'demo', page: 1, state: 'closed', label: 'good first issue' })).toEqual({ deploymentId: 'demo', page: 1, state: 'closed', label: 'good first issue' });
+  for (const invalid of [{ state: 'merged' }, { label: 'bad,label' }, { label: 'x'.repeat(101) }]) expect(() => issuesList.input.parse({ deploymentId: 'demo', page: 1, ...invalid })).toThrow();
   for (const invalid of [0, 11]) expect(() => issuesList.input.parse({ deploymentId: 'demo', page: invalid })).toThrow();
   // Discovery-only inventory works with the catalog and never resolves a repository.
   const inventory = servicesInventory.output.parse(await configured.get('services.inventory')!({}));

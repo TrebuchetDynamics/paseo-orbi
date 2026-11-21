@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import type { Observation, Problem } from '../shared/common';
-import { classifyIssue, type CompleteCollection, type IssueSummary, type IssuePage, type IssueDetail, type ReportSelection } from '../shared/issues';
+import { classifyIssue, labelColor, issueBrowseStates, validIssueLabel, type CompleteCollection, type IssueSummary, type IssuePage, type IssueDetail, type IssueBrowseState, type ReportSelection } from '../shared/issues';
 import type { ConfigRepository } from './config';
 import { ReadError, type ReadPorts, type ProcessOperation } from './read-ports';
 import { Comment, selectReports } from './reports';
 
 const positive = z.number().int().positive();
-const RawIssue = z.object({ number: positive, title: z.string().max(1024), state: z.enum(['open', 'closed']), updated_at: z.iso.datetime(), labels: z.array(z.object({ name: z.string().max(100) })), pull_request: z.unknown().optional() });
+const RawIssue = z.object({ number: positive, title: z.string().max(1024), state: z.enum(['open', 'closed']), updated_at: z.iso.datetime(), labels: z.array(z.object({ name: z.string().max(100), color: z.string().max(20).optional() })), pull_request: z.unknown().optional() });
 const sha = z.string().regex(/^[0-9a-f]{40}$/);
 const Pull = z.object({ number: positive, html_url: z.string(), merged_at: z.iso.datetime().nullable(), state: z.enum(['open', 'closed']), head: z.object({ sha }), base: z.object({ repo: z.object({ full_name: z.string() }) }) });
 const Check = z.object({ head_sha: sha.optional(), html_url: z.string().nullable().optional(), id: positive, name: z.string().max(1024), status: z.enum(['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']), conclusion: z.enum(['success', 'failure', 'neutral', 'notice', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']).nullable() });
@@ -69,7 +69,10 @@ export class GitHubReader {
   private code(error: unknown): Problem['code'] { return error instanceof GitHubError ? error.code : 'invalid_response'; }
   private summary(repo: string, raw: z.infer<typeof RawIssue>): IssueSummary {
     const labels = raw.labels.map(label => label.name);
-    return { number: raw.number, title: raw.title, url: `https://github.com/${repo}/issues/${raw.number}`, githubState: raw.state, updatedAt: raw.updated_at, labels, ...classifyIssue(raw.state, labels) };
+    // Colors are validated presentation metadata only: classification still reads
+    // the literal names, so lifecycle state and provenance cannot change here.
+    const labelDetails = raw.labels.map(label => ({ name: label.name, color: labelColor(label.color) }));
+    return { number: raw.number, title: raw.title, url: `https://github.com/${repo}/issues/${raw.number}`, githubState: raw.state, updatedAt: raw.updated_at, labels, labelDetails, ...classifyIssue(raw.state, labels) };
   }
   private async collect<T>(id: string, key: string, operation: (page: number) => ProcessOperation, parse: (value: unknown) => { records: T[]; count: number }): Promise<CompleteCollection<T>> {
     const start = this.now(), records: T[] = [];
@@ -91,20 +94,27 @@ export class GitHubReader {
     return { complete: false, observedAt: previous?.observedAt ?? this.stamp(), records: previous?.records ?? [], problems: [problem(failure)] };
   }
   async listIssueScope(id: string): Promise<CompleteCollection<IssueSummary>> {
-    const { repo } = this.repository.resolve(id), key = `${id}:scope`;
+    const { repo } = this.repository.resolve(id), key = `${id}:${repo}:scope`;
     return this.coalesce(key, () => this.collect(id, key, page => ({ kind: 'gh-api-get', resource: 'issues', state: 'open', page }), value => {
       const raw = z.array(RawIssue).parse(value);
       return { count: raw.length, records: raw.filter(r => !r.pull_request).map(r => this.summary(repo, r)) };
     }));
   }
-  async listIssues(id: string, page: number): Promise<Observation<IssuePage>> {
+  async listIssues(id: string, page: number, state: IssueBrowseState = 'open', label: string | null = null): Promise<Observation<IssuePage>> {
     const { repo } = this.repository.resolve(id);
     if (!Number.isInteger(page) || page < 1 || page > 10) throw new ReadError('unsafe_path');
-    const key = `${id}:page:${page}`;
+    // Browser input is bounded here as well as in the typed RPC: an unsupported
+    // state or an inexact label never reaches the process port.
+    if (!issueBrowseStates.includes(state)) throw new ReadError('unsafe_path');
+    if (label !== null && !validIssueLabel(label)) throw new ReadError('unsafe_path');
+    // Cache and observation identity include repository, state, label and page, so
+    // a filtered page can never be served as another filter's result.
+    const key = `${id}:${repo}:issues:${state}:${label ?? ''}:${page}`;
     return this.coalesce(key, async () => {
       try {
-        const raw = z.array(RawIssue).max(100).parse(await this.request(id, { kind: 'gh-api-get', resource: 'issues', state: 'all', page }));
-        const data: IssuePage = { repo, page, hasNextPage: raw.length === 100, records: raw.filter(r => !r.pull_request).map(r => this.summary(repo, r)), dependencyStatus: 'unknown' };
+        const operation = { kind: 'gh-api-get' as const, resource: 'issues' as const, state, ...(label === null ? {} : { label }), page };
+        const raw = z.array(RawIssue).max(100).parse(await this.request(id, operation));
+        const data: IssuePage = { repo, page, hasNextPage: raw.length === 100, records: raw.filter(r => !r.pull_request).map(r => this.summary(repo, r)), dependencyStatus: 'unknown', state, label };
         const now = this.stamp();
         const observation: Observation<IssuePage> = { state: 'available', data, observedAt: now, lastSuccessfulAt: now, problems: [] };
         this.remember(this.complete, key, observation); return observation;

@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { ConfigRepository } from './config';
 import { artifactNames, type ArtifactMetadata } from '../shared/blockers';
 import type { WorkspaceShortcutStatus } from '../shared/workspace-shortcut';
+import { issueBrowseStates, validIssueLabel, type IssueBrowseState } from '../shared/issues';
 import { WorkspaceShortcutInspector } from './workspace-shortcut';
 
 export class ReadError extends Error {
@@ -150,7 +151,7 @@ class ChildOperations {
 export type ProcessOperation =
   | { kind: 'systemctl-show'; slot: number; unit: 'service' | 'timer' }
   | { kind: 'journalctl'; slot: number }
-  | { kind: 'gh-api-get'; resource: 'issues'; state?: 'all' | 'open'; page: number }
+  | { kind: 'gh-api-get'; resource: 'issues'; state: IssueBrowseState; label?: string; page: number }
   | { kind: 'gh-api-get'; resource: 'comments' | 'dependencies' | 'issue'; issue: number; page: number }
   | { kind: 'gh-api-get'; resource: 'pull'; pr: number; page: number }
   | { kind: 'gh-api-get'; resource: 'checks'; sha: string; page: number };
@@ -298,9 +299,12 @@ export class ReadPorts {
       let endpoint: string;
       const paging = `per_page=100&page=${operation.page}`;
       if (operation.resource === 'issues') {
-        const state = operation.state ?? 'all';
-        if (state !== 'all' && state !== 'open') throw new ReadError('unsafe_path');
-        endpoint = `${root}/issues?state=${state}&sort=updated&direction=desc&${paging}`;
+        // Server-side state and one exact literal label: both are fixed query
+        // parameters of allowlisted fields, never command or URL text.
+        if (!issueBrowseStates.includes(operation.state)) throw new ReadError('unsafe_path');
+        if (operation.label !== undefined && !validIssueLabel(operation.label)) throw new ReadError('unsafe_path');
+        const label = operation.label === undefined ? '' : `&labels=${encodeURIComponent(operation.label)}`;
+        endpoint = `${root}/issues?state=${operation.state}${label}&sort=updated&direction=desc&${paging}`;
       } else if (operation.resource === 'comments' || operation.resource === 'dependencies' || operation.resource === 'issue') {
         if (!Number.isSafeInteger(operation.issue) || operation.issue < 1) throw new ReadError('unsafe_path');
         endpoint = `${root}/issues/${operation.issue}`;
