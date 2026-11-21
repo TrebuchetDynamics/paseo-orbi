@@ -180,6 +180,12 @@ describe('operator-granted service controls', () => {
       { admittedClientsOperate: true, actions: ['start'], commands: { start: [process.execPath, '-e', 'process.exit(0)', '{other}'] } },
       { admittedClientsOperate: true, actions: ['start'], commands: { start: ['node', '-e', 'process.exit(0)', '{unit}'] } },
       { admittedClientsOperate: true, actions: ['start'], commands: { start: argv, stop: argv } },
+      // A raw system-manager mutation, an env indirection and a privilege
+      // escalation program are refused as the bound program itself.
+      { admittedClientsOperate: true, actions: ['restart'], commands: { restart: ['/usr/bin/systemctl', '--user', 'restart', '{unit}'] } },
+      { admittedClientsOperate: true, actions: ['stop'], commands: { stop: ['/usr/bin/systemd-run', '--user', 'stop', '{unit}'] } },
+      { admittedClientsOperate: true, actions: ['start'], commands: { start: ['/usr/bin/env', '/srv/example/bin/orbi-lifecycle', 'start', '{unit}'] } },
+      { admittedClientsOperate: true, actions: ['stop'], commands: { stop: ['/usr/bin/sudo', '/srv/example/bin/orbi-lifecycle', 'stop', '{unit}'] } },
       { admittedClientsOperate: true, actions: ['start', 'start'], commands: { start: argv } },
       { admittedClientsOperate: true, actions: ['start'], commands: { start: argv }, extra: true },
     ]) {

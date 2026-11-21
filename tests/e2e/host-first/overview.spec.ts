@@ -3,7 +3,7 @@ import { state as setScenario } from '../fixtures/browser';
 import { theme } from '../fixtures/browser';
 import { start } from '../harness';
 import { hostFirstScreenshots, hostFirstTitles as titles, hostFirstCaptureTitle } from './contract.mjs';
-import { openOverview, openRoute, pressEnter, configureHost, captureOverview, hostCalls, expect, type Lease, type OverviewCase } from './fixtures';
+import { openOverview, openRoute, openServices, pressEnter, configureHost, captureOverview, hostCalls, expect, type Lease, type OverviewCase } from './fixtures';
 
 const shots = hostFirstScreenshots as OverviewCase[];
 
@@ -47,6 +47,8 @@ async function preparePair(page: import('@playwright/test').Page, lease: Lease) 
 async function switchHost(page: import('@playwright/test').Page, index: number) {
   await page.getByTestId('plugin-host-filter-trigger').click();
   await page.getByRole('button', { name: 'Qualification', exact: true }).nth(index).click();
+  // A host change mounts Work again, so the services disclosure is collapsed.
+  await openServices(page);
 }
 
 test(titles[0], async ({ page, lease }) => {
@@ -84,11 +86,11 @@ test(titles[1], async ({ page, lease }) => {
   await expect(page.getByText('Issues — select a repository to browse', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Select Demo', exact: true }).click();
   await expect(page.getByText(/host-a synthetic issue 42/).first()).toBeVisible();
-  // Keyboard return to the originating Overview: the expanded family is retained
+  // Keyboard return to the originating Work: the expanded family is retained
   // per host/repository surface, and the heading is the stable fallback target.
   await pressEnter(page, 'button', 'Orbi');
-  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Overview');
-  await expect(page.getByTestId('orbi-overview-heading')).toBeVisible();
+  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
+  await openServices(page);
   await expect(page.getByRole('button', { name: 'Collapse orbi-demo', exact: true })).toBeVisible();
 });
 

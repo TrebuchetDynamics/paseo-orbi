@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, normalize, resolve } from 'node:path';
 import { parse } from 'smol-toml';
 import { z } from 'zod';
 import { DeploymentId, type ControlAction, type DeploymentCatalog, type Problem } from '../shared/common';
@@ -11,6 +11,11 @@ const repoPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9_.-]{1,100}$/
 // single placeholder, replaced only by the server-derived validated unit name.
 // There is no shell, no glob, no environment expansion and no request-supplied argv.
 const argvToken = /^[^\p{C}]{1,200}$/u;
+// The plugin never substitutes a raw system-manager mutation and never escalates
+// privilege, so a grant cannot name one of these programs directly. A wrapper the
+// operator owns (which may call them itself) is still the bound lifecycle entry
+// point; only a direct system-manager/escalation call is refused.
+const forbiddenPrograms = new Set(['systemctl', 'systemd-run', 'env', 'sudo', 'doas', 'pkexec', 'su']);
 const controlGrantSchema = z.object({
   // The pinned host cannot distinguish viewers from operators, so the operator
   // must state explicitly that admitted clients of this host may operate the
@@ -32,6 +37,9 @@ const identity = z.object({
   // Validated entry-locally by parseControlGrant(), so a malformed grant rejects
   // only its own deployment instead of hiding the whole catalog.
   controls: z.unknown().optional(),
+  // Optional additive descriptor. Any value is parsed by shortcutDescriptor below so a
+  // malformed descriptor disables only the shortcut instead of the whole catalog.
+  workspaceShortcut: z.unknown().optional(),
 }).strict();
 const configuration = z.object({ schema: z.literal(1), deployments: z.array(identity) }).strict();
 // Display-only association candidate for the host service inventory. A claim is
@@ -54,6 +62,7 @@ export type ValidatedDeployment = Readonly<{
   id: string; repo: string; configPath: string; engineSourcePath: string; repoDir: string; deployHome: string;
   sourceProfile: SourceProfile; unitName: string | null; capacity: number; trustedPublisherLogins: readonly string[];
   worktreeRetainHours: number; keepFailedWorktrees: boolean | null; controls: ControlGrantSpec | null;
+  workspaceShortcut: ShortcutDescriptor | null; shortcutProblem: Problem | null;
 }>;
 const problem = (code: Problem['code'], source: Problem['source'] = 'config'): Problem => ({ source, code });
 // Validate the operator grant as inert data. Fail closed: a grant that cannot be
@@ -76,9 +85,36 @@ export function parseControlGrant(value: unknown): ControlGrantSpec | null {
     if (argv.some(token => !argvToken.test(token) || (/[{}]/.test(token) && token !== '{unit}'))) throw new Error('config_mismatch');
     if (argv.filter(token => token === '{unit}').length !== 1) throw new Error('config_mismatch');
     if (!absolutePath(argv[0])) throw new Error('config_mismatch');
+    // "Never a raw systemctl restart, never privilege escalation" is enforced
+    // here, not only documented: such a grant fails closed as config_mismatch.
+    if (forbiddenPrograms.has(basename(argv[0]))) throw new Error('config_mismatch');
     bound[action] = Object.freeze([...argv]);
   }
   return Object.freeze({ actions: Object.freeze(actions), commands: Object.freeze(bound) });
+}
+// One operator-designated shortcut: a canonical absolute parent directory and a
+// single leaf basename. The target is never part of this descriptor.
+export type ShortcutDescriptor = Readonly<{ directory: string; name: string }>;
+// Basename bound: 1-128 ASCII characters, alphanumeric first, then alphanumeric/dot/
+// underscore/hyphen. No separators, controls, leading dot/dash or dot segment fits.
+const shortcutName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const DIRECTORY_LIMIT = 4096;
+const COMPONENT_LIMIT = 64;
+// Syntactic validation only: nothing is touched or resolved here. The configured
+// directory is a dedicated canonical parent, never '/' and never a dot segment.
+export function shortcutDescriptor(value: unknown): ShortcutDescriptor | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).sort().join(',') !== 'directory,name') return null;
+  const { directory, name } = raw;
+  if (typeof directory !== 'string' || typeof name !== 'string') return null;
+  if (!isAbsolute(directory) || normalize(directory) !== directory || directory === '/') return null;
+  if (/[\x00-\x1f\x7f]/.test(directory) || Buffer.byteLength(directory, 'utf8') > DIRECTORY_LIMIT) return null;
+  const components = directory.slice(1).split('/');
+  if (components.length > COMPONENT_LIMIT) return null;
+  if (components.some(component => !component || component === '.' || component === '..')) return null;
+  if (!shortcutName.test(name)) return null;
+  return Object.freeze({ directory, name });
 }
 function tomlPath(value: unknown, base: string) {
   if (typeof value !== 'string' || !value || /[$~\x00-\x1f\x7f]/.test(value)) throw new Error('config_mismatch');
@@ -109,6 +145,8 @@ export class ConfigRepository {
     const valid = new Map<string, ValidatedDeployment>();
     const claims: UnitFamilyClaim[] = [];
     for (const entry of parsed.data.deployments) {
+      const shortcut = shortcutDescriptor(entry.workspaceShortcut);
+      const shortcutProblem = entry.workspaceShortcut === undefined || shortcut !== null ? null : problem('shortcut_invalid');
       if (signal?.aborted) return invalid('disposed');
       const safe: DeploymentCatalog['entries'][number] = {
         id: entry.id, label: entry.label, repo: entry.repo, adapter: entry.adapter, status: 'invalid_config', problems: [],
@@ -144,11 +182,13 @@ export class ConfigRepository {
         // The lifecycle argv never leaves the daemon.
         safe.controls = controls === null ? null : { actions: [...controls.actions], slots: capacity };
         claims.push(Object.freeze({ id: entry.id, unitName, status: 'available' }));
+        if (shortcutProblem) safe.problems = [shortcutProblem];
         valid.set(entry.id, Object.freeze({
           id: entry.id, repo: entry.repo, configPath: entry.configPath, engineSourcePath: entry.engineSourcePath,
           repoDir: entry.repoDir, deployHome: entry.deployHome, sourceProfile: entry.adapter as SourceProfile,
           unitName, capacity, worktreeRetainHours, keepFailedWorktrees, trustedPublisherLogins: Object.freeze([...entry.trustedPublisherLogins]),
           controls,
+          workspaceShortcut: shortcut, shortcutProblem,
         }));
       } catch (error) { safe.problems = [problem(error instanceof ReadError ? error.code : 'config_mismatch')]; }
     }

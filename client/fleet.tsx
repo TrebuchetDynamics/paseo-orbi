@@ -5,6 +5,7 @@ import { Pressable, Text, View } from 'react-native';
 import { type DeploymentCatalog } from '../shared/common';
 import { fleetRead, type FleetSnapshot } from '../shared/fleet';
 import { ObservationView, useObservationQuery } from './observation';
+import { WorkspaceShortcut } from './workspace-shortcut';
 
 type Props = PluginScreenProps & { openScreen: PluginClientContext['openScreen'] };
 type Entry = DeploymentCatalog['entries'][number];
@@ -109,6 +110,8 @@ function DeploymentDetail({ entry, connected, foreground, ...props }: Props & {
         </View>}
       </View>;
     }}</ObservationView>
+    <WorkspaceShortcut hostId={props.host.id} deploymentId={entry.id} repo={entry.repo}
+      connected={connected} foreground={foreground} theme={props.theme} />
     <Text style={text}>Unit reads unavailable? Ask the operator to check user-unit access, then Refresh. No controls change services.</Text>
   </View>;
 }

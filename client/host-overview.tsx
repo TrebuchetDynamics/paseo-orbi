@@ -78,6 +78,18 @@ function familyRank(group: InventoryGroup) {
 function sortFamilies(groups: readonly InventoryGroup[]): InventoryGroup[] {
   return [...groups].sort((left, right) => familyRank(left) - familyRank(right) || (left.label < right.label ? -1 : left.label > right.label ? 1 : 0));
 }
+// One compact attention summary for the Work surface, computed from the same
+// evidence the detailed rows use. A denied, off or failed check publishes no
+// count at all; a partial check counts only observed groups.
+export function serviceAttention(inventory: ServiceInventory | null | undefined) {
+  if (!inventory || (inventory.state !== 'complete' && inventory.state !== 'partial')) return null;
+  return {
+    failed: inventory.groups.filter(group => summarizeFamily(group).facts.includes('failed')).length,
+    total: inventory.groups.length,
+    partial: inventory.state === 'partial',
+  };
+}
+
 // Configured deployments that this host check actually observed through a
 // unique authorized association. Discovery alone never appears here. A check
 // that produced no evidence ('off', denied/unavailable) returns null so a

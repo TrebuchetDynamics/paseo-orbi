@@ -4,6 +4,9 @@ import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { ConfigRepository } from './config';
 import { artifactNames, type ArtifactMetadata } from '../shared/blockers';
+import type { WorkspaceShortcutStatus } from '../shared/workspace-shortcut';
+import { issueBrowseStates, validIssueLabel, type IssueBrowseState } from '../shared/issues';
+import { WorkspaceShortcutInspector } from './workspace-shortcut';
 
 export class ReadError extends Error {
   constructor(public readonly code: 'unsafe_path' | 'read_failed' | 'read_limit' | 'disposed' | 'process_failed' | 'process_timeout' | 'process_limit') { super(code); }
@@ -148,7 +151,7 @@ class ChildOperations {
 export type ProcessOperation =
   | { kind: 'systemctl-show'; slot: number; unit: 'service' | 'timer' }
   | { kind: 'journalctl'; slot: number }
-  | { kind: 'gh-api-get'; resource: 'issues'; state?: 'all' | 'open'; page: number }
+  | { kind: 'gh-api-get'; resource: 'issues'; state: IssueBrowseState; label?: string; page: number }
   | { kind: 'gh-api-get'; resource: 'comments' | 'dependencies' | 'issue'; issue: number; page: number }
   | { kind: 'gh-api-get'; resource: 'pull'; pr: number; page: number }
   | { kind: 'gh-api-get'; resource: 'checks'; sha: string; page: number };
@@ -158,6 +161,9 @@ export class ReadPorts {
   private readonly lifetime = new AbortController();
   private readonly children = new Map<ChildProcess, () => Promise<void>>();
   private readonly operations = new ChildOperations(this.children);
+  // One shared presence/type observer: at most one in-flight shortcut inspection per
+  // plugin instance, with its own 1000 ms budget and capacity hold.
+  private readonly shortcuts = new WorkspaceShortcutInspector();
   constructor(private readonly repository: ConfigRepository) {}
   clock() { return new Date(); }
   async read(id: string, selector: 'health') {
@@ -227,6 +233,14 @@ export class ReadPorts {
     this.assertActive();
     return result as { size: number; mtimeMs: number };
   }
+  // Narrow metadata capability for one configured leaf: presence and type only.
+  // No client path, no target read/follow/compare, no enumeration and no write.
+  async shortcut(id: string): Promise<WorkspaceShortcutStatus> {
+    this.assertActive();
+    const deployment = this.repository.resolve(id);
+    const result = await this.shortcuts.inspect(deployment.workspaceShortcut, deployment.shortcutProblem, () => this.disposed);
+    return { deploymentId: deployment.id, state: result.state, observedAt: this.clock().toISOString(), problem: result.problem };
+  }
   // Stat-only evidence. No scene path comes from a comment, client or directory scan.
   async statArtifact(id: string, issue: number, runId: string, name: ArtifactMetadata['name']): Promise<ArtifactMetadata> {
     this.assertActive();
@@ -285,9 +299,12 @@ export class ReadPorts {
       let endpoint: string;
       const paging = `per_page=100&page=${operation.page}`;
       if (operation.resource === 'issues') {
-        const state = operation.state ?? 'all';
-        if (state !== 'all' && state !== 'open') throw new ReadError('unsafe_path');
-        endpoint = `${root}/issues?state=${state}&sort=updated&direction=desc&${paging}`;
+        // Server-side state and one exact literal label: both are fixed query
+        // parameters of allowlisted fields, never command or URL text.
+        if (!issueBrowseStates.includes(operation.state)) throw new ReadError('unsafe_path');
+        if (operation.label !== undefined && !validIssueLabel(operation.label)) throw new ReadError('unsafe_path');
+        const label = operation.label === undefined ? '' : `&labels=${encodeURIComponent(operation.label)}`;
+        endpoint = `${root}/issues?state=${operation.state}${label}&sort=updated&direction=desc&${paging}`;
       } else if (operation.resource === 'comments' || operation.resource === 'dependencies' || operation.resource === 'issue') {
         if (!Number.isSafeInteger(operation.issue) || operation.issue < 1) throw new ReadError('unsafe_path');
         endpoint = `${root}/issues/${operation.issue}`;

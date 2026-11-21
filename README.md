@@ -12,9 +12,17 @@ deliberately, so not every issue ends in a merge.
 **An issue stopped moving?** Look in **Blockers** for the reported reason, then
 **Runs** for what happened.
 
+A deployment entry may designate one optional workspace shortcut
+(`workspaceShortcut: { directory, name }`). Pressing **Inspect shortcut** in that
+deployment's detail reports only **Symlink present**, **Present, not a symlink**,
+**Not present**, **Cannot inspect** or **Not configured**. It never reads,
+follows, resolves, compares or displays the target, writes nothing, and proves
+neither that a checkout exists nor that the link opens. Opening the view reads
+nothing.
+
 ## Views
 
-- **Overview** — host-scoped user service families, configured deployments, one loaded detail with timers/services, recorded health, capacity, and an **Actions** disclosure (Start/Stop/Restart) for a deployment the operator granted controls on.
+- **Work** — the default view for a configured repository: issue rows with open-issue icon, number, wrapping title, label chips and read-only Inspect/Open-on-GitHub actions in the first viewport, plus open/closed/all and exact-label filters. Host service families, configured deployments, one loaded detail with timers/services, recorded health, capacity and one explicit presence/type check of an optional designated shortcut stay behind a technical-details disclosure, which also holds the **Actions** disclosure (Start/Stop/Restart) for a deployment the operator granted controls on.
 - **Issues** — lifecycle pages, trusted structured reports, on-demand dependency evidence.
 - **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks.
 - **Blockers** — reported failures and waits, source attribution, metadata only; no recovery controls.
@@ -42,8 +50,10 @@ loads the plugin; installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain
 NOT_RUN (#23).
 
 **Already installed and configured?** Open the **Orbi** entry on the intended host. An
-unconfigured or invalid catalog shows a setup panel naming the missing
-authorization; the operator supplies it and explicitly reloads the plugin.
+unconfigured or invalid catalog shows a **Set up repositories** action naming the
+missing authorization and stating that issue reads are unavailable while
+discovery-only host service inventory keeps working independently; the operator
+supplies the authorization and explicitly reloads the plugin.
 Refresh only rereads startup configuration; it cannot configure or reload.
 
 ### Authorized installation (not performed here)
@@ -67,7 +77,7 @@ at install time; it does not install a GitHub Release. This is not a promise
 that every `main` commit has passed live qualification: the plugin has offline
 checks only, and live installation plus installed qualification remain
 unperformed. Require `running` in `paseo plugin ls`, open the **Orbi** entry on
-Overview and select an authorized deployment. These commands are instructions,
+Work and select an authorized deployment. These commands are instructions,
 not observed results.
 
 An existing Git installation stays at its installed revision until the operator
@@ -79,8 +89,8 @@ approval; declining or a failed update keeps the installed content.
 `875c69a101a102a8f14b064f0664069b5e603f4f` is the revision of the recorded
 offline qualification run. It is not needed for a fresh install and is not a
 permanent update pin. It predates the current **Orbi** entry and host-first
-Overview: it lists Fleet, Issues, Runs and Blockers as separate sidebar rows,
-while current `main` opens one **Orbi** entry on Overview with in-app
+Work: it lists Fleet, Issues, Runs and Blockers as separate sidebar rows,
+while current `main` opens one **Orbi** entry on Work with in-app
 navigation. To reproduce that revision deliberately:
 
 ```sh

@@ -6,13 +6,17 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { deploymentsList, type DeploymentCatalog, type Observation } from '../shared/common';
 import { useForeground, useObservationQuery } from './observation';
 import { Fleet } from './fleet';
-import { HostServices, observedDeploymentIds, useHostServicesQuery } from './host-overview';
+import { observedDeploymentIds, useHostServicesQuery } from './host-overview';
 import { Issues } from './issues';
 import { Runs } from './runs';
 import { Blockers } from './blockers';
+import { Work } from './work';
 
 export const routes = ['fleet', 'issues', 'runs', 'blockers'] as const;
-const title = (route: string) => route === 'fleet' ? 'Overview' : route[0].toUpperCase() + route.slice(1);
+// The fleet route is the Work surface: issue work first, host services behind
+// one technical-details disclosure. Screen ids and deployment parameters stay.
+export const routeTitle = (route: string) => route === 'fleet' ? 'Work' : route[0].toUpperCase() + route.slice(1);
+const title = routeTitle;
 export function Sidebar({ currentScreen, openScreen }: PluginSidebarItemProps) {
   return <SidebarRow icon="LayoutDashboard" label="Orbi" active={routes.some(route => currentScreen?.screenId === route)} onPress={() => openScreen({ screenId: 'fleet' })} />;
 }
@@ -62,19 +66,20 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   const unconfiguredCatalog = catalog?.state === 'unconfigured' && !catalogReadFailed;
   const selected = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
   const featureKey = `${props.host.id}:${selected?.id}:${selected?.repo}`;
-  const surfaceKey = `${props.host.id}:${selected?.id ?? ''}:${selected?.repo ?? ''}`;
+  // Work remounts on a host or catalog-identity change, so a repository choice
+  // never survives into another host or a reassigned catalog entry.
+  const workKey = `${props.host.id}:${catalog?.entries.map(entry => `${entry.id}:${entry.repo}:${entry.status}`).join(',') ?? ''}`;
+  const requestedIssue = props.params.issue !== undefined && /^[1-9][0-9]*$/.test(props.params.issue) ? Number(props.params.issue) : null;
   const transport = query.observation?.state === 'available' ? 'current' : query.observation?.state ?? (connected && foreground ? 'loading' : 'unavailable');
   return <ScrollView style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }} contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 12 }}>
-    {route === 'fleet' && <HostServices
-      key={surfaceKey} surfaceKey={surfaceKey}
-      hostId={props.host.id} hostLabel={props.host.label}
-      connected={connected} foreground={foreground}
-      theme={props.theme} compact={props.layout.compact}
-      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} openScreen={openScreen} query={inventory}
+    {route === 'fleet' && <Work
+      key={workKey}
+      {...props} openScreen={openScreen} catalog={catalog ?? null} catalogUnconfigured={unconfiguredCatalog}
+      connected={connected} foreground={foreground} query={inventory}
     />}
     <View testID="orbi-catalog" style={{ gap: 8 }}>
-      {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Repository setup" accessibilityState={{ expanded: setupExpanded }}
-        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setSetupHost(setupExpanded ? null : props.host.id)}><Text style={text}>Repository setup</Text></Pressable>}
+      {route === 'fleet' && <Pressable accessibilityRole="button" accessibilityLabel="Set up repositories" accessibilityState={{ expanded: setupExpanded }}
+        style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setSetupHost(setupExpanded ? null : props.host.id)}><Text style={text}>Set up repositories</Text></Pressable>}
       {route !== 'fleet' && <Text style={text}>Selected host: {props.host.label}</Text>}
       {!connected && route !== 'fleet' && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
       {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
@@ -83,8 +88,9 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       {catalog && (route !== 'fleet' || catalog.state !== 'configured' || setupExpanded) && <Text style={text}>Catalog: {catalog.state}</Text>}
       {setupExpanded && catalog && catalog.state !== 'configured' && <View accessibilityLabel="Orbi setup" style={{ gap: 8 }}>
         <Text style={text}>{catalog.state === 'unconfigured'
-          ? 'Unconfigured: ask the operator to provide an authorized JSON file through PASEO_ORBI_CONFIG and explicitly reload this plugin.'
-          : 'Invalid configuration: ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
+          ? 'Issue reads are unavailable: no validated repository catalog is configured for this host. Unconfigured: ask the operator to provide an authorized JSON file through PASEO_ORBI_CONFIG and explicitly reload this plugin.'
+          : 'Issue reads are unavailable: the configured repository catalog is invalid. Invalid configuration: ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
+        <Text style={text}>Host service inventory is independent: Work still shows discovered Orbi units under Services (technical details) without a repository catalog.</Text>
         <Text style={text}>Refresh only reads the current startup catalog. It does not configure authorization or reload the plugin.</Text>
       </View>}
       {!catalog && setupExpanded && <Text style={text}>{transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'}</Text>}
@@ -105,7 +111,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
           <Text style={text}>{title(route)} — select a repository to browse</Text>
           {catalog.entries.filter(entry => entry.status === 'available').map(entry => <Pressable key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })}><Text style={text}>{entry.label} ({entry.repo})</Text></Pressable>)}
           {selected && (route === 'issues'
-            ? <Issues key={featureKey} deploymentId={selected.id} repo={selected.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} openScreen={openScreen} />
+            ? <Issues key={`${featureKey}:${requestedIssue ?? ''}`} deploymentId={selected.id} repo={selected.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} openScreen={openScreen} initialIssue={requestedIssue} />
             : route === 'runs' ? <Runs key={`${featureKey}:${props.params.issue ?? ''}:${props.params.runId ?? ''}`} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} params={props.params} />
             : route === 'blockers' ? <Blockers key={featureKey} repo={selected.repo} deploymentId={selected.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} openScreen={openScreen} />
             : null)}

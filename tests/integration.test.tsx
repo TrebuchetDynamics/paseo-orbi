@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import serverEntry from '../index.server';
 import clientEntry from '../index.client';
 import { issuesList, issuesGet } from '../shared/issues';
+import { servicesInventory } from '../shared/services';
 import { ReadError, ReadPorts } from '../server/read-ports';
 import { fixture } from './helpers/fixtures';
 import records from './fixtures/runs/records.json';
@@ -65,8 +66,16 @@ it('four_views_read_only_journey', async () => {
     const repo = id === 'demo' ? 'Example/project' : 'Other/repository';
     if (op.kind === 'systemctl-show') return 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=static\nResult=success\nExecMainStatus=0\nEnvironment=ENV_SECRET_CANARY\n';
     if (op.kind === 'journalctl') return JSON.stringify({ ...records.journal, MESSAGE: records.journal.MESSAGE.replace('Example/project', repo) }) + '\n';
-    const issue = (n: number) => ({ number: n, title: `Issue ${n}`, state: n === 99 ? 'closed' : 'open', updated_at: stamp, labels: [{ name: n === 4 ? 'ai-blocked' : 'ai-in-progress' }], body: 'BODY_SECRET_CANARY' });
-    if (op.resource === 'issues') return response([42, 420, 4, ...(op.state === 'open' ? [] : [99, ...(op.page === 1 ? Array.from({ length: 96 }, (_, i) => 1000 + i) : [])])].map(issue));
+    // Filler issues keep the default open page full for pagination without
+    // becoming active runs: only the two attributed worktrees are in progress.
+    const issue = (n: number) => ({ number: n, title: `Issue ${n}`, state: n === 99 ? 'closed' : 'open', updated_at: stamp, labels: [{ name: n === 4 ? 'ai-blocked' : n >= 1000 ? 'backlog' : 'ai-in-progress' }], body: 'BODY_SECRET_CANARY' });
+    // Open browse pages stay full so pagination is exercised on the default state;
+    // only the wider states expose the closed issue 99.
+    if (op.resource === 'issues') {
+      const head = op.page === 1 ? [42, 420, 4, ...(op.state === 'open' ? [] : [99])] : [];
+      const fillers = op.page === 1 ? Array.from({ length: op.state === 'open' ? 97 : 96 }, (_, i) => 1000 + i) : [1007];
+      return response([...head, ...fillers].map(issue));
+    }
     if (op.resource === 'issue') return response(issue(op.issue));
     if (op.resource === 'comments') {
       const run = op.issue === 42 ? '22222222' : op.issue === 420 ? '33333333' : op.issue === 4 ? '12345678' : '11111111';
@@ -92,7 +101,7 @@ it('four_views_read_only_journey', async () => {
     });
   } } as PluginServerContext);
   cleanups.push(stopServer);
-  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory, 'fleet.read': host.readFleet, 'issues.list': host.readIssues, 'issues.get': host.readIssue, 'runs.list': host.readRuns, 'runs.read': host.readRun, 'blockers.list': host.readBlockers, 'blockers.read': host.readBlocker })) {
+  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory, 'fleet.read': host.readFleet, 'issues.list': host.readIssues, 'issues.get': host.readIssue, 'runs.list': host.readRuns, 'runs.read': host.readRun, 'blockers.list': host.readBlockers, 'blockers.read': host.readBlocker, 'workspace.shortcut': host.readShortcut })) {
     mock.mockReset().mockImplementation(input => handlers.get(name)!(input));
   }
   const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
@@ -122,13 +131,21 @@ it('four_views_read_only_journey', async () => {
   const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); };
   await settle();
   expect(text()).toContain('Configured capacity: 2; Occupancy: unknown'); expect(text()).toContain('Second (Other/repository)');
-  // Host inventory is not opted in here: the Overview keeps the #24 catalog
-  // semantics and adds no discovered family or repository action.
+  // Mounting the detail is not an operator request: no shortcut inspection is made.
+  expect(text()).toContain('Workspace shortcut: Not inspected');
+  expect(host.readShortcut).not.toHaveBeenCalled();
+  // Host inventory is not opted in here: Work is the default surface and the
+  // discovery-only host inventory stays behind its technical-details disclosure.
   expect(host.readInventory).toHaveBeenCalledTimes(1);
+  expect(text().startsWith('Work · Host A\nRepository: Demo (Example/project)')).toBe(true);
+  expect(text()).toContain('Issues: current');
+  expect(text()).toContain('#42 Issue 42');
+  expect(text().indexOf('#42 Issue 42')).toBeLessThan(text().indexOf('Services (technical details)'));
+  await press('Services (technical details)');
   expect(text()).toContain('Service check off · activity unknown');
   expect(text()).not.toContain('Observed unit families');
   expect(text()).not.toContain('last successful check');
-  expect(text().indexOf('Host A · Fleet')).toBeLessThan(text().indexOf('Demo (Example/project)'));
+  expect(text().indexOf('Host A · Fleet')).toBeLessThan(text().indexOf('Fleet — read-only'));
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
   await press('Set up service access');
   expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');
@@ -140,14 +157,18 @@ it('four_views_read_only_journey', async () => {
   expect(text()).toContain('Occupancy: unknown'); partial = false;
   await press('Active work for Demo'); expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
   await act(async () => renderer.update(tree('issues'))); await settle();
-  expect(text()).toContain('Issue 42');
+  expect(text()).toContain('#42 Issue 42');
   await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed'); expect(text()).toContain('Reported run: 22222222; reports complete');
   // Same deployment ID on another online host must remount local selection,
   // while a cancelled old-host detail cannot publish late into either generation.
   expect(host.readCatalog).toHaveBeenCalledTimes(2); // initial + the 30-second poll, no second owner on Issues
   expect(renderer.root.findByProps({ accessibilityLabel: 'Next page' }).props.disabled).toBe(false);
   await press('Next page'); expect(text()).toContain('Page 2.');
-  await press('Inspect issue 42');
+  // Issue 42 is not on this page; a by-number lookup keeps one local detail
+  // observation that the host switch below must discard with the whole surface.
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Issue number to inspect' }).props.onChangeText('42'));
+  await press('Inspect issue by number');
+  expect(text()).toContain('Issue #42 — detail read by number; not a browse-page membership claim.');
   const oldDetail = query.getQueryData(['paseo-orbi', 'host-a', 'demo', 'issues.get:Example/project:42']);
   expect(oldDetail).toMatchObject({ data: { issue: { number: 42 }, reports: { selectedRunId: '22222222' } } });
   expect(text()).toContain('Dependencies: no open blockers observed');
@@ -172,7 +193,7 @@ it('four_views_read_only_journey', async () => {
   await press('Inspect issue 42'); expect(text()).toContain('Dependencies: no open blockers observed');
   // Catalog reassignment is a client seam, not a server startup reconfiguration.
   // Supply distinguishable B data at the typed transport seam with B pending.
-  const aPage = query.getQueryData<any>(['paseo-orbi', 'host-b', 'demo', 'issues.list:Example/project:1']);
+  const aPage = query.getQueryData<any>(['paseo-orbi', 'host-b', 'demo', 'issues.list:Example/project:open::1']);
   const bPage = issuesList.output.parse(JSON.parse(JSON.stringify(aPage).replaceAll('Example/project', 'Reassigned/project')));
   bPage.data!.records.forEach(issue => { issue.title = `Reassigned issue ${issue.number}`; });
   const bDetail = issuesGet.output.parse(JSON.parse(JSON.stringify(result).replaceAll('Example/project', 'Reassigned/project')));
@@ -234,6 +255,8 @@ it('four_views_read_only_journey', async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
   await press('Inspect blocker 4');
   expect(text()).toContain('complete report read'); expect(text()).toContain('test.log: present'); expect(text()).not.toContain('process_failed');
+  // One normal observation interval and explicit detail selection inspect nothing.
+  expect(host.readShortcut).not.toHaveBeenCalled();
   expect(JSON.stringify(transported)).not.toMatch(/CANARY|publisher-canary|\/tmp\/|configPath|engineSourcePath|repoDir|deployHome/);
   expect(await Promise.all([snapshot(a.root), snapshot(b.root)])).toEqual(before);
   expect(processPort.mock.calls.every(([, op, deadline]) => ['systemctl-show', 'journalctl', 'gh-api-get'].includes(op.kind) && (deadline === undefined || deadline <= 10000))).toBe(true);
@@ -244,6 +267,64 @@ it('four_views_read_only_journey', async () => {
   await vi.advanceTimersByTimeAsync(61000); expect(processPort).toHaveBeenCalledTimes(finalCalls);
   stopClient(); expect(removed).toHaveBeenCalledTimes(5);
   await stopServer(); expect(dispose).toHaveBeenCalled();
+});
+
+it('validated catalog enables bounded exact-repo issue reads while discovery-only inventory stays independent', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+  const f = await fixture(); cleanups.push(f.cleanup);
+  vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+  const operations: Array<{ id: string; operation: { kind: string; resource?: string; state?: string; page?: number } }> = [];
+  const processPort = vi.spyOn(ReadPorts.prototype, 'process').mockImplementation(async (id, operation) => {
+    operations.push({ id, operation });
+    if (operation.kind !== 'gh-api-get' || operation.resource !== 'issues') throw new Error('unexpected operation');
+    return response([{ number: 42, title: 'Issue 42', state: 'open', updated_at: stamp, labels: [{ name: 'ai-ready' }] }]);
+  });
+  const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockResolvedValue(
+    'orbi-demo@1.service loaded active running Orbi Runner\norbi-demo@1.timer loaded active waiting Orbi Timer\n');
+  const stops: Array<() => Promise<void>> = [];
+  cleanups.push(async () => { for (const stop of stops.splice(0)) await stop(); });
+  const register = () => {
+    const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+    stops.push(serverEntry({ handle: (contract: { name: string }, handler: (input: unknown) => Promise<unknown>) => { handlers.set(contract.name, handler); } } as unknown as PluginServerContext));
+    return handlers;
+  };
+  // Operator-reviewed catalog through the supported startup path: the exact
+  // repository association is the TOML source_repos value, never a service slug.
+  const configured = register();
+  expect(await configured.get('deployments.list')!({})).toMatchObject({
+    state: 'configured', entries: [{ id: 'demo', repo: f.entry.repo, status: 'available' }],
+  });
+  expect(f.toml).toContain(`source_repos = ["${f.entry.repo}"]`);
+  const page = issuesList.output.parse(await configured.get('issues.list')!({ deploymentId: 'demo', page: 1 }));
+  expect(page).toMatchObject({
+    state: 'available',
+    data: { repo: f.entry.repo, page: 1, hasNextPage: false, records: [{ number: 42, labels: ['ai-ready'], state: 'Ready candidate' }] },
+  });
+  // Browse defaults to server-side open state, never one all-state page filtered locally.
+  expect(operations).toEqual([{ id: 'demo', operation: { kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 } }]);
+  expect(processPort.mock.calls[0]?.[2]).toBe(10000);
+  // Bounded page scope: the typed contract refuses out-of-range pages before any read.
+  expect(issuesList.input.parse({ deploymentId: 'demo', page: 10 })).toEqual({ deploymentId: 'demo', page: 10, state: 'open' });
+  expect(issuesList.input.parse({ deploymentId: 'demo', page: 1, state: 'closed', label: 'good first issue' })).toEqual({ deploymentId: 'demo', page: 1, state: 'closed', label: 'good first issue' });
+  for (const invalid of [{ state: 'merged' }, { label: 'bad,label' }, { label: 'x'.repeat(101) }]) expect(() => issuesList.input.parse({ deploymentId: 'demo', page: 1, ...invalid })).toThrow();
+  for (const invalid of [0, 11]) expect(() => issuesList.input.parse({ deploymentId: 'demo', page: invalid })).toThrow();
+  // Discovery-only inventory works with the catalog and never resolves a repository.
+  const inventory = servicesInventory.output.parse(await configured.get('services.inventory')!({}));
+  expect(inventory).toMatchObject({ state: 'complete', groups: [{ label: 'orbi-demo', association: 'matched', deploymentId: 'demo' }] });
+  expect(processPort).toHaveBeenCalledTimes(1);
+  await stops.pop()!();
+  // Without a validated catalog there is no issue-read capability; the discovery
+  // inventory still answers independently of PASEO_ORBI_CONFIG.
+  vi.stubEnv('PASEO_ORBI_CONFIG', undefined);
+  const unconfigured = register();
+  expect(await unconfigured.get('deployments.list')!({})).toEqual({ state: 'unconfigured', entries: [], problems: [] });
+  const githubReads = processPort.mock.calls.length;
+  await expect(unconfigured.get('issues.list')!({ deploymentId: 'demo', page: 1 })).rejects.toThrow('deployment_unavailable');
+  expect(processPort.mock.calls.length).toBe(githubReads);
+  const independent = servicesInventory.output.parse(await unconfigured.get('services.inventory')!({}));
+  expect(independent).toMatchObject({ state: 'complete', groups: [{ label: 'orbi-demo' }] });
+  expect(processPort.mock.calls.length).toBe(githubReads);
+  expect(hostInventory).toHaveBeenCalledTimes(4);
 });
 
 it.each(pins)('source_profile $fixture fails closed before telemetry', async pin => {
@@ -261,7 +342,7 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   for (const [name, input] of [
     ['fleet.read', {}], ['issues.list', { page: 1 }], ['issues.get', { issue: 42 }],
     ['runs.list', {}], ['runs.read', { issue: 42, runId: '22222222' }],
-    ['blockers.list', { page: 1 }], ['blockers.read', { issue: 4 }],
+    ['blockers.list', { page: 1 }], ['blockers.read', { issue: 4 }], ['workspace.shortcut', {}],
   ] as const) await expect(handlers.get(name)!({ deploymentId: 'demo', ...input })).rejects.toThrow('deployment_unavailable');
   expect(processPort).not.toHaveBeenCalled(); expect(reads).not.toHaveBeenCalled();
 });

@@ -14,6 +14,7 @@ import { servicesInventory } from './shared/services';
 import { servicesControl } from './shared/service-control';
 import { createServiceInventory } from './server/service-inventory';
 import { createServiceControl, executeControl } from './server/service-control';
+import { workspaceShortcutStatus } from './shared/workspace-shortcut';
 
 export default function contribute(server: PluginServerContext) {
   // Read the environment once, not per RPC or poll. No environment values are logged.
@@ -50,7 +51,8 @@ export default function contribute(server: PluginServerContext) {
     },
   }));
   server.handle(servicesControl, async input => (await control)(input));
-  server.handle(issuesList, async input => (await github).listIssues(input.deploymentId, input.page));
+  server.handle(workspaceShortcutStatus, async input => (await ports).shortcut(input.deploymentId));
+  server.handle(issuesList, async input => (await github).listIssues(input.deploymentId, input.page, input.state, input.label ?? null));
   server.handle(issuesGet, async input => (await github).getIssue(input.deploymentId, input.issue));
   server.handle(fleetRead, async input => readFleet(await repository, await ports, input));
   server.handle(runsList, async input => (await runs).list(input));
