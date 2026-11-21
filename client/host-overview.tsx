@@ -365,7 +365,7 @@ function FamilyRow({ group, hostId, hostLabel, theme, entries, openScreen, expan
   ].join(' · ');
   return <View testID={`orbi-family-${group.label}`} style={{ gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
     <ActionButton accessibilityName={`${expanded ? 'Collapse' : 'Expand'} ${group.label}`} accessibilityHint={description}
-      expanded={expanded} theme={theme} style={{ justifyContent: 'space-between', gap: 8 }} onPress={toggle}>
+      expanded={expanded} theme={theme} style={{ alignSelf: 'stretch', justifyContent: 'space-between', gap: 8 }} onPress={toggle}>
       <View style={{ flexShrink: 1, gap: 4 }}>
         <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>

@@ -382,7 +382,7 @@ describe('package_and_registration', () => {
       expect(tabs.map(tab => tab.props.accessibilityLabel)).toEqual(['Open Work', 'Open Issues', 'Open Runs', 'Open Blockers']);
       for (const [index, tab] of tabs.entries()) {
         expect(tab.props.accessibilityRole).toBe('button'); // RN web supplies Enter/Space activation for onPress.
-        expect(tab.props.accessibilityState).toEqual({ selected: screens[index].id === screen.id });
+        expect(tab.props.accessibilityState).toMatchObject({ selected: screens[index].id === screen.id });
         await act(async () => tab.props.onPress());
         expect(openScreen).toHaveBeenLastCalledWith({ screenId: screens[index].id, params: { deploymentId: 'demo' } });
       }
@@ -557,7 +557,8 @@ describe('bounded_reads_and_lifecycle client', () => {
       expect(current).toMatchObject({ canRefresh: !disabled, refreshing: busy });
       expect(button().props).toMatchObject({ disabled, accessibilityLabel: 'Refresh', accessibilityRole: 'button', accessibilityState: { disabled, busy } });
       expect(button().findByType('Text' as any).children).toEqual([busy ? 'Refreshing' : 'Refresh']);
-      expect(button().props.style.opacity).toBe(disabled ? 0.5 : 1);
+      const opacity = button().props.style({ pressed: false }).opacity;
+      if (disabled || busy) expect(opacity).toBeLessThan(1); else expect(opacity).toBe(1);
       expect(button().findByType('Text' as any).props.style.color).toBe(props.theme.colors.foreground);
     };
     const activate = async () => { await act(async () => { if (!button().props.disabled) await button().props.onPress(); }); await settle(); };

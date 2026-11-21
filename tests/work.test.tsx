@@ -496,4 +496,31 @@ describe('Work first screen', () => {
     expect(refresh().props.disabled).toBe(false);
     expect(refresh().findByType('Text' as any).children.join('')).toBe('Refresh issues');
   });
+
+  it('makes every remaining Work control a labelled 44x44 button instead of a bare word', async () => {
+    host.readInventory.mockResolvedValue(hostA);
+    host.readCatalog.mockResolvedValue(catalog([demo]));
+    const { renderer, press } = await render();
+    const colors = props().theme.colors;
+    const control = (name: string) => renderer.root.findByProps({ accessibilityLabel: name });
+    const controlStyle = (name: string) => control(name).props.style({ pressed: false });
+    // Route navigation inside the Work shell is a selected, outlined button.
+    expect(control('Open Work').props.accessibilityRole).toBe('button');
+    expect(control('Open Work').props.accessibilityState).toMatchObject({ selected: true });
+    expect(controlStyle('Open Work')).toMatchObject({ minHeight: 44, minWidth: 44, backgroundColor: colors.surface2, borderColor: colors.accent });
+    expect(control('Open Issues').props.accessibilityState).toMatchObject({ selected: false });
+    expect(controlStyle('Open Issues')).toMatchObject({ minHeight: 44, backgroundColor: colors.surface1, borderColor: colors.border });
+    // The configured repositories Work expands keep button-looking rows and a
+    // button-looking detail refresh and shortcut inspection.
+    await press('Configured repositories');
+    expect(control('Hide details for Demo').props.accessibilityRole).toBe('button');
+    expect(control('Hide details for Demo').props.accessibilityState).toMatchObject({ expanded: true, selected: true });
+    expect(controlStyle('Hide details for Demo')).toMatchObject({ minHeight: 44, minWidth: 44, backgroundColor: colors.surface2, borderColor: colors.accent });
+    expect(control('Active work for Demo').props.accessibilityRole).toBe('button');
+    expect(controlStyle('Active work for Demo')).toMatchObject({ minHeight: 44, minWidth: 44, backgroundColor: colors.surface1, borderColor: colors.border });
+    expect(controlStyle('Refresh')).toMatchObject({ minHeight: 44, minWidth: 44 });
+    expect(control('Refresh').props.accessibilityRole).toBe('button');
+    expect(control('Inspect shortcut').props.accessibilityRole).toBe('button');
+    expect(controlStyle('Inspect shortcut')).toMatchObject({ minHeight: 44, minWidth: 44 });
+  });
 });

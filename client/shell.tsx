@@ -98,7 +98,8 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
     </View>
     {catalog?.state === 'configured' && <>
       <View testID="orbi-navigation" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {routes.map(next => <Pressable key={next} accessibilityRole="button" accessibilityLabel={`Open ${title(next)}`} accessibilityState={{ selected: route === next }} style={{ padding: 8, borderWidth: route === next ? 2 : 1, borderColor: props.theme.colors.foreground }} onPress={() => openScreen({ screenId: next, params: selected ? { deploymentId: selected.id } : {} })}><Text style={text}>{title(next)}</Text></Pressable>)}
+        {routes.map(next => <ActionButton key={next} label={title(next)} accessibilityName={`Open ${title(next)}`} selected={route === next}
+          theme={props.theme} onPress={() => openScreen({ screenId: next, params: selected ? { deploymentId: selected.id } : {} })} />)}
       </View>
       {catalog.entries.length === 0 && <Text style={text}>No configured deployments.</Text>}
       {catalog.entries.filter(entry => entry.status !== 'available').map(entry => <View key={entry.id}>

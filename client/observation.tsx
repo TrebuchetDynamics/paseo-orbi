@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { AppState, Pressable, Text, View } from 'react-native';
+import { AppState, Text, View } from 'react-native';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { PluginHostProps } from '@getpaseo/plugin/client';
 import type { Observation } from '../shared/common';
+import { ActionButton } from './action-button';
 
 // Cancelled RPC transports may still be running. Serialize replacement generations
 // as well as QueryClient's ordinary same-key coalescing; never reuse a cancelled result.
@@ -90,6 +91,7 @@ export function ObservationView<T>({ observation, refreshing, canRefresh, refres
     {observation && <Text style={text}>Observed: {observation.observedAt}; Last success: {observation.lastSuccessfulAt ?? 'never'}</Text>}
     <Text accessibilityRole="alert" style={text}>{problems}</Text>
     {observation?.data != null && children(observation.data)}
-    <Pressable accessibilityRole="button" accessibilityLabel={refreshLabel} disabled={!canRefresh} accessibilityState={{ disabled: !canRefresh, busy: refreshing }} style={{ opacity: canRefresh ? 1 : 0.5 }} onPress={refresh}><Text style={text}>{refreshing ? 'Refreshing' : 'Refresh'}</Text></Pressable>
+    <ActionButton label={refreshing ? 'Refreshing' : 'Refresh'} accessibilityName={refreshLabel}
+      disabled={!canRefresh} busy={refreshing} theme={theme} onPress={() => { void refresh(); }} />
   </View>;
 }
