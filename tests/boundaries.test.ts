@@ -281,3 +281,55 @@ describe('package_and_registration boundaries', () => {
     for (const command of ['npm ci --ignore-scripts', 'npm run typecheck', 'npm test -- tests/foundation.test.ts', 'npm run test:boundaries', 'npm test', 'npm pack --dry-run --ignore-scripts']) expect(read('.github/workflows/ci.yml')).toContain(command);
   });
 });
+
+// Phone review record (#91): every required case is listed once, and only an
+// inspected phone artifact may replace NOT_RUN. A Chromium/desktop viewport is
+// supplementary evidence and is never phone proof.
+const PHONE_CASES = [
+  'unconfigured-first-screen', 'configured-work', 'services-list', 'diagnostic-detail',
+  'back-to-services', 'setup-guide', 'stale-read', 'touch-actions',
+  'normal-text', 'large-text', 'contrast', 'safe-area',
+];
+const PHONE_UNRUN_EVIDENCE = 'none';
+const PHONE_UNKNOWN_DEFECT = 'unknown until the authorized run';
+function documentedPhoneCases() {
+  const guide = read('docs/testing/qualification.md');
+  const start = guide.indexOf('## Phone Services and Work review (issue #91)');
+  expect(start, 'qualification report records the phone Services/Work review').toBeGreaterThanOrEqual(0);
+  const end = guide.indexOf('\n## ', start + 1);
+  const section = guide.slice(start, end === -1 ? undefined : end);
+  const rows = section.split('\n').flatMap(line => {
+    const cells = line.split('|').map(cell => cell.trim());
+    const id = cells.length === 7 ? /^`([a-z0-9-]+)`$/.exec(cells[1]) : null;
+    return id ? [{ id: id[1], result: cells[3], evidence: cells[4], defect: cells[5] }] : [];
+  });
+  return { section, rows };
+}
+
+describe('documented_phone_services_and_work_review', () => {
+  it('records every required phone case exactly once, each NOT_RUN with no invented evidence', () => {
+    const { rows } = documentedPhoneCases();
+    expect(rows.map(row => row.id)).toEqual(PHONE_CASES);
+    for (const row of rows) {
+      expect(['PASS', 'FAIL', 'NOT_RUN'], `${row.id}: status vocabulary`).toContain(row.result);
+      expect(row.result, `${row.id}: no phone run is authorized`).toBe('NOT_RUN');
+      expect(row.evidence, `${row.id}: evidence without an inspected phone artifact`).toBe(PHONE_UNRUN_EVIDENCE);
+      expect(row.defect, `${row.id}: defect claimed without an inspected phone artifact`).toBe(PHONE_UNKNOWN_DEFECT);
+    }
+  });
+  it('refuses a phone PASS or FAIL without an inspected artifact and a named defect', () => {
+    for (const row of documentedPhoneCases().rows) {
+      if (row.result === 'NOT_RUN') continue;
+      expect(row.evidence, `${row.id}: PASS/FAIL needs an inspected phone artifact`).not.toBe(PHONE_UNRUN_EVIDENCE);
+      expect(row.defect, `${row.id}: PASS/FAIL needs a named defect or a cleared one`).not.toBe(PHONE_UNKNOWN_DEFECT);
+    }
+  });
+  it('keeps the consent gate, the exact candidate pre-checks and the supplementary-simulation rule', () => {
+    const { section } = documentedPhoneCases();
+    for (const required of ['npm run test:e2e:typecheck', 'env -u PASEO_ORBI_HOST_INVENTORY npm test', 'PASEO_ORBI_HOST_INVENTORY=1']) {
+      expect(section, `phone review states ${required}`).toContain(required);
+    }
+    expect(section, 'a desktop viewport is never phone proof').toContain('never phone proof');
+    expect(read('OVERVIEW.md'), 'overview keeps the phone review unperformed').toContain('phone Services and action review');
+  });
+});
