@@ -10,9 +10,17 @@ deliberately, so not every issue ends in a merge.
 **An issue stopped moving?** Look in **Blockers** for the reported reason, then
 **Runs** for what happened.
 
+A deployment entry may designate one optional workspace shortcut
+(`workspaceShortcut: { directory, name }`). Pressing **Inspect shortcut** in that
+deployment's detail reports only **Symlink present**, **Present, not a symlink**,
+**Not present**, **Cannot inspect** or **Not configured**. It never reads,
+follows, resolves, compares or displays the target, writes nothing, and proves
+neither that a checkout exists nor that the link opens. Opening the view reads
+nothing.
+
 ## Views
 
-- **Overview** — host-scoped user service families, configured deployments, one loaded detail with timers/services, recorded health, capacity.
+- **Overview** — host-scoped user service families, configured deployments, one loaded detail with timers/services, recorded health, capacity, and one explicit presence/type check of an optional designated shortcut.
 - **Issues** — lifecycle pages, trusted structured reports, on-demand dependency evidence.
 - **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks.
 - **Blockers** — reported failures and waits, source attribution, metadata only; no recovery controls.

@@ -4,6 +4,8 @@ import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { ConfigRepository } from './config';
 import { artifactNames, type ArtifactMetadata } from '../shared/blockers';
+import type { WorkspaceShortcutStatus } from '../shared/workspace-shortcut';
+import { WorkspaceShortcutInspector } from './workspace-shortcut';
 
 export class ReadError extends Error {
   constructor(public readonly code: 'unsafe_path' | 'read_failed' | 'read_limit' | 'disposed' | 'process_failed' | 'process_timeout' | 'process_limit') { super(code); }
@@ -158,6 +160,9 @@ export class ReadPorts {
   private readonly lifetime = new AbortController();
   private readonly children = new Map<ChildProcess, () => Promise<void>>();
   private readonly operations = new ChildOperations(this.children);
+  // One shared presence/type observer: at most one in-flight shortcut inspection per
+  // plugin instance, with its own 1000 ms budget and capacity hold.
+  private readonly shortcuts = new WorkspaceShortcutInspector();
   constructor(private readonly repository: ConfigRepository) {}
   clock() { return new Date(); }
   async read(id: string, selector: 'health') {
@@ -226,6 +231,14 @@ export class ReadPorts {
     const result = await boundedFile(deployment.repoDir, resolve(deployment.repoDir, '.orbi/health.json'), true, this.lifetime.signal);
     this.assertActive();
     return result as { size: number; mtimeMs: number };
+  }
+  // Narrow metadata capability for one configured leaf: presence and type only.
+  // No client path, no target read/follow/compare, no enumeration and no write.
+  async shortcut(id: string): Promise<WorkspaceShortcutStatus> {
+    this.assertActive();
+    const deployment = this.repository.resolve(id);
+    const result = await this.shortcuts.inspect(deployment.workspaceShortcut, deployment.shortcutProblem, () => this.disposed);
+    return { deploymentId: deployment.id, state: result.state, observedAt: this.clock().toISOString(), problem: result.problem };
   }
   // Stat-only evidence. No scene path comes from a comment, client or directory scan.
   async statArtifact(id: string, issue: number, runId: string, name: ArtifactMetadata['name']): Promise<ArtifactMetadata> {

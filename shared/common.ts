@@ -8,7 +8,8 @@ export const Problem = z.object({
   code: z.enum(['invalid_config', 'invalid_identity', 'duplicate_deployment', 'too_many_deployments',
     'config_mismatch', 'unsafe_path', 'read_failed', 'read_limit', 'disposed',
     'unsupported_source_profile', 'process_failed', 'process_timeout', 'process_limit', 'refresh_failed',
-    'auth_denied', 'rate_limited', 'not_found', 'network_failed', 'invalid_response', 'incomplete', 'deadline']),
+    'auth_denied', 'rate_limited', 'not_found', 'network_failed', 'invalid_response', 'incomplete', 'deadline',
+    'shortcut_invalid', 'runtime_unsupported']),
 }).strict();
 export type Problem = z.infer<typeof Problem>;
 export const DeploymentCatalog = z.object({

@@ -92,7 +92,7 @@ it('four_views_read_only_journey', async () => {
     });
   } } as PluginServerContext);
   cleanups.push(stopServer);
-  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory, 'fleet.read': host.readFleet, 'issues.list': host.readIssues, 'issues.get': host.readIssue, 'runs.list': host.readRuns, 'runs.read': host.readRun, 'blockers.list': host.readBlockers, 'blockers.read': host.readBlocker })) {
+  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory, 'fleet.read': host.readFleet, 'issues.list': host.readIssues, 'issues.get': host.readIssue, 'runs.list': host.readRuns, 'runs.read': host.readRun, 'blockers.list': host.readBlockers, 'blockers.read': host.readBlocker, 'workspace.shortcut': host.readShortcut })) {
     mock.mockReset().mockImplementation(input => handlers.get(name)!(input));
   }
   const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
@@ -122,6 +122,9 @@ it('four_views_read_only_journey', async () => {
   const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await settle(); };
   await settle();
   expect(text()).toContain('Configured capacity: 2; Occupancy: unknown'); expect(text()).toContain('Second (Other/repository)');
+  // Mounting the detail is not an operator request: no shortcut inspection is made.
+  expect(text()).toContain('Workspace shortcut: Not inspected');
+  expect(host.readShortcut).not.toHaveBeenCalled();
   // Host inventory is not opted in here: the Overview keeps the #24 catalog
   // semantics and adds no discovered family or repository action.
   expect(host.readInventory).toHaveBeenCalledTimes(1);
@@ -234,6 +237,8 @@ it('four_views_read_only_journey', async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
   await press('Inspect blocker 4');
   expect(text()).toContain('complete report read'); expect(text()).toContain('test.log: present'); expect(text()).not.toContain('process_failed');
+  // One normal observation interval and explicit detail selection inspect nothing.
+  expect(host.readShortcut).not.toHaveBeenCalled();
   expect(JSON.stringify(transported)).not.toMatch(/CANARY|publisher-canary|\/tmp\/|configPath|engineSourcePath|repoDir|deployHome/);
   expect(await Promise.all([snapshot(a.root), snapshot(b.root)])).toEqual(before);
   expect(processPort.mock.calls.every(([, op, deadline]) => ['systemctl-show', 'journalctl', 'gh-api-get'].includes(op.kind) && (deadline === undefined || deadline <= 10000))).toBe(true);
@@ -261,7 +266,7 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   for (const [name, input] of [
     ['fleet.read', {}], ['issues.list', { page: 1 }], ['issues.get', { issue: 42 }],
     ['runs.list', {}], ['runs.read', { issue: 42, runId: '22222222' }],
-    ['blockers.list', { page: 1 }], ['blockers.read', { issue: 4 }],
+    ['blockers.list', { page: 1 }], ['blockers.read', { issue: 4 }], ['workspace.shortcut', {}],
   ] as const) await expect(handlers.get(name)!({ deploymentId: 'demo', ...input })).rejects.toThrow('deployment_unavailable');
   expect(processPort).not.toHaveBeenCalled(); expect(reads).not.toHaveBeenCalled();
 });
