@@ -21,7 +21,7 @@ afterEach(async () => {
   host.hosts[0] = { serverId: 'host-a', label: 'Host A', status: 'online' };
   vi.useRealTimers();
 });
-const demo: DeploymentCatalog['entries'][number] = { id: 'demo', label: 'Demo', repo, adapter: 'orbi-0.7.41-release', status: 'available', problems: [] };
+const demo: DeploymentCatalog['entries'][number] = { id: 'demo', label: 'Demo', repo, adapter: 'orbi-0.7.41-release', status: 'available', problems: [], controls: null };
 const second = { ...demo, id: 'second', label: 'Second', repo: 'Other/repository' };
 const rejected = { ...demo, id: 'rejected', label: 'Rejected', repo: 'Other/repo', status: 'invalid_config' as const, problems: [{ source: 'config' as const, code: 'config_mismatch' as const }] };
 const catalog = (entries: DeploymentCatalog['entries']): DeploymentCatalog => ({ state: 'configured', problems: [], entries });

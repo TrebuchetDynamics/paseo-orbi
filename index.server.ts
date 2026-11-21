@@ -11,7 +11,9 @@ import { RunsReader } from './server/runs';
 import { blockersList, blockersRead } from './shared/blockers';
 import { BlockersReader } from './server/blockers';
 import { servicesInventory } from './shared/services';
+import { servicesControl } from './shared/service-control';
 import { createServiceInventory } from './server/service-inventory';
+import { createServiceControl, executeControl } from './server/service-control';
 import { workspaceShortcutStatus } from './shared/workspace-shortcut';
 
 export default function contribute(server: PluginServerContext) {
@@ -35,6 +37,20 @@ export default function contribute(server: PluginServerContext) {
   server.handle(blockersRead, async input => (await blockers).read(input));
   server.handle(deploymentsList, async () => (await repository).catalog());
   server.handle(servicesInventory, async input => (await inventory)(input));
+  // Operator-granted service controls. Authorization is the explicit startup
+  // grant in the operator config; the pinned host supplies no authenticated
+  // actor, which the result records as null instead of inventing one. The
+  // action runs through a separate mutation adapter, and its resulting state is
+  // re-read through the existing bounded read port.
+  const control = Promise.all([repository, ports]).then(([config, reads]) => createServiceControl({
+    repository: config, signal: lifetime.signal, actor: null,
+    port: {
+      now: () => new Date(),
+      run: (argv, timeoutMs) => executeControl(argv, timeoutMs),
+      show: async (deploymentId, slot) => reads.process(deploymentId, { kind: 'systemctl-show', slot, unit: 'service' }),
+    },
+  }));
+  server.handle(servicesControl, async input => (await control)(input));
   server.handle(workspaceShortcutStatus, async input => (await ports).shortcut(input.deploymentId));
   server.handle(issuesList, async input => (await github).listIssues(input.deploymentId, input.page, input.state, input.label ?? null));
   server.handle(issuesGet, async input => (await github).getIssue(input.deploymentId, input.issue));

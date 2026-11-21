@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PluginClientContext, PluginHostProps } from '@getpaseo/plugin/client';
 import { useRpc } from '@getpaseo/plugin/client';
 import { Pressable, Text, View } from 'react-native';
-import type { DeploymentCatalog, Observation } from '../shared/common';
+import type { ControlAction, DeploymentCatalog, Observation } from '../shared/common';
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
+import type { ControlObservation, ControlOutcome, ControlReason } from '../shared/service-control';
+import { servicesControl } from '../shared/service-control';
 import { useObservationQuery } from './observation';
 
 // Host-first Overview. It reads one host-scoped services.inventory({}) snapshot
@@ -198,8 +200,153 @@ function slotLines(group: InventoryGroup): string[] {
     return severity(left) - severity(right) || compareSlots(leftId, rightId);
   }).map(([id, slot]) => `Slot ${id} · ${slotState(slot.service)} · ${slotState(slot.timer, true)}`);
 }
-function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle, name, showUnlinked, lastSeen }: {
-  group: InventoryGroup; hostId: string; theme: PluginHostProps['theme'];
+
+// ---- Operator-authorized service controls -----------------------------------
+// The client only ever names an approved deployment, an observed slot inside
+// the catalog's approved bound, and an approved action. The exact unit and the
+// lifecycle command are derived on the daemon; a display label is never
+// authority and this screen cannot widen the operator grant.
+
+const actionText: Record<ControlAction, string> = { start: 'Start', stop: 'Stop', restart: 'Restart' };
+const effectText: Record<ControlAction, string> = {
+  start: 'start this runner slot so its scheduler can pick up work',
+  stop: 'stop this runner slot through its operator-bound Orbi lifecycle command',
+  restart: 'restart this runner slot; it is only offered while idle or failed, never during a possible delivery',
+};
+const reasonText: Record<ControlReason, string> = {
+  deployment_unavailable: 'Not approved: this repository is not in the current authorized configuration.',
+  action_not_approved: 'Not approved: the operator has not granted this action for this repository.',
+  target_out_of_range: "Not approved: this slot is outside the repository's approved targets.",
+  active_delivery: 'Refused: this slot is running or transitional, so it may have an active delivery. Restart is offered only while it is idle or failed.',
+  disposed: 'Not sent: the plugin is stopping or its operator grant was withdrawn.',
+  busy: 'Another action for this repository is still in progress. Nothing else was sent.',
+  process_failed: 'The lifecycle command failed. Check the slot state before trying again.',
+  process_timeout: 'Outcome unknown: the lifecycle command did not finish in time and may still be running. Recheck the slot before trying again.',
+  process_limit: 'Not sent: too many lifecycle commands are already running.',
+  observe_failed: 'Outcome unknown: the slot state could not be re-read. Recheck the slot before trying again.',
+};
+function observedText(observed: ControlObservation | null): string {
+  if (!observed) return 'state not re-observed';
+  if (observed.activeState === 'failed' || observed.subState === 'failed') return 'Failed';
+  if (observed.loadState === 'not-found') return 'Unit not found';
+  if (observed.activeState === 'inactive' && observed.subState === 'dead') return 'Idle';
+  if (observed.activeState === 'active' && observed.subState === 'running') return 'Running';
+  return `${observed.activeState}/${observed.subState}`;
+}
+// Numeric instances this row actually observed, bounded by the operator-approved
+// target range. An unobserved or out-of-range instance is never offered.
+function controlSlots(group: InventoryGroup, bound: number): number[] {
+  const slots = new Set<number>();
+  for (const unit of group.units) {
+    const match = /^(.+)@(\d+)\.(?:service|timer)$/.exec(unit.id);
+    if (!match || match[1] !== group.label) continue;
+    const slot = Number(match[2]);
+    if (Number.isSafeInteger(slot) && slot >= 1 && slot <= bound) slots.add(slot);
+  }
+  return [...slots].sort((left, right) => left - right);
+}
+type ControlFeedback = Readonly<{
+  action: ControlAction; slot: number; outcome: ControlOutcome; reason: ControlReason | null;
+  observed: ControlObservation | null; transport: boolean;
+}>;
+function feedbackText(feedback: ControlFeedback): string {
+  if (feedback.transport) return `${actionText[feedback.action]} outcome unknown · Slot ${feedback.slot} · the request did not complete. Nothing is reported as success; recheck the slot before trying again.`;
+  if (feedback.outcome === 'pending') return reasonText.busy;
+  if (feedback.outcome === 'denied') return feedback.reason === null ? 'Not sent.' : reasonText[feedback.reason];
+  const state = observedText(feedback.observed);
+  const reason = feedback.reason === null ? '' : ` ${reasonText[feedback.reason]}`;
+  if (feedback.outcome === 'succeeded') return `${actionText[feedback.action]} succeeded · Slot ${feedback.slot} · ${state}`;
+  if (feedback.outcome === 'failed') return `${actionText[feedback.action]} failed · Slot ${feedback.slot} · ${state}.${reason}`;
+  return `${actionText[feedback.action]} outcome unknown · Slot ${feedback.slot} · ${state}.${reason} No automatic retry was made.`;
+}
+
+function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
+  hostId: string; hostLabel: string; entry: DeploymentCatalog['entries'][number];
+  group: InventoryGroup; theme: PluginHostProps['theme'];
+}) {
+  const text = { color: theme.colors.foreground };
+  const secondary = { ...text, fontSize: 12 };
+  const call = useRpc(servicesControl);
+  const controls = entry.controls;
+  const slots = controls === null ? [] : controlSlots(group, controls.slots);
+  const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState<{ action: ControlAction; slot: number } | null>(null);
+  const [sending, setSending] = useState(false);
+  const [feedback, setFeedback] = useState<ControlFeedback | null>(null);
+  // A host switch unmounts this row (it is keyed by host and family). This guard
+  // only stops a late answer from publishing into a row that is already gone.
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+  if (controls === null) return null;
+
+  const submit = async (action: ControlAction, slot: number) => {
+    if (sending) return;
+    setSending(true);
+    try {
+      const result = await call({ deploymentId: entry.id, slot, action });
+      if (!mounted.current) return;
+      setFeedback({ action, slot, outcome: result.outcome, reason: result.reason, observed: result.observed, transport: false });
+      setConfirming(null);
+    } catch {
+      // A failed transport is not evidence that nothing ran, so it is never
+      // reported as success and never retried automatically.
+      if (!mounted.current) return;
+      setFeedback({ action, slot, outcome: 'unknown', reason: null, observed: null, transport: true });
+      setConfirming(null);
+    } finally { if (mounted.current) setSending(false); }
+  };
+
+  return <View testID={`orbi-actions-${group.label}`} style={{ gap: 8 }}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Actions for ${group.label}`} accessibilityState={{ expanded: open }}
+      style={{ minHeight: 44, justifyContent: 'center' }} onPress={() => setOpen(value => !value)}>
+      <Text style={text}>{open ? 'Hide actions' : 'Actions'}</Text>
+    </Pressable>
+    {open && <View style={{ gap: 8 }}>
+      {slots.length === 0 && <Text style={text}>No observed slot is inside this repository's approved targets.</Text>}
+      {slots.map(slot => {
+        const service = group.units.find(unit => unit.kind === 'service' && unit.id === `${group.label}@${slot}.service`);
+        const pending = confirming !== null && confirming.slot === slot;
+        return <View key={`${hostId}:${group.label}:${slot}`} style={{ gap: 4 }}>
+          <Text style={text}>{`Slot ${slot} · ${slotState(service)}`}</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {controls.actions.map(action => <Pressable key={action} accessibilityRole="button"
+              accessibilityLabel={`${actionText[action]} slot ${slot}`}
+              disabled={sending || confirming !== null}
+              accessibilityState={{ disabled: sending || confirming !== null, busy: sending && pending && confirming?.action === action }}
+              style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderWidth: 1, borderRadius: 8,
+                borderColor: theme.colors.foreground, opacity: sending || confirming !== null ? 0.5 : pressed ? 0.7 : 1 })}
+              onPress={() => { setFeedback(null); setConfirming({ action, slot }); }}><Text style={text}>{actionText[action]}</Text></Pressable>)}
+          </View>
+          {pending && confirming !== null && <View testID={`orbi-confirm-${group.label}-${slot}`} style={{ gap: 4 }}>
+            <Text style={text}>{`Confirm ${actionText[confirming.action].toLowerCase()} · Slot ${slot}`}</Text>
+            <Text style={text}>{`Host: ${hostLabel}`}</Text>
+            <Text style={text}>{`Repository: ${entry.repo}`}</Text>
+            <Text style={text}>{`Target: ${group.label}@${slot}.service`}</Text>
+            <Text style={text}>{`Effect: ${effectText[confirming.action]}`}</Text>
+            <Text style={secondary}>Confirmation is not authorization. The daemon rechecks the operator grant before it runs anything.</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Confirm ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
+                disabled={sending} accessibilityState={{ disabled: sending, busy: sending }}
+                style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderWidth: 1, borderRadius: 8,
+                  borderColor: theme.colors.foreground, opacity: sending ? 0.5 : pressed ? 0.7 : 1 })}
+                onPress={() => void submit(confirming.action, slot)}>
+                <Text style={text}>{sending ? 'Submitting…' : `Confirm ${actionText[confirming.action].toLowerCase()}`}</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Cancel ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
+                disabled={sending} accessibilityState={{ disabled: sending }}
+                style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, opacity: sending ? 0.5 : 1 }}
+                onPress={() => setConfirming(null)}><Text style={text}>Cancel</Text></Pressable>
+            </View>
+          </View>}
+        </View>;
+      })}
+      {feedback !== null && <Text accessibilityRole="alert" testID={`orbi-control-result-${group.label}`} style={text}>{feedbackText(feedback)}</Text>}
+    </View>}
+  </View>;
+}
+
+function FamilyRow({ group, hostId, hostLabel, theme, entries, openScreen, expanded, toggle, name, showUnlinked, lastSeen }: {
+  group: InventoryGroup; hostId: string; hostLabel: string; theme: PluginHostProps['theme'];
   entries: DeploymentCatalog['entries'] | null; openScreen: PluginClientContext['openScreen'];
   expanded: boolean; toggle: () => void; name: string; showUnlinked: boolean;
   // Set only when the whole snapshot is retained after a failed refresh or a
@@ -243,6 +390,7 @@ function FamilyRow({ group, hostId, theme, entries, openScreen, expanded, toggle
       onPress={() => openScreen({ screenId: 'issues', params: { deploymentId: entry.id } })}><Text style={text}>View repository</Text></Pressable>}
     {expanded && <View style={{ gap: 2 }}>
       {slotLines(group).map(line => <Text key={line} style={text}>{line}</Text>)}
+      {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} />}
       <Pressable accessibilityRole="button" accessibilityLabel={`Unit details for ${group.label}`} accessibilityState={{ expanded: technical }}
         style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.65 : 1 })} onPress={() => setTechnical(value => !value)}><Text style={text}>Unit details</Text></Pressable>
       {technical && <View style={{ gap: 2 }}>
@@ -337,7 +485,7 @@ export function HostServices({ hostId, hostLabel, surfaceKey, connected, foregro
         <Text style={text}>The host service rows below need no repository configuration. Refresh services only rereads this host's inventory; it does not configure the repository catalog or enable access.</Text>
       </View>}
     </View>}
-    {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} theme={theme} entries={entries} openScreen={openScreen}
+    {families.map(group => <FamilyRow key={`${hostId}:${group.label}`} group={group} hostId={hostId} hostLabel={hostLabel} theme={theme} entries={entries} openScreen={openScreen}
       name={names.get(group.label)!} showUnlinked={!unconfigured} lastSeen={lastSeen}
       expanded={expanded === group.label} toggle={() => setExpanded(expanded === group.label ? null : group.label)} />)}
   </View>;

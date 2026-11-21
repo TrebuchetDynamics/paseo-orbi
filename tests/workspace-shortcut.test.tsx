@@ -279,7 +279,7 @@ it('disables only a malformed shortcut descriptor and never touches the designat
     const catalog = repository.catalog();
     expect(catalog.state).toBe('configured');
     expect(catalog.entries[0]).toMatchObject({ status: 'available', problems: [{ source: 'config', code: 'shortcut_invalid' }] });
-    expect(Object.keys(catalog.entries[0]).sort()).toEqual(['adapter', 'id', 'label', 'problems', 'repo', 'status']);
+    expect(Object.keys(catalog.entries[0]).sort()).toEqual(['adapter', 'controls', 'id', 'label', 'problems', 'repo', 'status']);
     expect(repository.resolve('demo')).toMatchObject({ workspaceShortcut: null, shortcutProblem: { code: 'shortcut_invalid' } });
     opened.mockClear();
     const ports = new ReadPorts(repository);

@@ -12,12 +12,21 @@ export const Problem = z.object({
     'shortcut_invalid', 'runtime_unsupported']),
 }).strict();
 export type Problem = z.infer<typeof Problem>;
+// Closed vocabulary for the operator-approved control actions. It is shared so
+// the catalog capability and the mutation contract can never drift apart.
+export const ControlActionSchema = z.enum(['start', 'stop', 'restart']);
+export type ControlAction = z.infer<typeof ControlActionSchema>;
 export const DeploymentCatalog = z.object({
   state: z.enum(['unconfigured', 'invalid', 'configured']),
   entries: z.array(z.object({
     id: DeploymentId, label: z.string().min(1).max(80).regex(/^[^\p{C}\p{Zl}\p{Zp}]+$/u),
     repo: z.string(), adapter: z.string(),
     status: z.enum(['available', 'invalid_config', 'unsupported_source_profile']), problems: z.array(Problem),
+    // Operator-granted control capability: approved actions and the approved
+    // instance-slot bound for this deployment. null means the operator granted
+    // none, so this deployment stays read-only. Capability is never argv, a unit
+    // name or a path.
+    controls: z.object({ actions: z.array(ControlActionSchema), slots: z.number().int().min(1).max(5) }).strict().nullable(),
   }).strict()),
   problems: z.array(Problem),
 }).strict();

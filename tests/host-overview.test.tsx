@@ -48,12 +48,13 @@ const nineGroups = (worker: 'failed' | 'idle' | 'running', timer: 'waiting' | 'f
     return family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', index === 0 ? 'activating' : 'inactive', index === 0 ? 'start' : 'dead')]);
   }),
 ] });
-const demo: DeploymentCatalog['entries'][number] = { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi-0.7.41-release', status: 'available', problems: [] };
+const demo: DeploymentCatalog['entries'][number] = { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi-0.7.41-release', status: 'available', problems: [], controls: null };
 const second = { ...demo, id: 'second', label: 'Second', repo: 'Other/repository' };
 const catalog = (entries: DeploymentCatalog['entries']): DeploymentCatalog => ({ state: 'configured', problems: [], entries });
 const props = (id = 'host-a'): PluginScreenProps => ({ theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id, label: host.hosts.find(item => item.serverId === id)?.label ?? (id === 'host-a' ? 'Host A' : 'Host B') }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps);
 beforeEach(() => {
   resetHostOverviewState();
+  host.readControl.mockReset();
   host.readCatalog.mockReset().mockResolvedValue(catalog([demo]));
   host.readInventory.mockReset().mockResolvedValue(inventory({ state: 'off' }));
   host.readFleet.mockReset().mockResolvedValue({ state: 'available', observedAt: stamp, lastSuccessfulAt: stamp, problems: [] });
@@ -660,5 +661,147 @@ describe('host states and authority', () => {
     await press('Configured repositories');
     expect(text(renderer)).not.toContain('Fleet — read-only');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.accessibilityState.expanded).toBe(false);
+  });
+});
+
+describe('operator-authorized service controls', () => {
+  const controlled: DeploymentCatalog['entries'][number] = { ...demo, controls: { actions: ['start', 'stop', 'restart'], slots: 2 } };
+  const answer = (overrides: Record<string, unknown> = {}) => ({
+    operationId: 'ctl-1', deploymentId: 'demo', slot: 1, action: 'start', outcome: 'succeeded', reason: null,
+    actor: null, submittedAt: stamp, finishedAt: stamp,
+    observed: { loadState: 'loaded', activeState: 'active', subState: 'running' }, ...overrides,
+  });
+  const openActions = async (press: (label: string) => Promise<void>) => { await press('Expand orbi-demo'); await press('Actions for orbi-demo'); };
+
+  it('offers actions only for a linked repository the operator granted, bounded to approved slots', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    // Unlinked, ambiguous and incompatible rows never gain control actions.
+    for (const label of ['orbi', 'orbi-clash', 'orbi-core', 'orbi-aux']) {
+      await press('Expand ' + label);
+      expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for ' + label })).toHaveLength(0);
+    }
+    await press('Expand orbi-demo');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props)
+      .toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false }, style: { minHeight: 44 } });
+    await press('Actions for orbi-demo');
+    // Exactly the observed slots inside the operator-approved bound.
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 1' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 2' })).toHaveLength(0);
+    expect(rowPage(renderer, 'orbi-demo')).toContain('Slot 1 · Idle');
+    expect(host.readControl).not.toHaveBeenCalled();
+  });
+
+  it('confirms host, repository, exact target and effect without treating confirmation as authorization', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    expect(host.readControl).not.toHaveBeenCalled();
+    const lines = renderer.root.findByProps({ testID: 'orbi-confirm-orbi-demo-1' }).findAllByType('Text' as any).map(node => node.children.join(''));
+    expect(lines).toContain('Host: Host A');
+    expect(lines).toContain('Repository: Example/project');
+    expect(lines).toContain('Target: orbi-demo@1.service');
+    expect(lines.some(line => line.startsWith('Effect: start this runner slot'))).toBe(true);
+    expect(lines).toContain('Confirmation is not authorization. The daemon rechecks the operator grant before it runs anything.');
+    await press('Cancel start slot 1');
+    expect(host.readControl).not.toHaveBeenCalled();
+    host.readControl.mockResolvedValue(answer());
+    await press('Start slot 1');
+    await press('Confirm start slot 1');
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+    // The request names only an approved deployment, slot and action.
+    expect(host.readControl.mock.calls[0][0]).toEqual({ deploymentId: 'demo', slot: 1, action: 'start' });
+    expect(text(renderer)).toContain('Start succeeded · Slot 1 · Running');
+  });
+
+  it('sends one action for repeated clicks and reports only the re-observed state', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    let finish!: (value: unknown) => void;
+    host.readControl.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    await press('Confirm start slot 1');
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+    // While one submission is in flight every control is disabled and a second
+    // confirm press cannot submit again.
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Confirm start slot 1' }).props)
+      .toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: true } });
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Start slot 1' }).props.disabled).toBe(true);
+    await press('Confirm start slot 1');
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+    await act(async () => finish(answer())); await settle();
+    expect(text(renderer)).toContain('Start succeeded · Slot 1 · Running');
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['denied active delivery', { outcome: 'denied', reason: 'active_delivery', observed: null, finishedAt: null }, 'Refused: this slot is running or transitional'],
+    ['denied unapproved action', { outcome: 'denied', reason: 'action_not_approved', observed: null, finishedAt: null }, 'Not approved: the operator has not granted this action'],
+    ['unknown timeout', { outcome: 'unknown', reason: 'process_timeout' }, 'Outcome unknown: the lifecycle command did not finish in time'],
+    ['failed command', { outcome: 'failed', reason: 'process_failed', observed: { loadState: 'loaded', activeState: 'failed', subState: 'failed' } }, 'Start failed · Slot 1 · Failed.'],
+    ['pending duplicate', { outcome: 'pending', reason: 'busy', observed: null, finishedAt: null }, 'Another action for this repository is still in progress'],
+  ])('reports %s without claiming unobserved success', async (_name, overrides, copy) => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    host.readControl.mockResolvedValue(answer(overrides as Record<string, unknown>));
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    await press('Confirm start slot 1');
+    expect(text(renderer)).toContain(copy);
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a failed transport as unknown and never retries it automatically', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    host.readControl.mockRejectedValue(new Error('SECRET raw transport error'));
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    await press('Confirm start slot 1');
+    const page = text(renderer);
+    expect(page).toContain('Start outcome unknown');
+    expect(page).toContain('did not complete');
+    expect(page).not.toContain('SECRET');
+    expect(page).not.toContain('succeeded');
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+  });
+
+  it('never publishes a pending result or action into another host', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    let finish!: (value: unknown) => void;
+    host.readControl.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { renderer, press, switchTo } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    await press('Confirm start slot 1');
+    host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi-demo', 'matched', 'demo', [unit('orbi-demo@1.service', 'service', 'inactive', 'dead')])] }));
+    await switchTo('host-b');
+    await act(async () => finish(answer())); await settle();
+    expect(text(renderer)).not.toContain('Start succeeded');
+    expect(rowPage(renderer, 'orbi-demo')).toContain('Example/project');
+    // The host A action was addressed to host A; a later host A mount keeps no
+    // result from the request that finished while another host was selected.
+    host.readInventory.mockResolvedValue(hostA);
+    await switchTo('host-a');
+    expect(text(renderer)).not.toContain('Start succeeded');
+  });
+
+  it('keeps a repository read-only when the operator granted no actions', async () => {
+    host.readCatalog.mockResolvedValue(catalog([demo]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    await press('Expand orbi-demo');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ accessibilityLabel: 'View repository Demo' })).toBeDefined();
+    expect(host.readControl).not.toHaveBeenCalled();
   });
 });

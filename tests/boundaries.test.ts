@@ -182,7 +182,7 @@ describe('package_and_registration boundaries', () => {
   it('limits transitive runtime capabilities to read-only named imports and fixed RPCs', () => {
     const nodeImports: Record<string, string[]> = {
       'node:fs': ['constants'], 'node:fs/promises': ['lstat', 'realpath', 'stat', 'open', 'opendir', 'statfs'],
-      'node:path': ['dirname', 'resolve', 'isAbsolute', 'normalize', 'relative', 'sep'],
+      'node:path': ['basename', 'dirname', 'resolve', 'isAbsolute', 'normalize', 'relative', 'sep'],
       'node:child_process': ['spawn'], 'node:crypto': ['createHash'],
     };
     const rpcNames: string[] = [];
@@ -216,7 +216,7 @@ describe('package_and_registration boundaries', () => {
       }
       visit(source);
     }
-    expect(rpcNames.sort()).toEqual(['blockers.list', 'blockers.read', 'deployments.list', 'fleet.read', 'issues.get', 'issues.list', 'runs.list', 'runs.read', 'services.inventory', 'workspace.shortcut']);
+    expect(rpcNames.sort()).toEqual(['blockers.list', 'blockers.read', 'deployments.list', 'fleet.read', 'issues.get', 'issues.list', 'runs.list', 'runs.read', 'services.control', 'services.inventory', 'workspace.shortcut']);
     const port = read('server/read-ports.ts');
     expect([...port.matchAll(/command = '([^']+)'/g)].map(m => m[1]).sort()).toEqual(['gh', 'journalctl', 'systemctl']);
     expect(port).toContain("'--method', 'GET'");
@@ -235,11 +235,45 @@ describe('package_and_registration boundaries', () => {
     expect(port).toContain('new WorkspaceShortcutInspector()');
     expect(read('shared/workspace-shortcut.ts')).not.toMatch(/directory|target:|readlink/);
   });
+  it('keeps the service-control mutation boundary narrow and separate from reads', async () => {
+    const adapter = read('server/service-control.ts');
+    // One child-execution site, no shell, no inherited stdio, no retained output.
+    expect([...adapter.matchAll(/\bspawn\s*\(/g)]).toHaveLength(1);
+    expect(adapter).toContain('shell: false');
+    expect(adapter).toContain("stdio: ['ignore', 'ignore', 'ignore']");
+    expect(adapter).toContain('detached: true');
+    expect(adapter).toContain("process.kill(-child.pid, 'SIGKILL')");
+    expect(adapter).toContain('MAX_CONTROL_CHILDREN = 2');
+    expect(adapter).toContain('CONTROL_TIMEOUT_MS = 10000');
+    // The adapter runs only the operator-bound argv: it never names a unit,
+    // builds a systemctl mutation or parses command output.
+    expect(adapter).not.toMatch(/'systemctl'|'journalctl'|'--user'|shell:\s*true/);
+    expect(imports('server/service-control.ts').filter(name => name.startsWith('node:'))).toEqual(['node:child_process']);
+    // The request contract carries a deployment, a slot and an action only.
+    const { servicesControl } = await import('../shared/service-control');
+    expect(Object.keys((servicesControl.input as unknown as { shape: Record<string, unknown> }).shape).sort())
+      .toEqual(['action', 'deploymentId', 'slot']);
+    // Only the validated config derives the exact unit from the approved action,
+    // so a display label, slug or prefix match can never become a target.
+    expect(read('server/config.ts')).toContain("token === '{unit}' ? unit : token");
+    expect(read('server/config.ts')).toContain('controlGrant(id: string, action: ControlAction, slot: number): ControlGrant');
+    expect(read('server/service-control.ts')).not.toContain('{unit}');
+    // Raw systemctl mutation is never assembled anywhere: the lifecycle command is
+    // the operator's, not something this plugin invents.
+    for (const file of modules) expect(read(file), file).not.toMatch(/'--user',\s*'(?:start|stop|restart|enable|disable)'/);
+    // The same prohibition is enforced on the operator's grant: a system-manager or
+    // privilege-escalation program is refused as the bound program.
+    expect(read('server/config.ts')).toContain("forbiddenPrograms.has(basename(argv[0]))");
+    expect(read('server/config.ts')).toContain("const forbiddenPrograms = new Set(['systemctl', 'systemd-run', 'env', 'sudo', 'doas', 'pkexec', 'su']);");
+  });
+
   it('has no write, Orbi execution, Git, raw path RPC, or unconstrained command capability', () => {
     for (const file of ['index.server.ts', ...files('server')]) {
       const source = read(file);
       expect(source).not.toMatch(/\b(writeFile|appendFile|mkdir|unlink|rename|exec|execFile|spawnSync|execSync)\s*\(/);
-      if (file !== 'server/read-ports.ts') expect(source).not.toMatch(/\bspawn\s*\(/);
+      // Exactly two child-execution sites exist: bounded reads and the separate
+      // bounded mutation adapter. No other module can start a process.
+      if (!['server/read-ports.ts', 'server/service-control.ts'].includes(file)) expect(source).not.toMatch(/\bspawn\s*\(/);
       expect(source).not.toMatch(/console\.(log|error|warn)|shell:\s*true/);
     }
     expect(read('shared/common.ts')).not.toMatch(/configPath|engineSourcePath|repoDir|deployHome|trustedPublisherLogins/);
