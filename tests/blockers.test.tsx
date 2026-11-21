@@ -231,7 +231,7 @@ async function renderScreen(initial = props) {
   const settle = async () => { await act(async () => { await new Promise(resolve => realSetTimeout(resolve, 10)); await vi.advanceTimersByTimeAsync(2); }); };
   await settle(); await settle();
   cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
-  return { renderer, settle, update: async (p: typeof props) => { await act(async () => renderer.update(mount(p))); await settle(); await settle(); } };
+  return { renderer, client, settle, update: async (p: typeof props) => { await act(async () => renderer.update(mount(p))); await settle(); await settle(); } };
 }
 function catalog() {
   host.readCatalog.mockResolvedValue({ state: 'configured', problems: [], entries: [
@@ -287,7 +287,7 @@ it('partial_stale_and_layout', async () => {
   expect(JSON.stringify(renderer.toJSON())).toContain('Artifact metadata only');
   expect(JSON.stringify(renderer.toJSON())).toContain('missing');
   expect(JSON.stringify(renderer.toJSON())).not.toMatch(/CANARY|\/tmp\//);
-  const allowed = /^(Refresh|Inspect blocker \d+|Inspect issue by number|Issue number to inspect|Inspect run [0-9a-f]{8} in Runs|Previous blockers page|Next blockers page|Select .+|Open (Work|Issues|Runs|Blockers))$/;
+  const allowed = /^(Refresh|Inspect blocker \d+|Inspect issue by number|Issue number to inspect|Inspect run [0-9a-f]{8} in Runs|Previous blockers page|Next blockers page|Select .+|Services summary|Setup guide|Details for .+|Open (Work|Services|Runs))$/;
   for (const control of renderer.root.findAll(node => node.type === ('Pressable' as any) || node.type === ('TextInput' as any))) expect(control.props.accessibilityLabel).toMatch(allowed);
   for (const compact of [true, false]) for (const foreground of ['#eee', '#111']) {
     await screen.update({ ...props, layout: { ...props.layout, compact }, theme: { colors: { ...theme.colors, foreground } } as any });
@@ -460,11 +460,19 @@ it('repository_change_separates_pending_blocker_rows_details_and_sources', async
   let finishList!: (value: unknown) => void, finishDetail!: (value: unknown) => void;
   host.readBlockers.mockImplementationOnce(() => new Promise(resolve => { finishList = resolve; }));
   host.readBlocker.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
-  // Refresh the actual host-level catalog while retaining QueryClient and selection IDs.
+  // Reassign the host-level catalog while retaining the real QueryClient,
+  // catalog observation envelope and selection IDs: a client seam, never a
+  // server startup reconfiguration.
   host.readCatalog.mockResolvedValue({ state: 'configured', problems: [], entries: [
     { id: 'demo', label: 'Demo', repo: 'Reassigned/project', status: 'available', problems: [] },
   ] });
-  await act(async () => { await renderer.root.findByProps({ testID: 'orbi-catalog' }).findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle(); await settle();
+  const catalogKey = ['paseo-orbi', 'host-a', 'catalog', 'deployments.list'];
+  const reassigned = await act(async () => {
+    const observation = screen.client.getQueryData<any>(catalogKey);
+    screen.client.setQueryData(catalogKey, { ...observation, data: { ...observation.data,
+      entries: observation.data.entries.map((entry: any) => entry.id === 'demo' ? { ...entry, repo: 'Reassigned/project' } : entry) } });
+  });
+  await settle(); await settle();
   expect(host.readBlockers).toHaveBeenCalledTimes(2);
   expect(host.readBlockers).toHaveBeenLastCalledWith(blockersList.input.parse({ deploymentId: 'demo', page: 1 }));
   expect(text()).toContain('Loading'); expect(text()).not.toContain('A_BLOCKER_TITLE'); expect(text()).not.toContain('aaaaaaaa');

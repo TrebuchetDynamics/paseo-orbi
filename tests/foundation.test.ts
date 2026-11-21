@@ -339,7 +339,7 @@ async function render(client: QueryClient, child: React.ReactNode) {
 }
 
 describe('package_and_registration', () => {
-  it('registers four routes; SidebarRow and injected screen navigation open screens; rejected entries are not selectable', async () => {
+  it('registers five routes; SidebarRow and injected screen navigation open screens; rejected entries are not selectable', async () => {
     vi.useFakeTimers();
     const f = await setup();
     await f.save([f.entry, { ...f.entry, id: 'rejected', repo: 'Other/repo' }]);
@@ -348,26 +348,32 @@ describe('package_and_registration', () => {
     const screens: PluginScreenContribution[] = [], sidebar: PluginSidebarItemContribution[] = [];
     const remove = vi.fn(), openScreen = vi.fn();
     const cleanup = contributeClient({ addScreen: (s: PluginScreenContribution) => { screens.push(s); return remove; }, addSidebarHeaderItem: (s: PluginSidebarItemContribution) => { sidebar.push(s); return remove; }, openScreen } as unknown as PluginClientContext);
-    expect(screens.map(s => s.id)).toEqual(['fleet', 'issues', 'runs', 'blockers']);
+    // The stable ids plus the host-scoped Services screen.
+    expect(screens.map(s => s.id)).toEqual(['fleet', 'services', 'issues', 'runs', 'blockers']);
+    expect(screens.map(s => s.title)).toEqual(['Work', 'Services', 'Issues', 'Runs', 'Blockers']);
     const client = queryClient();
     for (const screen of screens) {
       const renderer = await render(client, React.createElement(screen.Component, { ...props, params: { deploymentId: 'demo' } }));
-      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'issues' || screen.id === 'runs' || screen.id === 'blockers' ? 'select a repository to browse' : 'feature not implemented');
+      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'services' ? 'Service check off · activity unknown' : 'select a repository to browse');
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
+      const screenText = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
       if (screen.id === 'fleet') {
-        const fleetText = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
-        // Work is the default surface for the configured repository; the host
-        // service inventory is one technical-details disclosure away.
-        expect(fleetText()).toMatch(/^Work · Host A\nRepository: Demo \(Example\/project\)/);
-        expect(fleetText()).not.toContain('Host A · Fleet');
-        await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Services (technical details)' }).props.onPress());
-        expect(fleetText()).toContain('Host A · Fleet');
-        expect(fleetText().indexOf('Host A · Fleet')).toBeLessThan(fleetText().indexOf('Fleet — read-only'));
-        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Set up service access' })).toHaveLength(1);
+        // Work first: persistent navigation, then real issue rows; no embedded
+        // service inventory or technical-details disclosure.
+        expect(screenText()).toMatch(/^Work\nServices\nRuns\n/);
+        expect(screenText()).toMatch(/Work · Host A\nRepository: Demo \(Example\/project\)/);
+        expect(screenText()).not.toContain('Host A · Fleet');
+        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Services (technical details)' })).toHaveLength(0);
+        expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
+        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Services summary' })).toHaveLength(1);
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
         await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Active work for Demo' }).props.onPress());
         expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
+        expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
+      } else if (screen.id === 'services') {
+        // Services is host-scoped: no repository selector and no repository read.
+        expect(screenText()).toContain('Services · Host A');
         expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
       } else {
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo')).toHaveLength(1);
@@ -379,14 +385,24 @@ describe('package_and_registration', () => {
       const navigation = renderer.root.findByProps({ testID: 'orbi-navigation' });
       expect(navigation.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
       const tabs = navigation.findAllByType('Pressable' as any);
-      expect(tabs.map(tab => tab.props.accessibilityLabel)).toEqual(['Open Work', 'Open Issues', 'Open Runs', 'Open Blockers']);
-      for (const [index, tab] of tabs.entries()) {
+      // Persistent Work / Services / Runs navigation; Issues and Blockers keep
+      // their ids and links without a tab of their own.
+      expect(tabs.map(tab => tab.props.accessibilityLabel)).toEqual(['Open Work', 'Open Services', 'Open Runs']);
+      const selected = screen.id === 'fleet' ? 'Open Work' : screen.id === 'services' ? 'Open Services' : screen.id === 'runs' ? 'Open Runs' : null;
+      for (const tab of tabs) {
         expect(tab.props.accessibilityRole).toBe('button'); // RN web supplies Enter/Space activation for onPress.
-        expect(tab.props.accessibilityState).toMatchObject({ selected: screens[index].id === screen.id });
-        await act(async () => tab.props.onPress());
-        expect(openScreen).toHaveBeenLastCalledWith({ screenId: screens[index].id, params: { deploymentId: 'demo' } });
+        expect(tab.props.accessibilityState).toMatchObject({ selected: tab.props.accessibilityLabel === selected });
       }
-      expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Open '))).toHaveLength(4);
+      const targets = [
+        { screenId: 'fleet', params: { deploymentId: 'demo', surface: 'work' } },
+        { screenId: 'services', params: { deploymentId: 'demo' } },
+        { screenId: 'runs', params: { deploymentId: 'demo' } },
+      ];
+      for (const [index, tab] of tabs.entries()) {
+        await act(async () => tab.props.onPress());
+        expect(openScreen).toHaveBeenLastCalledWith(targets[index]);
+      }
+      expect(renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.startsWith('Open '))).toHaveLength(3);
       expect(JSON.stringify(renderer.toJSON())).not.toContain('Read-only. Open Fleet');
       expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(16);
       const light = { ...props, params: { deploymentId: 'rejected' }, theme: { colors: { ...props.theme.colors, foreground: '#222', foregroundMuted: '#555', surface0: '#fff' } }, layout: { compact: false, platform: 'web' } } as PluginScreenProps;
@@ -394,7 +410,7 @@ describe('package_and_registration', () => {
       expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(24);
       for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#222');
       await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Open Work' }).props.onPress());
-      expect(openScreen).toHaveBeenLastCalledWith({ screenId: 'fleet', params: {} });
+      expect(openScreen).toHaveBeenLastCalledWith({ screenId: 'fleet', params: { surface: 'work' } });
     }
     const renderer = await render(client, React.createElement(sidebar[0].Component, { ...props, currentScreen: null, openScreen, openPopover: vi.fn() }));
     const rows = renderer.root.findAll(node => node.type === ('SidebarRow' as any));
@@ -404,7 +420,7 @@ describe('package_and_registration', () => {
       await act(async () => renderer.update(tree(client, React.createElement(sidebar[0].Component, { ...props, currentScreen: { screenId: screen.id, params: {} }, openScreen, openPopover: vi.fn() }))));
       expect(renderer.root.findByType('SidebarRow' as any).props.active).toBe(true);
     }
-    cleanup(); expect(remove).toHaveBeenCalledTimes(5);
+    cleanup(); expect(remove).toHaveBeenCalledTimes(6);
   });
   it('gates every deep link with the shared real-schema setup/catalog states and foreground/offline repair', async () => {
     vi.useFakeTimers();
@@ -418,44 +434,45 @@ describe('package_and_registration', () => {
     await f.save([]); const empty = await rpc(f.authorization);
     await f.save([{ ...f.entry, repo: 'Other/repo' }]); const rejected = await rpc(f.authorization);
     const catalogs = [unconfigured, invalid, empty, rejected];
+    const setupLabel = (catalog: DeploymentCatalog) => catalog.state === 'unconfigured' || catalog.state === 'invalid';
     for (const catalog of catalogs) for (const screen of screens) {
       host.readCatalog.mockReset().mockResolvedValue(catalog);
       const client = queryClient();
       const renderer = await render(client, React.createElement(screen.Component, { ...props, params: { deploymentId: 'demo' } }));
       const json = () => JSON.stringify(renderer.toJSON());
       expect(renderer.root.findAllByProps({ testID: 'orbi-catalog' })).toHaveLength(1);
-      const setup = catalog.state !== 'configured';
-      if (screen.id === 'fleet') {
-        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(0);
-        if (setup) expect(json()).toContain(catalog.state);
-        const action = renderer.root.findByProps({ accessibilityLabel: 'Set up repositories' });
-        expect(action.props).toMatchObject({ accessibilityRole: 'button' });
-        expect(action.props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
-        await act(async () => action.props.onPress());
-      }
-      expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(setup ? 1 : 0);
-      expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(setup ? 0 : 1);
-      if (setup) {
+      // The Work / Services / Runs navigation is persistent in every catalog state.
+      expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(1);
+      expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(setupLabel(catalog) ? 1 : 0);
+      if (setupLabel(catalog)) {
+        const guide = renderer.root.findByProps({ accessibilityLabel: 'Setup guide' });
+        expect(guide.props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+        expect(guide.props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
+        if (catalog.state === 'unconfigured') expect(json()).not.toContain('PASEO_ORBI_CONFIG');
+        await act(async () => guide.props.onPress());
         expect(json()).toContain('PASEO_ORBI_CONFIG'); expect(json()).toContain('explicitly reload');
-        expect(json()).toContain('does not configure authorization or reload');
-        expect(json()).not.toMatch(/select a repository|Fleet — read-only/);
-        // One setup action explains why issue reads are unavailable while the
-        // discovery-only host service inventory keeps working independently. It
-        // never claims to save settings or discover authorization.
-        const setupText = () => renderer.root.findByProps({ accessibilityLabel: 'Orbi setup' })
+        expect(json()).toContain('does not configure authorization');
+        // The guide is instructions only: it never saves settings or discovers authority.
+        const setupText = () => renderer.root.findByProps({ accessibilityLabel: 'Repository setup guide' })
           .findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
-        expect(setupText()).toContain('Issue reads are unavailable');
         expect(setupText()).toContain('Host service inventory is independent');
-        expect(setupText()).not.toMatch(/Save|auto-?discover|Discover repositories/i);
-      } else expect(json()).toContain(catalog.entries.length ? 'config_mismatch' : 'No configured deployments.');
+        expect(setupText()).not.toMatch(/\bSave\b|auto-?discover|Discover repositories/);
+        if (catalog.state === 'unconfigured') {
+          expect(json()).toContain('Repositories aren’t linked. Link repositories to see GitHub issues.');
+          // A confirmed unconfigured catalog is not a read failure: rereading startup
+          // configuration cannot repair it, so no catalog Refresh is offered.
+          expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
+        } else {
+          expect(json()).toContain('Issue reads are unavailable');
+          expect(json()).toContain('the configured repository catalog is invalid');
+        }
+      } else if (catalog.entries.length) expect(json()).toContain('config_mismatch');
+      else expect(json()).toContain('No configured deployments.');
       expect(json()).not.toMatch(/Observation status:|Last success:|Observed:|SECRET_CANARY/);
-      expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
+      if (screen.id !== 'fleet') expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
       expect(host.readCatalog).toHaveBeenCalledTimes(1);
-      const button = () => renderer.root.findByProps({ accessibilityLabel: 'Refresh' });
-      // A confirmed unconfigured catalog is not a read failure: rereading startup
-      // configuration cannot repair it, so no catalog Refresh is offered.
-      if (catalog.state === 'unconfigured') expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
-      else {
+      if (catalog.state === 'invalid') {
+        const button = () => renderer.root.findByProps({ accessibilityLabel: 'Refresh' });
         expect(button().props).toMatchObject({ disabled: false, accessibilityState: { disabled: false, busy: false } });
         let finish!: (value: DeploymentCatalog) => void;
         host.readCatalog.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
@@ -463,17 +480,17 @@ describe('package_and_registration', () => {
         await act(async () => { pending = button().props.onPress(); }); await settle();
         expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: true } });
         await act(async () => { finish(catalog); await pending; }); await settle();
+        await act(async () => { for (const listener of host.listeners) listener('background'); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(60001); }); await settle();
+        expect(json()).toContain('Catalog transport: stale');
+        expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
+        expect(host.readCatalog).toHaveBeenCalledTimes(2);
       }
-      await act(async () => { for (const listener of host.listeners) listener('background'); });
-      await act(async () => { await vi.advanceTimersByTimeAsync(60001); }); await settle();
-      expect(json()).toContain('Catalog transport: stale');
-      if (catalog.state !== 'unconfigured') expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
-      expect(host.readCatalog).toHaveBeenCalledTimes(catalog.state === 'unconfigured' ? 1 : 2);
       await act(async () => renderer.unmount());
     }
     for (const read of features) expect(read).not.toHaveBeenCalled();
-    // #24's setup gate is unchanged when the opt-in host inventory is on: host
-    // evidence adds no navigation, selectors, repository actions or feature reads.
+    // The unconfigured landing defaults to Services; the host inventory is read
+    // there without adding repository navigation or authority.
     host.readInventory.mockResolvedValue(servicesInventory.output.parse({
       state: 'complete', observedAt: '2026-11-14T23:00:00.000Z',
       sources: [
@@ -483,19 +500,14 @@ describe('package_and_registration', () => {
       problems: [], groups: [{ label: 'orbi-demo', kind: 'runner-family', association: 'matched', deploymentId: 'demo', units: [] }],
     }));
     host.readCatalog.mockReset().mockResolvedValue(unconfigured);
-    const inventoryRenderer = await render(queryClient(), React.createElement(screens[0].Component, { ...props, params: { deploymentId: 'demo' } }));
-    expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
-    // The unconfigured catalog keeps discovery-only inventory behind the same
-    // technical-details disclosure, with no repository authority either way.
-    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Services (technical details)' }).props.onPress());
+    const inventoryRenderer = await render(queryClient(), React.createElement(screens[1].Component, { ...props, params: { deploymentId: 'demo' } }));
     expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
-    expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(0);
+    expect(inventoryRenderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(1);
     expect(inventoryRenderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('View repository'))).toHaveLength(0);
     // One explanation above the rows replaces the repeated Unlinked badge.
-    expect(JSON.stringify(inventoryRenderer.toJSON())).toContain("Showing host services. Repository details aren't configured.");
+    expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('Repositories aren’t linked. Link repositories to see GitHub issues.');
     expect(JSON.stringify(inventoryRenderer.toJSON())).not.toContain('Unlinked');
-    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Expand orbi-demo' }).props.onPress());
-    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Unit details for orbi-demo' }).props.onPress());
+    await act(async () => inventoryRenderer.root.findByProps({ accessibilityLabel: 'Details for orbi-demo' }).props.onPress());
     expect(JSON.stringify(inventoryRenderer.toJSON())).toContain('not in the current authorized catalog');
     for (const read of features) expect(read).not.toHaveBeenCalled();
     await act(async () => inventoryRenderer.unmount());
@@ -508,7 +520,7 @@ describe('package_and_registration', () => {
     const renderer = await render(client, React.createElement(Screen, props));
     expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: loading');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.accessibilityState).toEqual({ disabled: true, busy: true });
-    expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(1);
     for (const read of features) expect(read).not.toHaveBeenCalled();
     await act(async () => { fail(new Error('SECRET_CANARY')); }); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('refresh_failed');
@@ -523,7 +535,7 @@ describe('package_and_registration', () => {
     const calls = host.readCatalog.mock.calls.length;
     await act(async () => renderer.update(tree(client, React.createElement(Screen, { ...props, host: { id: 'host-b', label: 'Host B' } })))); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('Selected host is offline');
-    expect(JSON.stringify(renderer.toJSON())).not.toContain('Orbi setup');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Orbi setup');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.disabled).toBe(true);
     expect(host.readCatalog).toHaveBeenCalledTimes(calls);
     await act(async () => renderer.unmount()); expect(host.listeners.size).toBe(0);

@@ -108,7 +108,8 @@ it('four_views_read_only_journey', async () => {
   const removed = vi.fn(), openScreen = vi.fn();
   const stopClient = clientEntry({ addScreen: (screen: any) => { screens.set(screen.id, screen.Component); return removed; }, addSidebarHeaderItem: () => removed, openScreen } as unknown as PluginClientContext);
   cleanups.push(stopClient);
-  expect([...screens.keys()]).toEqual(['fleet', 'issues', 'runs', 'blockers']);
+  // Stable route ids plus the host-scoped Services screen.
+  expect([...screens.keys()]).toEqual(['fleet', 'services', 'issues', 'runs', 'blockers']);
   expect((await handlers.get('deployments.list')!({}) as any).entries.map((e: any) => e.status)).toEqual(['available', 'available']);
   vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
   const query = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => query.clear());
@@ -134,23 +135,22 @@ it('four_views_read_only_journey', async () => {
   // Mounting the detail is not an operator request: no shortcut inspection is made.
   expect(text()).toContain('Workspace shortcut: Not inspected');
   expect(host.readShortcut).not.toHaveBeenCalled();
-  // Host inventory is not opted in here: Work is the default surface and the
-  // discovery-only host inventory stays behind its technical-details disclosure.
+  // Persistent Work / Services / Runs navigation, then the configured Work
+  // surface. Host inventory is not opted in here, so no service row exists.
+  expect(text().startsWith('Work\nServices\nRuns\n')).toBe(true);
   expect(host.readInventory).toHaveBeenCalledTimes(1);
-  expect(text().startsWith('Work · Host A\nRepository: Demo (Example/project)')).toBe(true);
+  expect(text()).toMatch(/Work · Host A\nRepository: Demo \(Example\/project\)/);
   expect(text()).toContain('Issues: current');
   expect(text()).toContain('#42 Issue 42');
-  expect(text().indexOf('#42 Issue 42')).toBeLessThan(text().indexOf('Services (technical details)'));
-  await press('Services (technical details)');
-  expect(text()).toContain('Service check off · activity unknown');
-  expect(text()).not.toContain('Observed unit families');
-  expect(text()).not.toContain('last successful check');
-  expect(text().indexOf('Host A · Fleet')).toBeLessThan(text().indexOf('Fleet — read-only'));
+  // The one-line health summary links to Services before the issue rows; the
+  // configured-repository detail stays below them.
+  expect(text().indexOf('Services: off')).toBeLessThan(text().indexOf('#42 Issue 42'));
+  expect(text().indexOf('#42 Issue 42')).toBeLessThan(text().indexOf('Configured repositories'));
+  expect(text()).toContain('Services: off · current activity unknown');
+  expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
-  await press('Set up service access');
-  expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');
-  expect(text()).toContain('Connected clients on this host can then see Orbi unit names');
   expect(text()).not.toContain('View repository');
+  expect(text().indexOf('Fleet — read-only')).toBeGreaterThan(text().indexOf('#42 Issue 42'));
   partial = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
   expect(text()).toContain('partial'); expect(text()).toContain('systemd: process_failed');
@@ -265,8 +265,61 @@ it('four_views_read_only_journey', async () => {
   query.clear(); expect(vi.getTimerCount()).toBe(0);
   const finalCalls = processPort.mock.calls.length;
   await vi.advanceTimersByTimeAsync(61000); expect(processPort).toHaveBeenCalledTimes(finalCalls);
-  stopClient(); expect(removed).toHaveBeenCalledTimes(5);
+  stopClient(); expect(removed).toHaveBeenCalledTimes(6);
   await stopServer(); expect(dispose).toHaveBeenCalled();
+});
+
+it('services_screen_shows_off_without_a_feature_read_or_enabling_action', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '0');
+  const f = await fixture('release'); cleanups.push(f.cleanup);
+  vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+  const processPort = vi.spyOn(ReadPorts.prototype, 'process');
+  const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+  const stopServer = serverEntry({ handle: (contract: any, handler: any) => {
+    handlers.set(contract.name, async input => contract.output.parse(await handler(contract.input.parse(input))));
+  } } as PluginServerContext);
+  cleanups.push(stopServer);
+  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory, 'fleet.read': host.readFleet, 'issues.list': host.readIssues, 'runs.list': host.readRuns, 'blockers.list': host.readBlockers })) {
+    mock.mockReset().mockImplementation(input => handlers.get(name)!(input));
+  }
+  const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
+  const stopClient = clientEntry({ addScreen: (screen: any) => { screens.set(screen.id, screen.Component); return vi.fn(); }, addSidebarHeaderItem: () => vi.fn(), openScreen: vi.fn() } as unknown as PluginClientContext);
+  cleanups.push(stopClient);
+  const query = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => query.clear());
+  const theme = { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111', surface1: '#222', surface2: '#333', border: '#555', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } };
+  vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
+  let renderer!: ReactTestRenderer;
+  const Screen = screens.get('services')!;
+  await act(async () => { renderer = create(<QueryClientProvider client={query}><Screen theme={theme} host={{ id: 'host-a', label: 'Host A' }} layout={{ compact: true, platform: 'ios' }} params={{}} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  for (let n = 0; n < 20; n++) { await act(async () => { await pause(10); await vi.advanceTimersByTimeAsync(5); }); if (query.isFetching() === 0) break; }
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  // Bounded wait for the real catalog and inventory reads to settle.
+  for (let n = 0; n < 200 && !text().includes('Service check off · activity unknown'); n++) {
+    await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); });
+  }
+  // The opt-in inventory answers off; the screen reports the undecided state and
+  // never offers an enabling Refresh, a service row or a repository action.
+  expect(text()).toContain('Services · Host A');
+  expect(text()).toContain('Service check off · activity unknown');
+  expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
+  expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'))).toHaveLength(0);
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
+  expect(text()).not.toContain('PASEO_ORBI_HOST_INVENTORY=1');
+  await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Set up service access' }).props.onPress());
+  expect(text()).toContain('PASEO_ORBI_HOST_INVENTORY=1');
+  expect(text()).toContain('Refresh cannot enable access');
+  expect(text()).not.toContain('View repository');
+  // Work / Services / Runs navigation stays available; Services is selected.
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Open Services' }).props.accessibilityState).toMatchObject({ selected: true });
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Open Work' }).props.accessibilityState).toMatchObject({ selected: false });
+  // No repository, GitHub or process read: only the opted-out inventory answer.
+  expect(host.readInventory).toHaveBeenCalledTimes(1);
+  expect(host.readFleet).not.toHaveBeenCalled();
+  expect(host.readIssues).not.toHaveBeenCalled();
+  expect(host.readRuns).not.toHaveBeenCalled();
+  expect(host.readBlockers).not.toHaveBeenCalled();
+  expect(processPort).not.toHaveBeenCalled();
 });
 
 it('validated catalog enables bounded exact-repo issue reads while discovery-only inventory stays independent', async () => {

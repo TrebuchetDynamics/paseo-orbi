@@ -3,7 +3,10 @@ import { state as setScenario } from '../fixtures/browser';
 import { theme } from '../fixtures/browser';
 import { start } from '../harness';
 import { hostFirstScreenshots, hostFirstTitles as titles, hostFirstCaptureTitle } from './contract.mjs';
-import { openOverview, openRoute, openServices, pressEnter, configureHost, captureOverview, hostCalls, expect, type Lease, type OverviewCase } from './fixtures';
+import {
+  openPlugin, openNav, openWork, openServices, pressEnter, configureHost, assertServicesState,
+  captureOverview, hostCalls, expect, type Lease, type OverviewCase,
+} from './fixtures';
 
 const shots = hostFirstScreenshots as OverviewCase[];
 
@@ -47,63 +50,64 @@ async function preparePair(page: import('@playwright/test').Page, lease: Lease) 
 async function switchHost(page: import('@playwright/test').Page, index: number) {
   await page.getByTestId('plugin-host-filter-trigger').click();
   await page.getByRole('button', { name: 'Qualification', exact: true }).nth(index).click();
-  // A host change mounts Work again, so the services disclosure is collapsed.
-  await openServices(page);
+  await expect(page.getByTestId('orbi-services-heading')).toBeVisible();
 }
 
 test(titles[0], async ({ page, lease }) => {
   const host = lease.hosts[0];
   await setScenario(host, 'available'); await configureHost(host, 'available');
-  await openOverview(page, host);
+  await openServices(page, host);
   const demo = page.getByTestId('orbi-family-orbi-demo');
+  // Every observed group is listed without a tap: no chevron, no accordion.
   await expect(demo.getByText('Slot 2 · Timer failed', { exact: true })).toBeVisible();
   await expect(demo.getByText('Running', { exact: true }).first()).toBeVisible();
   await expect(demo.getByText('Timer waiting', { exact: true }).first()).toBeVisible();
-  // Keyboard-only expand; text states, never color alone.
-  await pressEnter(page, 'button', 'Expand orbi-demo');
-  await expect(demo.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toBeVisible();
-  await expect(demo.getByText('Slot 2 · activating/start · Timer failed', { exact: true })).toBeVisible();
-  await expect(demo.getByText('Slot 3 · active/exited · Timer not observed', { exact: true })).toBeVisible();
-  // A failed timer and a running service in one family are both visible at once.
-  // Keyboard collapse returns to the row-level facts, not a stale detail block.
-  await pressEnter(page, 'button', 'Collapse orbi-demo');
-  await expect(demo.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toHaveCount(0);
-  await expect(demo.getByRole('button', { name: 'Expand orbi-demo', exact: true })).toBeVisible();
+  await expect(page.getByTestId('orbi-family-orbi-analytics-pipeline-with-a-very-long-family-name')).toBeVisible();
+  await expect(page.locator('[data-testid^="orbi-chevron-"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^(Expand|Collapse) / })).toHaveCount(0);
+  // Keyboard-only diagnostics; raw unit data stays off every row.
+  await pressEnter(page, 'button', 'Details for Example/project');
+  await expect(page.getByTestId('orbi-service-details-heading')).toHaveText(/^Service details · /);
+  await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 2 · activating/start · Timer failed', { exact: true })).toBeVisible();
+  await expect(page.getByText('Slot 3 · active/exited · Timer not observed', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('orbi-service-units')).toContainText('orbi-demo@1.service');
+  // Back restores the same list, in the same failure-first order.
+  await pressEnter(page, 'button', 'Back to services');
+  await expect(page.getByTestId('orbi-services-heading')).toBeVisible();
+  await expect(page.locator('[data-testid^="orbi-family-"]')).toHaveCount(3);
+  await expect(page.getByTestId('orbi-family-orbi-demo')).not.toContainText('orbi-demo@1.service');
 });
 
 test(titles[1], async ({ page, lease }) => {
   const host = lease.hosts[0];
   await setScenario(host, 'available'); await configureHost(host, 'available');
-  await openOverview(page, host);
-  await pressEnter(page, 'button', 'Expand orbi-demo');
-  await pressEnter(page, 'button', 'Unit details for orbi-demo');
-  const demo = page.getByTestId('orbi-family-orbi-demo');
-  await expect(demo.getByText(/Matches configured deployment Demo \(Example\/project\) by unit name/)).toBeVisible();
-  await expect(demo.getByText(/Unit activity does not establish issue delivery\./)).toBeVisible();
+  await openServices(page, host);
+  await pressEnter(page, 'button', 'Details for Example/project');
+  await expect(page.getByText(/Matches configured deployment Demo \(Example\/project\) by unit name/)).toBeVisible();
+  await expect(page.getByText(/Unit activity does not establish issue delivery\./)).toBeVisible();
   // The authorized association is the only drill-down route.
   await pressEnter(page, 'button', 'View repository Demo');
   await expect(page.getByTestId('plugin-surface-title')).toHaveText('Issues');
   await expect(page.getByText('Issues — select a repository to browse', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Select Demo', exact: true }).click();
   await expect(page.getByText(/host-a synthetic issue 42/).first()).toBeVisible();
-  // Keyboard return to the originating Work: the expanded family is retained
-  // per host/repository surface, and the heading is the stable fallback target.
+  // Keyboard return to Orbi, then the persistent Services navigation.
   await pressEnter(page, 'button', 'Orbi');
-  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
-  await openServices(page);
-  await expect(page.getByRole('button', { name: 'Collapse orbi-demo', exact: true })).toBeVisible();
+  await openNav(page, 'Services');
+  await expect(page.getByTestId('orbi-services-heading')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Details for Example/project', exact: true })).toBeVisible();
 });
 
 test(titles[2], async ({ page, lease }) => {
   const host = lease.hosts[0];
   await setScenario(host, 'available'); await configureHost(host, 'norepo');
-  await openOverview(page, host);
+  await openServices(page, host);
   await expect(page.getByText('No configured deployments.', { exact: true })).toBeVisible();
   const unclaimed = page.getByTestId('orbi-family-orbi-unclaimed');
   await expect(unclaimed.getByText('Unlinked', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^View repository / })).toHaveCount(0);
-  await pressEnter(page, 'button', 'Expand orbi-unclaimed');
-  await pressEnter(page, 'button', 'Unit details for orbi-unclaimed');
+  await pressEnter(page, 'button', 'Details for orbi-unclaimed');
   await expect(page.getByText(/Discovered on this host only; no configured deployment claims this unit name/)).toBeVisible();
 });
 
@@ -112,14 +116,16 @@ test(titles[3], async ({ page, lease }) => {
   lease.hosts.push(...isolated.hosts);
   try {
     const host = isolated.hosts[0];
-    await openOverview(page, host);
+    await openServices(page, host);
     await expect(page.getByText('Service check off · activity unknown', { exact: true })).toBeVisible();
     await pressEnter(page, 'button', 'Set up service access');
     await expect(page.getByText(/PASEO_ORBI_HOST_INVENTORY=1/)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Refresh services', exact: true })).toHaveCount(0);
-    // The authorized catalog is independent of the inventory opt-in.
-    await openRoute(page, 'Issues');
-    await page.getByRole('button', { name: 'Select Demo', exact: true }).click();
+    // The authorized catalog is independent of the inventory opt-in: Work keeps
+    // its GitHub issue rows and one activated row opens the real issue screen.
+    await openWork(page, host);
+    await pressEnter(page, 'button', 'Inspect issue 42');
+    await expect(page.getByTestId('plugin-surface-title')).toHaveText('Issues');
     await expect(page.getByText(/host-a synthetic issue 42/).first()).toBeVisible();
     const calls = await hostCalls(host);
     expect(calls.some((call: { args: string[] }) => call.args.includes('list-units') || call.args.includes('list-unit-files'))).toBe(false);
@@ -132,77 +138,117 @@ test(titles[3], async ({ page, lease }) => {
 test(titles[4], async ({ page, lease }) => {
   const host = lease.hosts[0];
   await setScenario(host, 'available'); await configureHost(host, 'unsupported');
-  await openOverview(page, host);
+  await openServices(page, host);
   await expect(page.getByText('Demo (Example/project): unsupported_source_profile', { exact: true })).toBeVisible();
   await expect(page.getByText(/Ask the operator to repair the authorized configuration\/source profile/)).toBeVisible();
-  const demo = page.getByTestId('orbi-family-orbi-demo');
-  await pressEnter(page, 'button', 'Expand orbi-demo');
-  await pressEnter(page, 'button', 'Unit details for orbi-demo');
-  await expect(demo.getByText(/its source profile is unsupported for repository detail\. This compatibility limit does not mean the runner is broken\./)).toBeVisible();
-  await expect(demo.getByRole('button', { name: /^View repository / })).toHaveCount(0);
+  await pressEnter(page, 'button', 'Details for Example/project');
+  await expect(page.getByText(/its source profile is unsupported for repository detail\. This compatibility limit does not mean the runner is broken\./)).toBeVisible();
+  await expect(page.getByRole('button', { name: /^View repository / })).toHaveCount(0);
 });
 
 test(titles[5], async ({ page, lease }) => {
   const host = lease.hosts[0];
   await configureHost(host, 'available'); await setScenario(host, 'denied');
-  await openOverview(page, host);
+  await openServices(page, host);
   await expect(page.getByText('installed: process_failed', { exact: true })).toBeVisible();
   // Confirmed runtime families survive; a denied source is never an empty host.
   await expect(page.getByTestId('orbi-family-orbi-demo')).toBeVisible();
   await expect(page.getByText('No Orbi units found.', { exact: true })).toHaveCount(0);
-  await expect(page.getByText(/^0 families/)).toHaveCount(0);
+  await expect(page.getByText(/^0 groups/)).toHaveCount(0);
+  await expect(page.getByTestId('orbi-attention-count')).toHaveCount(0);
 });
 
 test(titles[6], async ({ page, lease }) => {
   const [a, b] = lease.hosts;
   for (const host of [a, b]) { await setScenario(host, 'available'); await configureHost(host, 'available'); }
   const { primary, secondary } = await preparePair(page, lease);
-  await openOverview(page, a);
+  await openServices(page, a);
   await switchHost(page, primary);
-  await expect(page.getByTestId('orbi-overview-heading')).toHaveText('Qualification · Fleet');
-  await pressEnter(page, 'button', 'Expand orbi-demo');
+  await expect(page.getByTestId('orbi-services-heading')).toHaveText('Services · Qualification');
+  await pressEnter(page, 'button', 'Details for Example/project');
   await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toBeVisible();
-  await switchHost(page, secondary);
-  await expect(page.getByTestId('orbi-overview-heading')).toHaveText('Qualification · Fleet');
-  // Identical labels: only the selected host identity decides the rows.
+  await page.getByTestId('plugin-host-filter-trigger').click();
+  await page.getByRole('button', { name: 'Qualification', exact: true }).nth(secondary).click();
+  await expect(page.getByTestId('orbi-services-heading')).toHaveText('Services · Qualification');
+  // Identical labels: only the selected host identity decides the rows, and the
+  // previous host's diagnostic view never survives the switch.
+  await expect(page.getByTestId('orbi-service-details')).toHaveCount(0);
   await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toHaveCount(0);
-  const demo = page.getByTestId('orbi-family-orbi-demo');
-  await pressEnter(page, 'button', 'Expand orbi-demo');
-  await expect(demo.getByText('Slot 4 · Running · Timer waiting', { exact: true })).toBeVisible();
+  await pressEnter(page, 'button', 'Details for Example/project');
+  await expect(page.getByText('Slot 4 · Running · Timer waiting', { exact: true })).toBeVisible();
 });
 
 test(titles[7], async ({ page, lease, network }) => {
   const [a, b] = lease.hosts;
   for (const host of [a, b]) { await setScenario(host, 'available'); await configureHost(host, 'available'); }
   const { primary, secondary } = await preparePair(page, lease);
-  await openOverview(page, a);
+  await openServices(page, a);
   await switchHost(page, primary);
   await expect(page.getByText('Services: Current', { exact: true })).toBeVisible();
   // Delay the selected host's inventory read, then switch hosts.
   await setScenario(a, 'late');
-  await page.getByRole('button', { name: 'Refresh services', exact: true }).click();
+  await pressEnter(page, 'button', 'Refresh services');
   await switchHost(page, secondary);
-  await pressEnter(page, 'button', 'Expand orbi-demo');
+  await pressEnter(page, 'button', 'Details for Example/project');
   await expect(page.getByText('Slot 4 · Running · Timer waiting', { exact: true })).toBeVisible();
   await page.waitForTimeout(2200);
   await expect(page.getByText('Slot 1 · Running · Timer waiting', { exact: true })).toHaveCount(0);
   await setScenario(a, 'available');
+  // Back restores the same host-B list before the disconnect.
+  await pressEnter(page, 'button', 'Back to services');
+  await expect(page.getByTestId('orbi-services-heading')).toBeVisible();
   // Offline keeps known history as unknown, never as confirmed absence.
   network.blocked.add(b.port);
   for (const socket of network.sockets) if (Number(new URL(socket.url()).port) === b.port) await socket.close();
   await expect(page.getByText(/Offline · current activity unknown/)).toBeVisible({ timeout: 30000 });
   await expect(page.getByText('No Orbi units found.', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Services: Current', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/Last seen /).first()).toBeVisible();
   // Without same-host history the same offline host may publish no count at all.
   const fresh = await page.context().newPage();
   try {
-    await openOverview(fresh, a);
-    await switchHost(fresh, secondary);
+    await openServices(fresh, a);
+    await fresh.getByTestId('plugin-host-filter-trigger').click();
+    await fresh.getByRole('button', { name: 'Qualification', exact: true }).nth(secondary).click();
     await expect(fresh.getByText(/Offline · current activity unknown|Unavailable · current activity unknown\./)).toBeVisible({ timeout: 30000 });
     await expect(fresh.getByText('No Orbi units found.', { exact: true })).toHaveCount(0);
     await expect(fresh.getByText(/^[0-9]+ of [0-9]+ groups/)).toHaveCount(0);
   } finally { await fresh.close(); }
   network.blocked.delete(b.port);
+});
+
+test(titles[8], async ({ page, lease }) => {
+  const host = lease.hosts[0];
+  await setScenario(host, 'available'); await configureHost(host, 'available');
+  await openWork(page, host);
+  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
+  await expect(page.getByText(/host-a synthetic issue 42/).first()).toBeVisible();
+  await expect(page.getByTestId('orbi-label-chip').first()).toBeVisible();
+  // The service inventory is not embedded in Work; its one-line health summary
+  // links straight to the Services screen.
+  await expect(page.getByTestId('orbi-host-services')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Services summary', exact: true })).toBeVisible();
+  await expect(page.getByTestId('orbi-navigation').getByRole('button')).toHaveCount(3);
+  await pressEnter(page, 'button', 'Open Services');
+  await expect(page.getByTestId('orbi-services-heading')).toBeVisible();
+  // A confirmed unconfigured host lands on Services with one notice and Setup guide.
+  const unconfigured = await start({ ...process.env, PASEO_E2E_OUTPUT: `${lease.input.output}/unconfigured-landing` }, 'unconfigured', 'host-first');
+  lease.hosts.push(...unconfigured.hosts);
+  try {
+    await openPlugin(page, unconfigured.hosts[0]);
+    await expect(page.getByTestId('plugin-surface-title')).toHaveText('Services');
+    await expect(page.getByText('Repositories aren’t linked. Link repositories to see GitHub issues.', { exact: true })).toHaveCount(1);
+    await expect(page.getByTestId('orbi-host-services')).toBeVisible();
+    // Explicit Work navigation is preserved and still shows the single notice.
+    await openNav(page, 'Work');
+    await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
+    await expect(page.getByTestId('orbi-work-heading')).toBeVisible();
+    await expect(page.getByText('Repositories aren’t linked. Link repositories to see GitHub issues.', { exact: true })).toHaveCount(1);
+    await expect(page.getByTestId('orbi-work-issues')).toHaveCount(0);
+  } finally {
+    lease.hosts.splice(lease.hosts.length - unconfigured.hosts.length);
+    await unconfigured.cleanup();
+  }
 });
 
 test(hostFirstCaptureTitle, async ({ page, lease, browser }) => {
@@ -212,13 +258,11 @@ test(hostFirstCaptureTitle, async ({ page, lease, browser }) => {
     await setScenario(host, c.scenario);
     await theme(page, host.url, c.theme);
     await page.setViewportSize(c.viewport);
-    await openOverview(page, host);
-    if (c.expanded) {
-      await pressEnter(page, 'button', `Expand ${c.expanded}`);
-      const family = page.getByTestId(`orbi-family-${c.expanded}`);
-      await family.scrollIntoViewIfNeeded();
-      await expect(family.getByText('Running', { exact: true }).first()).toBeVisible();
-      await expect(family.getByRole('button', { name: `Unit details for ${c.expanded}`, exact: true })).toBeVisible();
+    await openServices(page, host);
+    if (c.details) {
+      await pressEnter(page, 'button', `Details for ${c.details}`);
+      await expect(page.getByTestId('orbi-service-details-heading')).toHaveText(/^Service details · /);
+      await expect(page.getByTestId('orbi-service-units')).toBeVisible();
     }
     await captureOverview(page, lease, browser.version(), c);
   }
@@ -229,7 +273,7 @@ test(hostFirstCaptureTitle, async ({ page, lease, browser }) => {
   try {
     await theme(page, isolated.hosts[0].url, unconfigured.theme);
     await page.setViewportSize(unconfigured.viewport);
-    await openOverview(page, isolated.hosts[0]);
+    await openServices(page, isolated.hosts[0]);
     await captureOverview(page, lease, browser.version(), unconfigured);
   } finally {
     lease.hosts.splice(lease.hosts.length - isolated.hosts.length);

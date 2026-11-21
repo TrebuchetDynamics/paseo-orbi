@@ -13,28 +13,31 @@ export async function pressEnter(page: Page, role: 'button' | 'link', name: stri
   await page.keyboard.press('Enter');
 }
 
-// Work keeps the host service inventory behind one technical-details
-// disclosure. Open it idempotently so the service rows, counts and heading stay
-// observable after a fresh mount or a host change collapsed it again.
-export async function openServices(page: Page) {
-  const heading = page.getByTestId('orbi-overview-heading');
-  if (!(await heading.first().isVisible())) await pressEnter(page, 'button', 'Services (technical details)');
-  await expect(heading).toBeVisible();
-}
-
-// The shipped Work title is sourced from client/shell.tsx routeTitle('fleet').
-export async function openOverview(page: Page, host: LeaseHost) {
+// The single Orbi sidebar entry opens the default route: a configured host lands
+// on Work, a confirmed unconfigured host lands on Services.
+export async function openPlugin(page: Page, host: LeaseHost) {
   await page.goto(host.url);
   await menu(page);
   await pressEnter(page, 'button', 'Orbi');
-  await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
-  await openServices(page);
+  await expect(page.getByTestId('plugin-surface-title')).toHaveText(/^(Work|Services)$/);
 }
 
-export async function openRoute(page: Page, route: 'Issues' | 'Runs' | 'Blockers') {
-  await page.getByTestId('orbi-navigation').getByRole('button', { name: `Open ${route}`, exact: true }).focus();
-  await page.keyboard.press('Enter');
+// Persistent Work / Services / Runs navigation, keyboard-only activation.
+export async function openNav(page: Page, route: 'Work' | 'Services' | 'Runs') {
+  await pressEnter(page, 'button', `Open ${route}`);
   await expect(page.getByTestId('plugin-surface-title')).toHaveText(route);
+}
+
+export async function openWork(page: Page, host: LeaseHost) {
+  await openPlugin(page, host);
+  await openNav(page, 'Work');
+  await expect(page.getByTestId('orbi-work-heading')).toBeVisible();
+}
+
+export async function openServices(page: Page, host: LeaseHost) {
+  await openPlugin(page, host);
+  await openNav(page, 'Services');
+  await expect(page.getByTestId('orbi-services-heading')).toBeVisible();
 }
 
 // Startup-only inventory authorization is separate from the authorized catalog:
@@ -46,7 +49,7 @@ export async function configureHost(host: LeaseHost, kind: 'available' | 'norepo
   await cli(host, 'reload', 'paseo-orbi');
 }
 
-export async function assertOverviewState(page: Page, state: 'complete' | 'partial' | 'unconfigured') {
+export async function assertServicesState(page: Page, state: 'complete' | 'partial' | 'unconfigured') {
   if (state === 'complete') {
     await expect(page.getByText('Services: Current', { exact: true })).toBeVisible();
     await expect(page.getByText('1 of 3 groups needs attention', { exact: true })).toBeVisible();
@@ -55,8 +58,10 @@ export async function assertOverviewState(page: Page, state: 'complete' | 'parti
     await expect(page.getByText('Partial · units may be missing.', { exact: true })).toBeVisible();
     await expect(page.getByText('installed: process_failed', { exact: true })).toBeVisible();
   } else {
-    await page.getByRole('button', { name: 'Set up repositories', exact: true }).click();
-    await expect(page.getByText(/Unconfigured: ask the operator/)).toBeVisible();
+    // One notice with an instructions-only guide; no repository authority.
+    await expect(page.getByText('Repositories aren’t linked. Link repositories to see GitHub issues.', { exact: true })).toBeVisible();
+    await pressEnter(page, 'button', 'Setup guide');
+    await expect(page.getByText(/PASEO_ORBI_CONFIG/)).toBeVisible();
   }
   // No state may claim confirmed absence without a current complete empty read.
   await expect(page.getByText('No Orbi units found.', { exact: true })).toHaveCount(0);
@@ -65,13 +70,13 @@ export async function assertOverviewState(page: Page, state: 'complete' | 'parti
 export type OverviewCase = {
   id: string; scenario: string; state: 'complete' | 'partial' | 'unconfigured';
   theme: string; viewport: { width: number; height: number };
-  supplemental?: boolean; expanded?: string;
+  supplemental?: boolean; details?: string;
 };
 
 // Capture contract: actual pixels, declared dimensions, source/version/host/state
 // metadata and inspection:null. Automatic capture never blesses its own image.
 export async function captureOverview(page: Page, lease: Lease, browserVersion: string, c: OverviewCase) {
-  await assertOverviewState(page, c.state);
+  await assertServicesState(page, c.state);
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(1000); // real geometry settles after resize; no fake clocks
   const geometry = () => page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
