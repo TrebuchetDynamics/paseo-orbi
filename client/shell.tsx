@@ -82,6 +82,13 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   // read failure (including one that retained previous data) keeps the retry.
   const catalogReadFailed = query.observation?.problems.some(problem => problem.code === 'refresh_failed') ?? false;
   const unconfiguredCatalog = catalog?.state === 'unconfigured' && !catalogReadFailed;
+  // A catalog that was actually read (configured, or confirmed unconfigured)
+  // confirms this host's repository associations; a failed, invalid or loading
+  // catalog cannot.
+  const catalogConfirmed = !catalogReadFailed && (catalog?.state === 'configured' || unconfiguredCatalog);
+  // The service details view owns its own facts: the shared repository notice and
+  // Setup guide are suppressed there, and stay on every other screen.
+  const serviceDetail = route === 'services' && selectedService !== null;
   const selectedDeployment = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
   const featureKey = `${props.host.id}:${selectedDeployment?.id}:${selectedDeployment?.repo}`;
   // Work remounts on a host or catalog-identity change, so a repository choice
@@ -115,7 +122,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
       {transport !== 'current' && <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>{`Catalog: ${!connected ? 'offline' : transport}`}</Text>}
       {!!catalogProblems.length && <Text accessibilityRole="alert" style={text}>{catalogProblems.map(p => `${p.source}: ${p.code}`).join('; ')}</Text>}
-      {(!catalog || unconfiguredCatalog || catalog.state === 'invalid' || catalogReadFailed) && <View accessibilityLabel="Orbi setup" testID="orbi-setup" style={{ gap: 8 }}>
+      {!serviceDetail && (!catalog || unconfiguredCatalog || catalog.state === 'invalid' || catalogReadFailed) && <View accessibilityLabel="Orbi setup" testID="orbi-setup" style={{ gap: 8 }}>
         <Text style={text}>{!catalog
           ? (transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.')
           : catalogReadFailed && !unconfiguredCatalog
@@ -144,7 +151,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
     {route === 'services' ? <HostServices
       hostId={props.host.id} hostLabel={props.host.label} connected={connected} foreground={foreground}
       theme={props.theme} compact={props.layout.compact}
-      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog}
+      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} catalogConfirmed={catalogConfirmed}
       openScreen={openScreen} query={inventory} selected={selectedService}
       onSelect={label => setSelectedService(label)}
       onBack={() => { restoreList.current = true; setSelectedService(null); }} />

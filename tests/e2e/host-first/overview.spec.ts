@@ -68,10 +68,15 @@ test(titles[0], async ({ page, lease }) => {
   // Keyboard-only diagnostics; raw unit data stays off every row.
   await pressEnter(page, 'button', 'Details for Example/project');
   await expect(page.getByTestId('orbi-service-details-heading')).toHaveText(/^Service details · /);
-  await expect(page.getByText('The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.', { exact: true })).toBeVisible();
   await expect(page.getByText('Slot 1 · Worker running · Timer waiting', { exact: true })).toBeVisible();
   await expect(page.getByText('Slot 2 · Worker activating/start · Timer failed', { exact: true })).toBeVisible();
   await expect(page.getByText('Slot 3 · Worker active/exited · Timer not observed', { exact: true })).toBeVisible();
+  // The slot explanation and raw unit data are revealed, not leading: the
+  // default detail view shows the service and its slot status only.
+  await expect(page.getByText('The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('orbi-service-units')).toHaveCount(0);
+  await pressEnter(page, 'button', 'View diagnostics');
+  await expect(page.getByText('The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.', { exact: true })).toBeVisible();
   await expect(page.getByTestId('orbi-service-units')).toContainText('orbi-demo@1.service');
   // Back restores the same list, in the same failure-first order.
   await pressEnter(page, 'button', 'Back to services');
@@ -85,8 +90,13 @@ test(titles[1], async ({ page, lease }) => {
   await setScenario(host, 'available'); await configureHost(host, 'available');
   await openServices(page, host);
   await pressEnter(page, 'button', 'Details for Example/project');
-  await expect(page.getByText(/Matches configured deployment Demo \(Example\/project\) by unit name/)).toBeVisible();
+  // The leading line names the match; the full association context is one
+  // explicit diagnostics activation away.
+  await expect(page.getByText('Matches configured deployment Demo (Example/project) by unit name.', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Unit origin is not verified; this association is display-only\./)).toHaveCount(0);
   await expect(page.getByText(/Unit activity does not establish issue delivery\./)).toBeVisible();
+  await pressEnter(page, 'button', 'View diagnostics');
+  await expect(page.getByText(/Unit origin is not verified; this association is display-only\./)).toBeVisible();
   // The authorized association is the only drill-down route.
   await pressEnter(page, 'button', 'View repository Demo');
   await expect(page.getByTestId('plugin-surface-title')).toHaveText('Issues');
@@ -109,6 +119,9 @@ test(titles[2], async ({ page, lease }) => {
   await expect(unclaimed.getByText('Unlinked', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^View repository / })).toHaveCount(0);
   await pressEnter(page, 'button', 'Details for orbi-unclaimed');
+  await expect(page.getByText('Not linked to a repository.', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Discovered on this host only; no configured deployment claims this unit name/)).toHaveCount(0);
+  await pressEnter(page, 'button', 'View diagnostics');
   await expect(page.getByText(/Discovered on this host only; no configured deployment claims this unit name/)).toBeVisible();
 });
 
@@ -143,8 +156,10 @@ test(titles[4], async ({ page, lease }) => {
   await expect(page.getByText('Demo (Example/project): unsupported_source_profile', { exact: true })).toBeVisible();
   await expect(page.getByText(/Ask the operator to repair the authorized configuration\/source profile/)).toBeVisible();
   await pressEnter(page, 'button', 'Details for Example/project');
-  await expect(page.getByText(/its source profile is unsupported for repository detail\. This compatibility limit does not mean the runner is broken\./)).toBeVisible();
+  await expect(page.getByText('Source profile unsupported for repository detail.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^View repository / })).toHaveCount(0);
+  await pressEnter(page, 'button', 'View diagnostics');
+  await expect(page.getByText(/its source profile is unsupported for repository detail\. This compatibility limit does not mean the runner is broken\./)).toBeVisible();
 });
 
 test(titles[5], async ({ page, lease }) => {
@@ -263,7 +278,10 @@ test(hostFirstCaptureTitle, async ({ page, lease, browser }) => {
     if (c.details) {
       await pressEnter(page, 'button', `Details for ${c.details}`);
       await expect(page.getByTestId('orbi-service-details-heading')).toHaveText(/^Service details · /);
-      await expect(page.getByTestId('orbi-service-units')).toBeVisible();
+      // The captured detail view leads with the service and its slot status:
+      // raw units and the slot explanation stay behind View diagnostics.
+      await expect(page.getByTestId('orbi-service-units')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'View diagnostics', exact: true })).toBeVisible();
     }
     await captureOverview(page, lease, browser.version(), c);
   }
