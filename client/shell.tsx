@@ -87,6 +87,13 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   const unconfiguredNotice = route === 'runs'
     ? 'Link a repository to see its runs.'
     : 'Repositories aren’t linked. Link repositories to see GitHub issues.';
+  // A catalog that was actually read (configured, or confirmed unconfigured)
+  // confirms this host's repository associations; a failed, invalid or loading
+  // catalog cannot.
+  const catalogConfirmed = !catalogReadFailed && (catalog?.state === 'configured' || unconfiguredCatalog);
+  // The service details view owns its own facts: the shared repository notice and
+  // Setup guide are suppressed there, and stay on every other screen.
+  const serviceDetail = route === 'services' && selectedService !== null;
   const selectedDeployment = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
   // Only a currently available entry, or a valid deployment deep link, is
   // selectable: where the catalog offers no selection the fallback selector is
@@ -126,7 +133,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
       {transport !== 'current' && <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>{`Catalog: ${!connected ? 'offline' : transport}`}</Text>}
       {!!catalogProblems.length && <Text accessibilityRole="alert" style={text}>{catalogProblems.map(p => `${p.source}: ${p.code}`).join('; ')}</Text>}
-      {(!catalog || unconfiguredCatalog || catalog.state === 'invalid' || catalogReadFailed) && <View accessibilityLabel="Orbi setup" testID="orbi-setup" style={{ gap: 8 }}>
+      {!serviceDetail && (!catalog || unconfiguredCatalog || catalog.state === 'invalid' || catalogReadFailed) && <View accessibilityLabel="Orbi setup" testID="orbi-setup" style={{ gap: 8 }}>
         <Text style={text}>{!catalog
           ? (transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.')
           : catalogReadFailed && !unconfiguredCatalog
@@ -155,7 +162,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
     {route === 'services' ? <HostServices
       hostId={props.host.id} hostLabel={props.host.label} connected={connected} foreground={foreground}
       theme={props.theme} compact={props.layout.compact}
-      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog}
+      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} catalogConfirmed={catalogConfirmed}
       openScreen={openScreen} query={inventory} selected={selectedService}
       onSelect={label => setSelectedService(label)}
       onBack={() => { restoreList.current = true; setSelectedService(null); }} />

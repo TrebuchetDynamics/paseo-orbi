@@ -105,7 +105,11 @@ const unitLine = (unit: InventoryUnit) => {
   const template = unit.id.includes('@.') ? ' (template, not a running service)' : '';
   return `${unit.id}: ${runtime}; unit file ${unit.unitFileState ?? 'not observed'}${template}`;
 };
-const associationText = (group: InventoryGroup, entry: DeploymentCatalog['entries'][number] | null) => {
+// The full association context belongs to View diagnostics. An unlinked
+// conclusion is only stated when this host's repository catalog was actually
+// read, so a failed, invalid or still-loading catalog never reads as "not
+// linked"; discovery alone is not authority either way.
+const associationText = (group: InventoryGroup, entry: DeploymentCatalog['entries'][number] | null, catalogConfirmed: boolean) => {
   if (group.association === 'matched') {
     return entry
       ? `Matches configured deployment ${entry.label} (${entry.repo}) by unit name. Unit origin is not verified; this association is display-only.`
@@ -117,8 +121,21 @@ const associationText = (group: InventoryGroup, entry: DeploymentCatalog['entrie
   if (group.association === 'ambiguous') {
     return 'Multiple configured deployments claim this unit prefix. Repository detail stays unavailable until the operator makes the association unique.';
   }
+  if (!catalogConfirmed) return 'This host’s repository catalog could not be read, so no repository link is confirmed. Discovery is not authority.';
   return 'Discovered on this host only; no configured deployment claims this unit name, so repository detail is unavailable. Discovery is not authority.';
 };
+// One short association line leads the service facts; the long explanation is
+// revealed by View diagnostics.
+function associationNote(group: InventoryGroup, entry: DeploymentCatalog['entries'][number] | null, catalogConfirmed: boolean): string {
+  if (group.association === 'matched') {
+    return entry
+      ? `Matches configured deployment ${entry.label} (${entry.repo}) by unit name.`
+      : 'Associated deployment is not in the current authorized catalog.';
+  }
+  if (group.association === 'incompatible') return 'Source profile unsupported for repository detail.';
+  if (group.association === 'ambiguous') return 'Multiple configured deployments claim this unit prefix.';
+  return catalogConfirmed ? 'Not linked to a repository.' : 'Repository link not confirmed: this host’s repository catalog could not be read.';
+}
 
 // These names are presentation only: never use a slug for authorization or navigation.
 const shortName = (label: string) => /^orbi-(.+)-[a-f0-9]{8}$/.exec(label)?.[1] ?? label;
@@ -372,18 +389,23 @@ function ServiceRow({ group, name, theme, entries, openScreen, showUnlinked, las
   </View>;
 }
 
-// Host-scoped diagnostic view. A selected label is only a selection: every fact
-// is resolved again from the selected host's current inventory evidence, so a
-// passed or stale unit/path can never become authority for what is shown.
-export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries, openScreen, onBack, lastSeen }: {
+// Host-scoped detail view. A selected label is only a selection: every fact is
+// resolved again from the selected host's current inventory evidence, so a
+// passed or stale unit/path can never become authority for what is shown. The
+// service name, failed-first slot facts and freshness lead; setup material and
+// the raw unit records never occupy the default view.
+export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries, openScreen, onBack, lastSeen, catalogConfirmed }: {
   hostId: string; hostLabel: string; theme: PluginHostProps['theme'];
   group: InventoryGroup | null; name: string | null;
   entries: DeploymentCatalog['entries'] | null;
   openScreen: PluginClientContext['openScreen'];
   onBack: () => void;
-  // Retained evidence keeps its last successful time here too, so the raw unit
-  // data on this view never reads as a current observation.
+  // Retained evidence keeps its last successful time here too, so the facts on
+  // this view never read as a current observation.
   lastSeen: string | null;
+  // True only when this host's repository catalog was actually read, so the
+  // unlinked statement is confirmed rather than inferred from a failed read.
+  catalogConfirmed: boolean;
 }) {
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
@@ -391,22 +413,33 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
   // Only a group with numeric slots gets the explanation: an absent slot is not
   // invented and an empty list gains no diagnostic clutter.
   const slots = group === null ? [] : slotLines(group);
+  // Diagnostics are a local disclosure: activating it reads nothing and changes
+  // no state outside this view. A different selection starts closed again.
+  const [diagnostics, setDiagnostics] = useState(false);
+  useEffect(() => { setDiagnostics(false); }, [group?.label]);
   return <View testID="orbi-service-details" style={{ gap: 8 }}>
     <Text accessibilityRole="header" testID="orbi-service-details-heading" style={text}>{`Service details · ${hostLabel}`}</Text>
     <ActionButton label="Back to services" accessibilityName="Back to services" theme={theme} onPress={onBack} />
     {group === null || name === null
       ? <Text testID="orbi-service-details-missing" style={text}>This service is not in the current host evidence. Refresh services to re-read this host; no other host or passed unit is used.</Text>
       : <>
+        {/* Name, failed-first slot facts and freshness lead; setup and raw units never occupy this view. */}
         <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
-        {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
-        <Text style={text}>{associationText(group, entry)}</Text>
-        {slots.length > 0 && <Text testID="orbi-service-slot-explanation" style={text}>{slotExplanation}</Text>}
         {slots.map(line => <Text key={line} style={text}>{line}</Text>)}
-        <Text style={text}>Unit activity does not establish issue delivery. Raw unit data follows.</Text>
-        <View testID="orbi-service-units" style={{ gap: 2 }}>
-          {group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={secondary}>{unitLine(unit)}</Text>)}
-        </View>
+        {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
+        <Text testID="orbi-service-association" style={text}>{associationNote(group, entry, catalogConfirmed)}</Text>
+        <Text style={text}>Unit activity does not establish issue delivery.</Text>
         {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} />}
+        <ActionButton label="View diagnostics" accessibilityName="View diagnostics" expanded={diagnostics}
+          theme={theme} onPress={() => setDiagnostics(value => !value)} />
+        {diagnostics && <View accessibilityLabel="Service diagnostics" testID="orbi-service-diagnostics" style={{ gap: 8 }}>
+          {slots.length > 0 && <Text testID="orbi-service-slot-explanation" style={text}>{slotExplanation}</Text>}
+          <Text style={text}>{associationText(group, entry, catalogConfirmed)}</Text>
+          <Text style={text}>Raw unit data follows.</Text>
+          <View testID="orbi-service-units" style={{ gap: 2 }}>
+            {group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={secondary}>{unitLine(unit)}</Text>)}
+          </View>
+        </View>}
       </>}
   </View>;
 }
@@ -414,10 +447,13 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
 // The Services screen owns the observed host inventory list. It is scoped to the
 // selected host, shows every observed group failures first, and hands one group
 // at a time to the diagnostic view; it reads nothing else.
-export function HostServices({ hostId, hostLabel, theme, compact, connected, foreground, entries, catalogUnconfigured, openScreen, query, selected, onSelect, onBack }: {
+export function HostServices({ hostId, hostLabel, theme, compact, connected, foreground, entries, catalogUnconfigured, catalogConfirmed, openScreen, query, selected, onSelect, onBack }: {
   hostId: string; hostLabel: string; theme: PluginHostProps['theme']; compact: boolean;
   connected: boolean; foreground: boolean;
   entries: DeploymentCatalog['entries'] | null; catalogUnconfigured: boolean;
+  // The catalog was actually read (configured or confirmed unconfigured), so an
+  // unlinked service may say so instead of presenting an unknown as a fact.
+  catalogConfirmed: boolean;
   openScreen: PluginClientContext['openScreen'];
   query: ReturnType<typeof useHostServicesQuery>;
   // One selected family label; the list survives Back without a remount.
@@ -436,7 +472,7 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
     const group = families.find(candidate => candidate.label === selected) ?? null;
     return <ServiceDetails hostId={hostId} hostLabel={hostLabel} theme={theme} group={group}
       name={group === null ? null : names.get(group.label)!} entries={entries} openScreen={openScreen} onBack={onBack}
-      lastSeen={stale ? observation!.lastSuccessfulAt : null} />;
+      lastSeen={stale ? observation!.lastSuccessfulAt : null} catalogConfirmed={catalogConfirmed} />;
   }
   const attention = families.filter(group => summarizeFamily(group).facts.includes('failed')).length;
   const off = data?.state === 'off';
