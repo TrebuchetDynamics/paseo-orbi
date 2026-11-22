@@ -25,7 +25,7 @@ nothing.
 - **Work** — the default view for a configured repository: issue rows with open-issue icon, number, wrapping title, label chips and read-only Inspect/Open-on-GitHub actions, plus open/closed/all and exact-label filters. One health summary links straight to Services; configured deployments, one loaded detail with timers/services, recorded health, capacity and one explicit presence/type check of an optional designated shortcut stay under **Configured repositories**.
 - **Services** — the host-scoped service screen and the default landing for a host without linked repositories: every observed group failures first, with worker and scheduler facts, the first failed slot and no hidden inventory. **Details** opens a separate host-scoped diagnostic view with raw unit data and, only for an operator-granted deployment, Start/Stop/Restart; **Back to services** returns to the list.
 - **Issues** — lifecycle pages, trusted structured reports, on-demand dependency evidence.
-- **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks.
+- **Runs** — attributed run identity, safe activity, scoped events, observed PR-head checks. Without a linked repository it shows one instruction, **Link a repository to see its runs.**, with the shared **Setup guide** and no selection prompt.
 - **Blockers** — reported failures and waits, source attribution, metadata only; no recovery controls.
 
 Monitoring is read-only: no timer or unit mutation invented by this plugin, no
@@ -54,7 +54,8 @@ NOT_RUN (#23).
 A host without linked repositories lands on **Services** and shows one notice —
 "Repositories aren’t linked. Link repositories to see GitHub issues." — with a
 **Setup guide** that only explains the operator procedure; an invalid catalog
-names the repair instead. The operator supplies the authorization and explicitly
+names the repair instead. **Runs** keeps the same one **Setup guide** but names
+its own capability: "Link a repository to see its runs." The operator supplies the authorization and explicitly
 reloads the plugin. Refresh only rereads startup configuration; it cannot
 configure or reload.
 

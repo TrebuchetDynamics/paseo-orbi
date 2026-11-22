@@ -246,6 +246,16 @@ test(titles[8], async ({ page, lease }) => {
     await expect(page.getByTestId('orbi-work-heading')).toBeVisible();
     await expect(page.getByText('Repositories aren’t linked. Link repositories to see GitHub issues.', { exact: true })).toHaveCount(1);
     await expect(page.getByTestId('orbi-work-issues')).toHaveCount(0);
+    // Runs shows its own one instruction with the one Setup guide: no
+    // GitHub-issues boilerplate and no selection prompt that cannot be satisfied.
+    await openNav(page, 'Runs');
+    await expect(page.getByText('Link a repository to see its runs.', { exact: true })).toHaveCount(1);
+    await expect(page.getByText('Repositories aren’t linked. Link repositories to see GitHub issues.', { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/select a repository to browse/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Select Demo', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Setup guide', exact: true })).toHaveCount(1);
+    await pressEnter(page, 'button', 'Setup guide');
+    await expect(page.getByText(/PASEO_ORBI_CONFIG/)).toBeVisible();
   } finally {
     lease.hosts.splice(lease.hosts.length - unconfigured.hosts.length);
     await unconfigured.cleanup();

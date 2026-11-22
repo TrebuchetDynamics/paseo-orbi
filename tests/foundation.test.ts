@@ -458,7 +458,12 @@ describe('package_and_registration', () => {
         expect(setupText()).toContain('Host service inventory is independent');
         expect(setupText()).not.toMatch(/\bSave\b|auto-?discover|Discover repositories/);
         if (catalog.state === 'unconfigured') {
-          expect(json()).toContain('Repositories aren’t linked. Link repositories to see GitHub issues.');
+          // Runs names its own capability in the one shared notice; every other
+          // route keeps the issue copy and never shows both.
+          expect(json()).toContain(screen.id === 'runs'
+            ? 'Link a repository to see its runs.'
+            : 'Repositories aren’t linked. Link repositories to see GitHub issues.');
+          if (screen.id === 'runs') expect(json()).not.toContain('Repositories aren’t linked.');
           // A confirmed unconfigured catalog is not a read failure: rereading startup
           // configuration cannot repair it, so no catalog Refresh is offered.
           expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
@@ -470,6 +475,10 @@ describe('package_and_registration', () => {
       else expect(json()).toContain('No configured deployments.');
       expect(json()).not.toMatch(/Observation status:|Last success:|Observed:|SECRET_CANARY/);
       if (screen.id !== 'fleet') expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
+      // None of these catalogs offers a selection, so no route renders the
+      // impossible fallback prompt; loading/invalid/rejected stay labelled as such.
+      expect(renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n'))
+        .not.toContain('select a repository to browse');
       expect(host.readCatalog).toHaveBeenCalledTimes(1);
       if (catalog.state === 'invalid') {
         const button = () => renderer.root.findByProps({ accessibilityLabel: 'Refresh' });
