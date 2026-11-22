@@ -442,7 +442,6 @@ it('service_details_lead_with_the_service_and_slot_status_before_setup', async (
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup guide' })).toHaveLength(1);
   expect(renderer.root.findByProps({ accessibilityLabel: 'Details for orbi-unclaimed' })).toBeDefined();
 });
-});
 
 it('validated catalog enables bounded exact-repo issue reads while discovery-only inventory stays independent', async () => {
   vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
