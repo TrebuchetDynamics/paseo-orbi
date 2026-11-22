@@ -322,6 +322,75 @@ it('services_screen_shows_off_without_a_feature_read_or_enabling_action', async 
   expect(processPort).not.toHaveBeenCalled();
 });
 
+it('service_details_lead_with_the_service_and_slot_status_before_setup', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+  // Synthetic, unlinked host evidence: one loaded idle worker and one waiting
+  // timer. Without PASEO_ORBI_CONFIG the catalog is confirmed unconfigured, so
+  // the shared repository notice and its guide exist on the Services list.
+  const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockImplementation(async operation => operation === 'runtime'
+    ? 'orbi-unclaimed@1.service loaded inactive dead Orbi Runner\norbi-unclaimed@1.timer loaded active waiting Orbi Timer\n'
+    : 'orbi-unclaimed@1.service enabled\norbi-unclaimed@1.timer enabled\n');
+  const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+  const stopServer = serverEntry({ handle: (contract: any, handler: any) => {
+    handlers.set(contract.name, async input => contract.output.parse(await handler(contract.input.parse(input))));
+  } } as PluginServerContext);
+  cleanups.push(stopServer);
+  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory })) {
+    mock.mockReset().mockImplementation(input => handlers.get(name)!(input));
+  }
+  host.readControl.mockReset();
+  const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
+  const stopClient = clientEntry({ addScreen: (screen: any) => { screens.set(screen.id, screen.Component); return vi.fn(); }, addSidebarHeaderItem: () => vi.fn(), openScreen: vi.fn() } as unknown as PluginClientContext);
+  cleanups.push(stopClient);
+  const query = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => query.clear());
+  const theme = { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111', surface1: '#222', surface2: '#333', border: '#555', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } };
+  vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
+  const Screen = screens.get('services')!;
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<QueryClientProvider client={query}><Screen theme={theme} host={{ id: 'host-a', label: 'Host A' }} layout={{ compact: true, platform: 'ios' }} params={{}} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  // Bounded wait for the real catalog and inventory reads to settle.
+  for (let n = 0; n < 200 && !text().includes('orbi-unclaimed'); n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); });
+  const press = async (label: string) => {
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress());
+    for (let n = 0; n < 20 && query.isFetching() > 0; n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); });
+  };
+  // The shared repository notice and guide belong to the list.
+  expect(text()).toContain('Repositories aren’t linked. Link repositories to see GitHub issues.');
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup guide' })).toHaveLength(1);
+  const reads = host.readInventory.mock.calls.length;
+  const processCalls = hostInventory.mock.calls.length;
+  await press('Details for orbi-unclaimed');
+  const page = text();
+  // Name, then the failed-first slot facts, then the association note.
+  expect(page.indexOf('orbi-unclaimed')).toBeLessThan(page.indexOf('Slot 1 · Worker idle · Timer waiting'));
+  expect(page.indexOf('Slot 1 · Worker idle · Timer waiting')).toBeLessThan(page.indexOf('Not linked to a repository.'));
+  // Neither the setup notice and guide nor raw units occupy the default view.
+  expect(renderer.root.findAllByProps({ testID: 'orbi-setup' })).toHaveLength(0);
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup guide' })).toHaveLength(0);
+  expect(page).not.toContain('Repositories aren’t linked.');
+  expect(page).not.toContain('orbi-unclaimed@1.service');
+  expect(renderer.root.findAllByProps({ testID: 'orbi-service-units' })).toHaveLength(0);
+  const toggle = () => renderer.root.findByProps({ accessibilityLabel: 'View diagnostics' });
+  expect(toggle().props.accessibilityState).toMatchObject({ expanded: false });
+  // The accessible expanded state and the existing evidence agree, with no
+  // additional read and no mutation.
+  await press('View diagnostics');
+  expect(toggle().props.accessibilityState).toMatchObject({ expanded: true });
+  expect(text()).toContain('The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.');
+  expect(text()).toContain('Discovered on this host only; no configured deployment claims this unit name');
+  expect(text()).toContain('orbi-unclaimed@1.service: inactive/dead, load loaded');
+  expect(host.readInventory.mock.calls.length).toBe(reads);
+  expect(hostInventory.mock.calls.length).toBe(processCalls);
+  expect(host.readControl).not.toHaveBeenCalled();
+  // Back returns to the same permanent list with its one notice.
+  await press('Back to services');
+  expect(renderer.root.findByProps({ testID: 'orbi-services-heading' }).props.children).toBe('Services · Host A');
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup guide' })).toHaveLength(1);
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Details for orbi-unclaimed' })).toBeDefined();
+});
+
 it('validated catalog enables bounded exact-repo issue reads while discovery-only inventory stays independent', async () => {
   vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
   const f = await fixture(); cleanups.push(f.cleanup);

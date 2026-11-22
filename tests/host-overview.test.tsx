@@ -162,9 +162,16 @@ describe('Services screen without accordions', () => {
     expect(details.indexOf('Slot 4 · Worker running · Timer failed')).toBeLessThan(details.indexOf('Slot 1 · Worker idle · Timer waiting'));
     expect(details).toContain('Slot 01 · Worker activating/start · Timer not observed');
     expect(details).toContain('Slot 10 · Worker not observed · Timer waiting');
-    expect(details).toContain('orbi@.service: runtime not observed; unit file enabled (template, not a running service)');
-    expect(details).toContain('Discovery is not authority');
     expect(details).toContain('Unit activity does not establish issue delivery');
+    // Raw unit records and the full association context need the disclosure.
+    expect(details).not.toContain('orbi@.service');
+    expect(details).not.toContain('Discovery is not authority');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-units' })).toHaveLength(0);
+    await press('View diagnostics');
+    expect(host.readInventory.mock.calls.length).toBe(reads);
+    const raw = text(renderer);
+    expect(raw).toContain('orbi@.service: runtime not observed; unit file enabled (template, not a running service)');
+    expect(raw).toContain('Discovery is not authority');
     // Back returns to the same list, with the same rows and order.
     await press('Back to services');
     expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(1);
@@ -172,7 +179,7 @@ describe('Services screen without accordions', () => {
     expect(rowPage(renderer, 'orbi')).not.toContain('orbi@');
   });
 
-  it('names the worker and the timer in each slot and explains both once before the summaries', async () => {
+  it('names the worker and the timer in each slot and explains both once behind the diagnostics disclosure', async () => {
     host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [
       unit('orbi@3.service', 'service', 'failed', 'failed'),
       unit('orbi@1.service', 'service', 'inactive', 'dead'), unit('orbi@1.timer', 'timer', 'active', 'waiting'),
@@ -183,15 +190,18 @@ describe('Services screen without accordions', () => {
     expect(details).toContain('Slot 3 · Worker failed · Timer not observed');
     expect(details).toContain('Slot 1 · Worker idle · Timer waiting');
     expect(details.indexOf('Slot 3 · Worker failed · Timer not observed')).toBeLessThan(details.indexOf('Slot 1 · Worker idle · Timer waiting'));
-    // One explanation for the list, in reading order before every slot summary.
+    // The slot explanation is not part of the default detail view.
+    expect(details).not.toContain('The timer schedules a check.');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-slot-explanation' })).toHaveLength(0);
+    await press('View diagnostics');
+    // One explanation for the list, never once per slot summary.
     const explanation = renderer.root.findAllByProps({ testID: 'orbi-service-slot-explanation' });
     expect(explanation).toHaveLength(1);
     expect(explanation[0].props.children).toBe('The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.');
-    expect(details.indexOf('The timer schedules a check.')).toBeLessThan(details.indexOf('Slot 3 · Worker failed'));
-    expect(details.match(/The timer schedules a check\./g)).toHaveLength(1);
+    expect(text(renderer).match(/The timer schedules a check\./g)).toHaveLength(1);
     // Waiting is a timer fact only: it never claims a queued issue or a second worker.
-    expect(details).toContain('Unit activity does not establish issue delivery');
-    expect(details).not.toMatch(/queued|two workers run/i);
+    expect(text(renderer)).toContain('Unit activity does not establish issue delivery');
+    expect(text(renderer)).not.toMatch(/queued|two workers run/i);
   });
 
   it('changes only the worker fact when an idle worker starts and the timer keeps waiting', async () => {
@@ -234,6 +244,7 @@ describe('Services screen without accordions', () => {
     ])] }));
     const { renderer, press } = await render();
     await press('Details for orbi');
+    await press('View diagnostics');
     expect(renderer.root.findAllByProps({ testID: 'orbi-service-slot-explanation' })).toHaveLength(0);
     expect(text(renderer)).not.toContain('The timer schedules a check.');
     expect(text(renderer)).toContain('orbi@.service: runtime not observed');
@@ -316,6 +327,9 @@ describe('Services screen without accordions', () => {
     expect(repositoryActions(renderer)).toHaveLength(0);
     expect(text(renderer)).not.toContain(labels[0]);
     await press('Details for short-trunc');
+    expect(text(renderer)).toContain('short-trunc');
+    expect(text(renderer)).not.toContain(labels[0]);
+    await press('View diagnostics');
     expect(text(renderer)).toContain(labels[0]);
   });
 
@@ -323,6 +337,7 @@ describe('Services screen without accordions', () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press, switchTo } = await render();
     await press('Details for Example/project');
+    await press('View diagnostics');
     expect(text(renderer)).toContain('orbi-demo@1.service');
     host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
     host.readInventory.mockResolvedValue(hostB);
@@ -350,6 +365,130 @@ describe('Services screen without accordions', () => {
     await act(async () => finishA(hostA)); await settle();
     expect(text(renderer)).not.toContain('Failed');
     expect(client.getQueryData(['paseo-orbi', 'host-a', 'host', 'services.inventory'])).toBeUndefined();
+  });
+});
+
+describe('service details lead with the service and slot status', () => {
+  // The phone-sized (compact) detail view the issue describes: one unlinked
+  // synthetic family with an idle worker and a waiting timer.
+  const unlinked = inventory({ state: 'complete', groups: [family('orbi-unclaimed', 'unmatched', null, [
+    unit('orbi-unclaimed@1.service', 'service', 'inactive', 'dead'),
+    unit('orbi-unclaimed@1.timer', 'timer', 'active', 'waiting'),
+  ])] });
+  const explanationCopy = 'The timer schedules a check. The worker runs it. They are two parts of the same slot, not two workers.';
+  const association = (renderer: ReactTestRenderer) => renderer.root.findByProps({ testID: 'orbi-service-association' });
+  const diagnosticsToggle = (renderer: ReactTestRenderer) => renderer.root.findByProps({ accessibilityLabel: 'View diagnostics' });
+
+  it('leads with the service name and slot status, keeps setup and raw units out, and reveals diagnostics on request', async () => {
+    host.readInventory.mockResolvedValue(unlinked);
+    const { renderer, press } = await render();
+    const catalogReads = host.readCatalog.mock.calls.length;
+    const inventoryReads = host.readInventory.mock.calls.length;
+    await press('Details for orbi-unclaimed');
+    const page = text(renderer);
+    // Name and the failed-first slot facts come before the association note.
+    expect(page.indexOf('orbi-unclaimed')).toBeLessThan(page.indexOf('Slot 1 · Worker idle · Timer waiting'));
+    expect(page.indexOf('Slot 1 · Worker idle · Timer waiting')).toBeLessThan(page.indexOf('Not linked to a repository.'));
+    expect(association(renderer).props.children).toBe('Not linked to a repository.');
+    expect(page).toContain('Unit activity does not establish issue delivery');
+    // Neither the shared repository notice and guide nor raw unit records occupy
+    // the default detail view.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-setup' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup guide' })).toHaveLength(0);
+    expect(page).not.toContain('Repositories aren’t linked.');
+    expect(page).not.toContain('PASEO_ORBI_CONFIG');
+    expect(page).not.toContain('orbi-unclaimed@1.service');
+    expect(page).not.toContain('load loaded');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-units' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-diagnostics' })).toHaveLength(0);
+    // Back stays a button above the facts.
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Back to services' }).props)
+      .toMatchObject({ accessibilityRole: 'button', accessibilityState: { disabled: false } });
+    expect(diagnosticsToggle(renderer).props)
+      .toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
+    expect(diagnosticsToggle(renderer).props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
+    // One activation reveals the existing #94 explanation, the full association
+    // context and the raw records, with no additional read and no mutation.
+    await press('View diagnostics');
+    const expanded = text(renderer);
+    expect(diagnosticsToggle(renderer).props.accessibilityState.expanded).toBe(true);
+    expect(expanded).toContain(explanationCopy);
+    expect(expanded).toContain('Discovered on this host only; no configured deployment claims this unit name');
+    expect(expanded).toContain('Raw unit data follows.');
+    expect(expanded).toContain('orbi-unclaimed@1.service: inactive/dead, load loaded');
+    expect(expanded).toContain('orbi-unclaimed@1.timer: active/waiting, load loaded');
+    expect(host.readInventory.mock.calls.length).toBe(inventoryReads);
+    expect(host.readCatalog.mock.calls.length).toBe(catalogReads);
+    expect(host.readControl).not.toHaveBeenCalled();
+    // Closing it returns to the leading facts only.
+    await press('View diagnostics');
+    expect(diagnosticsToggle(renderer).props.accessibilityState.expanded).toBe(false);
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-units' })).toHaveLength(0);
+    expect(text(renderer)).not.toContain(explanationCopy);
+  });
+
+  it('publishes Not linked to a repository only when this host catalog was read', async () => {
+    host.readInventory.mockResolvedValue(unlinked);
+    host.readCatalog.mockResolvedValue({ state: 'invalid', entries: [], problems: [] });
+    const { renderer, press } = await render();
+    await press('Details for orbi-unclaimed');
+    expect(text(renderer)).not.toContain('Not linked to a repository.');
+    expect(association(renderer).props.children).toBe('Repository link not confirmed: this host’s repository catalog could not be read.');
+    // Neither the setup notice nor the guide follows the service onto this view.
+    expect(renderer.root.findAllByProps({ testID: 'orbi-setup' })).toHaveLength(0);
+    await press('View diagnostics');
+    expect(text(renderer)).toContain('could not be read, so no repository link is confirmed');
+    expect(text(renderer)).not.toContain('Discovered on this host only');
+  });
+
+  it('keeps an unlinked claim confirmed only while the catalog read succeeds', async () => {
+    host.readInventory.mockResolvedValue(unlinked);
+    host.readCatalog.mockResolvedValue({ state: 'unconfigured', entries: [], problems: [] });
+    const { renderer, press } = await render();
+    await press('Details for orbi-unclaimed');
+    expect(association(renderer).props.children).toBe('Not linked to a repository.');
+    await press('Back to services');
+    host.readCatalog.mockRejectedValue(new Error('SECRET'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
+    // The shared notice keeps its failed read and retry on the list.
+    expect(text(renderer)).toContain('Catalog read failed');
+    await press('Details for orbi-unclaimed');
+    expect(text(renderer)).not.toContain('Not linked to a repository.');
+    expect(text(renderer)).not.toContain('SECRET');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-setup' })).toHaveLength(0);
+  });
+
+  it('opens diagnostics closed for every new selection and carries no previous service facts', async () => {
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [
+      family('orbi-a', 'unmatched', null, [unit('orbi-a@1.service', 'service', 'inactive', 'dead')]),
+      family('orbi-b', 'unmatched', null, [unit('orbi-b@1.service', 'service', 'active', 'running')]),
+    ] }));
+    const { renderer, press } = await render();
+    await press('Details for orbi-a');
+    await press('View diagnostics');
+    expect(diagnosticsToggle(renderer).props.accessibilityState.expanded).toBe(true);
+    expect(text(renderer)).toContain('orbi-a@1.service: inactive/dead, load loaded');
+    await press('Back to services');
+    await press('Details for orbi-b');
+    expect(diagnosticsToggle(renderer).props.accessibilityState.expanded).toBe(false);
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-units' })).toHaveLength(0);
+    expect(text(renderer)).not.toContain('orbi-a@1.service');
+    expect(text(renderer)).toContain('Slot 1 · Worker running · Timer not observed');
+  });
+
+  it('keeps granted actions and their confirmation beside the leading facts', async () => {
+    host.readCatalog.mockResolvedValue(catalog([{ ...demo, controls: { actions: ['start', 'stop'], slots: 2 } }]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    await press('Details for Example/project');
+    expect(text(renderer).indexOf('Slot 1 · Worker idle · Timer waiting'))
+      .toBeLessThan(text(renderer).indexOf('Matches configured deployment Demo (Example/project) by unit name.'));
+    await press('Actions for orbi-demo');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 1' })).toHaveLength(1);
+    await press('View diagnostics');
+    expect(host.readControl).not.toHaveBeenCalled();
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Start slot 1' })).toHaveLength(1);
+    expect(text(renderer)).toContain('orbi-demo@1.service: inactive/dead, load loaded');
   });
 });
 
