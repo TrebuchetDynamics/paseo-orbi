@@ -407,6 +407,134 @@ it('navigation_params_preselect_history_and_open_only_an_observed_run_once', asy
   expect(visible()).not.toContain('Detail evidence — loaded only on selection');
 });
 
+it('unconfigured_runs_shows_one_runs_notice_and_guide_without_a_selector_or_read', async () => {
+  vi.useFakeTimers();
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+  host.readCatalog.mockReset().mockResolvedValue({ state: 'unconfigured', entries: [], problems: [] });
+  host.readRuns.mockClear(); host.readRun.mockClear(); host.readFleet.mockClear();
+  host.readRuns.mockResolvedValue(observation([]));
+  const openScreen = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} params={{}} openScreen={openScreen} /></QueryClientProvider>); });
+  await settle(); await settle();
+  const lines = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join(''));
+  const text = () => lines().join('\n');
+  const visible = () => JSON.stringify(renderer.toJSON());
+  // One runs-specific instruction replaces the GitHub-issues setup message.
+  expect(lines().filter(line => line === 'Link a repository to see its runs.')).toHaveLength(1);
+  expect(visible()).not.toContain('Repositories aren’t linked. Link repositories to see GitHub issues.');
+  // No impossible selection prompt and no repeated host line on Runs.
+  expect(text()).not.toContain('select a repository to browse');
+  expect(text()).not.toContain('Selected host:');
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Setup guide')).toHaveLength(1);
+  // A confirmed unconfigured host never reads runs, and rereading startup
+  // configuration cannot repair it, so no catalog Refresh is offered either.
+  expect(host.readRuns).not.toHaveBeenCalled(); expect(host.readRun).not.toHaveBeenCalled();
+  expect(host.readFleet).not.toHaveBeenCalled();
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
+  expect(host.readCatalog).toHaveBeenCalledTimes(1);
+  // The one guide explains the operator procedure and applies nothing.
+  await act(async () => { renderer.root.findByProps({ accessibilityLabel: 'Setup guide' }).props.onPress(); });
+  await settle();
+  const guide = renderer.root.findByProps({ accessibilityLabel: 'Repository setup guide' })
+    .findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+  expect(guide).toContain('PASEO_ORBI_CONFIG');
+  expect(guide).toContain('does not configure authorization');
+  expect(host.readCatalog).toHaveBeenCalledTimes(1);
+  expect(host.readRuns).not.toHaveBeenCalled();
+  await act(async () => renderer.unmount()); client.clear();
+  expect(host.listeners.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('runs_catalog_loading_invalid_rejected_and_unavailable_are_never_mislabeled_unconfigured', async () => {
+  vi.useFakeTimers();
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+  host.readRuns.mockClear(); host.readRun.mockClear();
+  host.readRuns.mockResolvedValue(observation([]));
+  const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+  const states: Array<[string, () => void, string]> = [
+    ['loading', () => host.readCatalog.mockReset().mockImplementationOnce(() => new Promise(() => {})), 'Loading the selected host catalog.'],
+    ['invalid', () => host.readCatalog.mockReset().mockResolvedValue({ state: 'invalid', entries: [], problems: [{ source: 'config', code: 'invalid_config' }] }), 'Issue reads are unavailable'],
+    ['rejected', () => host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'invalid_config', problems: [{ source: 'config', code: 'config_mismatch' }] }], problems: [] }), 'config_mismatch'],
+    ['unavailable', () => host.readCatalog.mockReset().mockRejectedValue(new Error('SECRET_CANARY')), 'Catalog unavailable. Reconnect the selected host'],
+  ];
+  for (const [state, arrange, copy] of states) {
+    arrange();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} params={{}} openScreen={vi.fn()} /></QueryClientProvider>); });
+    await settle(); await settle();
+    const visible = () => JSON.stringify(renderer.toJSON());
+    const lines = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+    // The shared loading/repair copy stays; none of these states is a fresh
+    // confirmed-unconfigured catalog, so the runs instruction never appears.
+    expect(visible(), state).toContain(copy);
+    expect(visible(), state).not.toContain('Link a repository to see its runs.');
+    expect(lines(), state).not.toContain('select a repository to browse');
+    expect(visible(), state).not.toContain('SECRET_CANARY');
+    expect(host.readRuns, state).not.toHaveBeenCalled();
+    await act(async () => renderer.unmount()); client.clear();
+  }
+  // A confirmed unconfigured catalog whose next read fails is an unavailable
+  // read, not a fresh unconfigured confirmation: the runs instruction is withdrawn.
+  host.readCatalog.mockReset().mockResolvedValueOnce({ state: 'unconfigured', entries: [], problems: [] }).mockRejectedValue(new Error('SECRET_CANARY'));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} params={{}} openScreen={vi.fn()} /></QueryClientProvider>); });
+  await settle(); await settle();
+  const visible = () => JSON.stringify(renderer.toJSON());
+  const lines = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+  expect(visible()).toContain('Link a repository to see its runs.');
+  await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle(); await settle();
+  expect(visible()).toContain('Catalog read failed. Reconnect the selected host');
+  expect(visible()).not.toContain('Link a repository to see its runs.');
+  expect(lines()).not.toContain('select a repository to browse');
+  expect(visible()).not.toContain('SECRET_CANARY');
+  expect(host.readRuns).not.toHaveBeenCalled();
+  await act(async () => renderer.unmount()); client.clear();
+  expect(host.listeners.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('configured_runs_keeps_a_usable_selector_and_a_valid_deployment_link', async () => {
+  vi.useFakeTimers();
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+  host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', entries: [
+    { id: 'demo', label: 'Demo', repo, status: 'available', problems: [] },
+    { id: 'bad', label: 'Rejected', repo: 'Other/repo', status: 'invalid_config', problems: [{ source: 'config', code: 'config_mismatch' }] }], problems: [] });
+  host.readRuns.mockClear(); host.readRun.mockClear();
+  host.readRuns.mockResolvedValue(observation([]));
+  host.readRun.mockResolvedValue(observation(pr('passed')));
+  const openScreen = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+  const visible = () => JSON.stringify(renderer.toJSON());
+  const mount = async (params: Record<string, string>) => {
+    if (renderer) await act(async () => renderer.unmount());
+    client.clear();
+    await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} params={params} openScreen={openScreen} /></QueryClientProvider>); });
+    await settle(); await settle();
+  };
+  cleanups.push(async () => { if (renderer) { await act(async () => renderer.unmount()); client.clear(); } });
+  const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+  await mount({});
+  // Available repositories but no selection: the selector stays usable and only
+  // an available entry can be selected.
+  expect(text()).toContain('Runs — select a repository to browse');
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo')).toHaveLength(1);
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Rejected')).toHaveLength(0);
+  expect(host.readRuns).not.toHaveBeenCalled();
+  await act(async () => { renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo')[0].props.onPress(); });
+  expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs', params: { deploymentId: 'demo' } });
+  // A valid deployment deep link still opens the runs read for that repository.
+  await mount({ deploymentId: 'demo' });
+  expect(text()).toContain('Observed active issue scope');
+  expect(host.readRuns).toHaveBeenCalledWith({ deploymentId: 'demo' });
+  expect(visible()).not.toContain('Link a repository to see its runs.');
+});
+
 it('projects complete tool-result activity, including incremental reads, without exposing output', async () => {
   const f = await membershipFixture();
   const input = { deploymentId: 'demo', issue: 42, runId: '22222222' };

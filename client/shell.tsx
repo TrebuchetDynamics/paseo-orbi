@@ -82,6 +82,11 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   // read failure (including one that retained previous data) keeps the retry.
   const catalogReadFailed = query.observation?.problems.some(problem => problem.code === 'refresh_failed') ?? false;
   const unconfiguredCatalog = catalog?.state === 'unconfigured' && !catalogReadFailed;
+  // The one shared setup/repair notice names what this route can do: Runs points
+  // at linking a repository for its runs, every other route keeps the issue copy.
+  const unconfiguredNotice = route === 'runs'
+    ? 'Link a repository to see its runs.'
+    : 'Repositories aren’t linked. Link repositories to see GitHub issues.';
   // A catalog that was actually read (configured, or confirmed unconfigured)
   // confirms this host's repository associations; a failed, invalid or loading
   // catalog cannot.
@@ -90,6 +95,11 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   // Setup guide are suppressed there, and stay on every other screen.
   const serviceDetail = route === 'services' && selectedService !== null;
   const selectedDeployment = catalog?.entries.find(entry => entry.id === props.params.deploymentId && entry.status === 'available');
+  // Only a currently available entry, or a valid deployment deep link, is
+  // selectable: where the catalog offers no selection the fallback selector is
+  // an impossible prompt and the shared panel above already names the state.
+  const selectableEntries = catalog?.entries.filter(entry => entry.status === 'available') ?? [];
+  const selectionPossible = selectableEntries.length > 0 || selectedDeployment !== undefined;
   const featureKey = `${props.host.id}:${selectedDeployment?.id}:${selectedDeployment?.repo}`;
   // Work remounts on a host or catalog-identity change, so a repository choice
   // never survives into another host or a reassigned catalog entry.
@@ -117,7 +127,8 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         theme={props.theme} onPress={() => openScreen(target(next))} />)}
     </View>
     <View testID="orbi-catalog" style={{ gap: 8 }}>
-      {route !== 'fleet' && route !== 'services' && <Text style={text}>Selected host: {props.host.label}</Text>}
+      {/* The Paseo header already names the host on Runs; repeating it there is noise. */}
+      {route !== 'fleet' && route !== 'services' && route !== 'runs' && <Text style={text}>Selected host: {props.host.label}</Text>}
       {!connected && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
       {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
       {transport !== 'current' && <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>{`Catalog: ${!connected ? 'offline' : transport}`}</Text>}
@@ -128,7 +139,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
           : catalogReadFailed && !unconfiguredCatalog
             ? 'Catalog read failed. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'
             : unconfiguredCatalog
-              ? 'Repositories aren’t linked. Link repositories to see GitHub issues.'
+              ? unconfiguredNotice
               : 'Issue reads are unavailable: the configured repository catalog is invalid. Ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
         <ActionButton label="Setup guide" accessibilityName="Setup guide" expanded={guideOpen} theme={props.theme}
           onPress={() => setGuideOpen(value => !value)} />
@@ -162,10 +173,10 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
           <ConfiguredRepositories key={`${props.host.id}:${props.params.deploymentId ?? ''}`} {...props} entries={catalog.entries} observedIds={observedIds}
             openScreen={openScreen} connected={connected} foreground={foreground} />
         </View>}
-      </> : <>
+      </> : !selectionPossible ? null : <>
         <View testID={`orbi-${route}`} style={{ gap: 12 }}>
           <Text style={text}>{title(route)} — select a repository to browse</Text>
-          {catalog?.entries.filter(entry => entry.status === 'available').map(entry => <Text key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })} style={text}>{entry.label} ({entry.repo})</Text>)}
+          {selectableEntries.map(entry => <Text key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })} style={text}>{entry.label} ({entry.repo})</Text>)}
           {selectedDeployment && (route === 'issues'
             ? <Issues key={`${featureKey}:${requestedIssue ?? ''}`} deploymentId={selectedDeployment.id} repo={selectedDeployment.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} openScreen={openScreen} initialIssue={requestedIssue} />
             : route === 'runs' ? <Runs key={`${featureKey}:${props.params.issue ?? ''}:${props.params.runId ?? ''}`} repo={selectedDeployment.repo} deploymentId={selectedDeployment.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} params={props.params} />

@@ -322,6 +322,58 @@ it('services_screen_shows_off_without_a_feature_read_or_enabling_action', async 
   expect(processPort).not.toHaveBeenCalled();
 });
 
+it('runs_without_linked_repositories_shows_one_runs_notice_and_reads_no_runs', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '0');
+  // No PASEO_ORBI_CONFIG: the real server entry answers a confirmed unconfigured
+  // catalog, so this is the assembled shell + schema + QueryClient path.
+  vi.stubEnv('PASEO_ORBI_CONFIG', undefined);
+  const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+  const stopServer = serverEntry({ handle: (contract: any, handler: any) => {
+    handlers.set(contract.name, async input => contract.output.parse(await handler(contract.input.parse(input))));
+  } } as PluginServerContext);
+  cleanups.push(stopServer);
+  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'runs.list': host.readRuns, 'runs.read': host.readRun })) {
+    mock.mockReset().mockImplementation(input => handlers.get(name)!(input));
+  }
+  const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
+  const stopClient = clientEntry({ addScreen: (screen: any) => { screens.set(screen.id, screen.Component); return vi.fn(); }, addSidebarHeaderItem: () => vi.fn(), openScreen: vi.fn() } as unknown as PluginClientContext);
+  cleanups.push(stopClient);
+  const query = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => query.clear());
+  const theme = { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111', surface1: '#222', surface2: '#333', border: '#555', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } };
+  vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
+  let renderer!: ReactTestRenderer;
+  const Screen = screens.get('runs')!;
+  await act(async () => { renderer = create(<QueryClientProvider client={query}><Screen theme={theme} host={{ id: 'host-a', label: 'Host A' }} layout={{ compact: true, platform: 'ios' }} params={{}} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join(''));
+  const shown = () => text().join('\n');
+  const visible = () => JSON.stringify(renderer.toJSON());
+  // Bounded wait for the real catalog read and its QueryClient delivery.
+  for (let n = 0; n < 200 && !shown().includes('Link a repository to see its runs.'); n++) {
+    await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); });
+  }
+  // One runs-specific instruction, one Setup guide, no GitHub-issues boilerplate.
+  expect(text().filter(line => line === 'Link a repository to see its runs.')).toHaveLength(1);
+  expect(shown()).not.toContain('Repositories aren’t linked. Link repositories to see GitHub issues.');
+  expect(shown()).not.toContain('select a repository to browse');
+  expect(shown()).not.toContain('Selected host:');
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Setup guide' })).toHaveLength(1);
+  expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
+  // A confirmed unconfigured host reads no runs and offers no catalog Refresh.
+  expect(host.readRuns).not.toHaveBeenCalled(); expect(host.readRun).not.toHaveBeenCalled();
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(0);
+  expect(host.readCatalog).toHaveBeenCalledTimes(1);
+  // The one guide explains the operator procedure and applies nothing.
+  await act(async () => { renderer.root.findByProps({ accessibilityLabel: 'Setup guide' }).props.onPress(); });
+  expect(renderer.root.findByProps({ accessibilityLabel: 'Repository setup guide' }).findAllByType('Text' as any)
+    .map(node => node.children.join('')).join('\n')).toMatch(/PASEO_ORBI_CONFIG[\s\S]*explicitly reload[\s\S]*does not configure authorization/);
+  expect(host.readCatalog).toHaveBeenCalledTimes(1);
+  expect(host.readRuns).not.toHaveBeenCalled();
+  expect(visible()).not.toContain('SECRET_CANARY');
+  await act(async () => renderer.unmount());
+  query.clear(); expect(vi.getTimerCount()).toBe(0);
+});
+
 it('service_details_lead_with_the_service_and_slot_status_before_setup', async () => {
   vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
   // Synthetic, unlinked host evidence: one loaded idle worker and one waiting
