@@ -361,11 +361,15 @@ describe('package_and_registration', () => {
         // Work first: persistent navigation, then real issue rows; no embedded
         // service inventory or technical-details disclosure.
         expect(screenText()).toMatch(/^Work\nServices\nRuns\n/);
-        expect(screenText()).toMatch(/Work · Host A\nRepository: Demo \(Example\/project\)/);
+        // The persistent navigation names the surface; no duplicate inner title.
+        expect(screenText()).not.toContain('Work · Host A');
+        expect(screenText()).toContain('Repository: Demo (Example/project)');
         expect(screenText()).not.toContain('Host A · Fleet');
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Services (technical details)' })).toHaveLength(0);
         expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
-        expect(renderer.root.findAllByProps({ accessibilityLabel: 'Services summary' })).toHaveLength(1);
+        // The health summary is text; only the separate View services action is a control.
+        expect(renderer.root.findAllByProps({ accessibilityLabel: 'View services' })).toHaveLength(1);
+        expect(renderer.root.findAllByProps({ testID: 'orbi-work-health' })).toHaveLength(1);
         expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
         expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Active work for Demo')).toHaveLength(1);
         await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Active work for Demo' }).props.onPress());

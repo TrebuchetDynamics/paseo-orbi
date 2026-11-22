@@ -287,7 +287,7 @@ it('partial_stale_and_layout', async () => {
   expect(JSON.stringify(renderer.toJSON())).toContain('Artifact metadata only');
   expect(JSON.stringify(renderer.toJSON())).toContain('missing');
   expect(JSON.stringify(renderer.toJSON())).not.toMatch(/CANARY|\/tmp\//);
-  const allowed = /^(Refresh|Inspect blocker \d+|Inspect issue by number|Issue number to inspect|Inspect run [0-9a-f]{8} in Runs|Previous blockers page|Next blockers page|Select .+|Services summary|Setup guide|Details for .+|Open (Work|Services|Runs))$/;
+  const allowed = /^(Refresh|Inspect blocker \d+|Inspect issue by number|Issue number to inspect|Inspect run [0-9a-f]{8} in Runs|Previous blockers page|Next blockers page|Select .+|View services|Setup guide|Details for .+|Open (Work|Services|Runs))$/;
   for (const control of renderer.root.findAll(node => node.type === ('Pressable' as any) || node.type === ('TextInput' as any))) expect(control.props.accessibilityLabel).toMatch(allowed);
   for (const compact of [true, false]) for (const foreground of ['#eee', '#111']) {
     await screen.update({ ...props, layout: { ...props.layout, compact }, theme: { colors: { ...theme.colors, foreground } } as any });

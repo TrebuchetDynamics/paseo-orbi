@@ -240,12 +240,13 @@ test(titles[8], async ({ page, lease }) => {
   await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
   await expect(page.getByText(/host-a synthetic issue 42/).first()).toBeVisible();
   await expect(page.getByTestId('orbi-label-chip').first()).toBeVisible();
-  // The service inventory is not embedded in Work; its one-line health summary
-  // links straight to the Services screen.
+  // The service inventory is not embedded in Work: one readable health line and
+  // its separate View services action lead to the Services screen.
   await expect(page.getByTestId('orbi-host-services')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Services summary', exact: true })).toBeVisible();
+  await expect(page.getByTestId('orbi-work-health')).toBeVisible();
+  await expect(page.getByRole('button', { name: /service group/ })).toHaveCount(0);
   await expect(page.getByTestId('orbi-navigation').getByRole('button')).toHaveCount(3);
-  await pressEnter(page, 'button', 'Open Services');
+  await pressEnter(page, 'button', 'View services');
   await expect(page.getByTestId('orbi-services-heading')).toBeVisible();
   // A confirmed unconfigured host lands on Services with one notice and Setup guide.
   const unconfigured = await start({ ...process.env, PASEO_E2E_OUTPUT: `${lease.input.output}/unconfigured-landing` }, 'unconfigured', 'host-first');
@@ -258,7 +259,7 @@ test(titles[8], async ({ page, lease }) => {
     // Explicit Work navigation is preserved and still shows the single notice.
     await openNav(page, 'Work');
     await expect(page.getByTestId('plugin-surface-title')).toHaveText('Work');
-    await expect(page.getByTestId('orbi-work-heading')).toBeVisible();
+    await expect(page.getByTestId('orbi-work')).toBeVisible();
     await expect(page.getByText('Repositories aren’t linked. Link repositories to see GitHub issues.', { exact: true })).toHaveCount(1);
     await expect(page.getByTestId('orbi-work-issues')).toHaveCount(0);
     // Runs shows its own one instruction with the one Setup guide: no

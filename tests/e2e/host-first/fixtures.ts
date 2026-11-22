@@ -31,7 +31,7 @@ export async function openNav(page: Page, route: 'Work' | 'Services' | 'Runs') {
 export async function openWork(page: Page, host: LeaseHost) {
   await openPlugin(page, host);
   await openNav(page, 'Work');
-  await expect(page.getByTestId('orbi-work-heading')).toBeVisible();
+  await expect(page.getByTestId('orbi-work')).toBeVisible();
 }
 
 export async function openServices(page: Page, host: LeaseHost) {

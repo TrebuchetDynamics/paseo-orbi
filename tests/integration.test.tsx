@@ -139,14 +139,18 @@ it('four_views_read_only_journey', async () => {
   // surface. Host inventory is not opted in here, so no service row exists.
   expect(text().startsWith('Work\nServices\nRuns\n')).toBe(true);
   expect(host.readInventory).toHaveBeenCalledTimes(1);
-  expect(text()).toMatch(/Work · Host A\nRepository: Demo \(Example\/project\)/);
+  // The persistent navigation already names the surface: no duplicate inner title.
+  expect(text()).not.toContain('Work · Host A');
+  expect(text()).toContain('Repository: Demo (Example/project)');
   expect(text()).toContain('Issues: current');
   expect(text()).toContain('#42 Issue 42');
-  // The one-line health summary links to Services before the issue rows; the
-  // configured-repository detail stays below them.
-  expect(text().indexOf('Services: off')).toBeLessThan(text().indexOf('#42 Issue 42'));
+  // The readable health line and its separate View services action precede the
+  // issue rows; the configured-repository detail stays below them.
+  expect(text().indexOf('Service check off')).toBeLessThan(text().indexOf('#42 Issue 42'));
   expect(text().indexOf('#42 Issue 42')).toBeLessThan(text().indexOf('Configured repositories'));
-  expect(text()).toContain('Services: off · current activity unknown');
+  expect(text()).toContain('Service check off · current activity unknown');
+  expect(renderer.root.findAllByProps({ testID: 'orbi-work-health' })).toHaveLength(1);
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'View services' })).toHaveLength(1);
   expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Refresh services' })).toHaveLength(0);
   expect(text()).not.toContain('View repository');

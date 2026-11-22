@@ -2,7 +2,8 @@ import { useState } from 'react';
 import type { PluginClientContext, PluginScreenProps } from '@getpaseo/plugin/client';
 import { useRpc } from '@getpaseo/plugin/client';
 import { Text, View } from 'react-native';
-import type { DeploymentCatalog } from '../shared/common';
+import type { DeploymentCatalog, Observation } from '../shared/common';
+import type { ServiceInventory } from '../shared/services';
 import {
   issueBrowseStateTitle, issueBrowseStates, issueLabelShortcuts, issueReadRepair, issuesList,
   type IssueBrowseState, type IssuePage, type IssueSummary,
@@ -14,9 +15,10 @@ import { LabelChips } from './label-chip';
 import { serviceAttention, useHostServicesQuery } from './host-overview';
 
 // Work is the default view for a configured repository. It renders page-one
-// issue rows for one available deployment and links to the host Services screen
-// through one health summary. Every fact here is a bounded, read-only
-// observation: no retry, mutation, label change or repository discovery.
+// issue rows for one available deployment, one readable host service health
+// line and a separate View services action. Every fact here is a bounded,
+// read-only observation: no retry, mutation, label change or repository
+// discovery.
 
 // Concise age for a row; the exact timestamp stays in the Issues detail.
 export function updatedAge(updatedAt: string, now = Date.now()) {
@@ -54,6 +56,29 @@ function WorkIssue({ issue, repo, hostId, deploymentId, theme, openScreen }: {
 
 const issueHeading = (state: IssueBrowseState) => state === 'open' ? 'Open issues' : state === 'closed' ? 'Closed issues' : 'Issues (open and closed)';
 
+const serviceGroups = (count: number) => `${count} service group${count === 1 ? '' : 's'}`;
+
+// One readable health line: only a current complete or partial reading may
+// publish a count, and the copy names exactly what was observed. A partial check
+// never reads as all-clear, and off, denied, stale, loading or offline evidence
+// reports the limitation instead of a stale current count.
+function serviceHealthSummary(observation: Observation<ServiceInventory> | undefined, connected: boolean, foreground: boolean) {
+  if (!connected || !foreground) return 'Service check unavailable · current activity unknown';
+  if (observation === undefined) return 'Reading host services · current activity unknown';
+  if (observation.state === 'stale') return 'Service check stale · current activity unknown';
+  const data = observation.data;
+  if (data === null) return 'Service check unavailable · current activity unknown';
+  if (data.state === 'off') return 'Service check off · current activity unknown';
+  if (data.state === 'unavailable') return 'Service check unavailable · current activity unknown';
+  const attention = serviceAttention(data)!;
+  if (data.state === 'partial') return attention.failed === 0
+    ? `${serviceGroups(attention.total)} observed · Partial check, so groups and failures may be missing`
+    : `Partial check · ${attention.failed} of ${serviceGroups(attention.total)} ${attention.failed === 1 ? 'needs' : 'need'} attention, and more may be missing`;
+  return attention.failed === 0
+    ? `${serviceGroups(attention.total)} · No failures observed`
+    : `${attention.failed} of ${serviceGroups(attention.total)} ${attention.failed === 1 ? 'needs' : 'need'} attention`;
+}
+
 export function Work(props: PluginScreenProps & {
   openScreen: PluginClientContext['openScreen'];
   catalog: DeploymentCatalog | null;
@@ -87,21 +112,9 @@ export function Work(props: PluginScreenProps & {
   const page = observation?.data ?? null;
   const codes = (observation?.problems ?? []).map(problem => problem.code);
   const repair = codes.includes('auth_denied') || codes.includes('rate_limited') ? issueReadRepair : '';
-  // Only current evidence may publish an attention count: a retained, stale,
-  // offline or denied inventory keeps the undecided summary instead.
-  const inventory = props.query.observation;
-  const freshInventory = inventory !== undefined && props.connected && props.foreground
-    && (inventory.state === 'available' || inventory.state === 'partial');
-  const attention = serviceAttention(freshInventory ? inventory.data : null);
-  const serviceState = !props.connected || !props.foreground ? 'unavailable'
-    : inventory === undefined ? 'reading'
-      : inventory.state === 'stale' ? 'stale'
-        : inventory.data?.state ?? inventory.state;
-  const summary = attention === null
-    ? `Services: ${serviceState} · current activity unknown`
-    : attention.failed === 0
-      ? `Services: ${attention.partial ? 'partial' : 'current'} · ${attention.total} ${attention.partial ? 'observed ' : ''}groups, no failed groups`
-      : `Services: ${attention.partial ? 'partial' : 'current'} · ${attention.failed} of ${attention.total} ${attention.partial ? 'observed ' : ''}groups ${attention.failed === 1 ? 'needs' : 'need'} attention`;
+  // Only current evidence may publish a count: a retained, stale, offline or
+  // denied inventory keeps the undecided summary instead.
+  const summary = serviceHealthSummary(props.query.observation, props.connected, props.foreground);
   // A confirmed unconfigured catalog has no issue read to explain here: the
   // shared notice above the surface says it once. Every other catalog state
   // keeps its own bounded explanation.
@@ -114,15 +127,18 @@ export function Work(props: PluginScreenProps & {
         : 'No available configured repository. Configured repositories below lists the rejected entries.';
   const empty = page !== null && page.records.length === 0 && state === 'available';
   return <View testID="orbi-work" style={{ gap: 8 }}>
-    <Text accessibilityRole="header" testID="orbi-work-heading" style={text}>{`Work · ${props.host.label}`}</Text>
     {selected !== null && <Text testID="orbi-work-repository" style={text}>{`Repository: ${selected.label} (${selected.repo})`}</Text>}
     {available.length > 1 && <View testID="orbi-work-repositories" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {available.map(entry => <ActionButton key={entry.id} label={`${entry.label} (${entry.repo})`} accessibilityName={`Work repository ${entry.label}`}
         selected={entry.id === selected?.id} theme={props.theme} onPress={() => setChosen(entry.id)} />)}
     </View>}
-    {/* The health summary is the direct route to Services: one line, one action. */}
-    <ActionButton label={summary} accessibilityName="Services summary" testID="orbi-work-services-summary"
-      theme={props.theme} onPress={() => props.openScreen({ screenId: 'services', params: selected ? { deploymentId: selected.id } : {} })} />
+    {/* The health summary is readable text; the separate View services action is
+        the only navigation to this host's Services list. */}
+    <View testID="orbi-work-services" style={{ gap: 8 }}>
+      <Text testID="orbi-work-health" style={text}>{summary}</Text>
+      <ActionButton label="View services" accessibilityName="View services" testID="orbi-work-view-services"
+        theme={props.theme} onPress={() => props.openScreen({ screenId: 'services', params: selected ? { deploymentId: selected.id } : {} })} />
+    </View>
     {selected === null ? blocked !== null && <Text testID="orbi-work-blocked" style={text}>{blocked}</Text> : <>
       <Text accessibilityRole="header" testID="orbi-work-issues-heading" style={text}>{issueHeading(browseState)}</Text>
       <View testID="orbi-work-filters" style={{ gap: 8 }}>
