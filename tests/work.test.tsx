@@ -103,7 +103,9 @@ describe('Work first screen', () => {
     // Persistent Work / Services / Runs navigation is the first surface, then the
     // configured repository's real issue rows; no service accordion, no Fleet title.
     expect(page.startsWith('Work\nServices\nRuns')).toBe(true);
-    expect(page).toContain('Work · Host A');
+    // The persistent navigation already names the Work surface: no duplicate
+    // inner Work · host title is rendered.
+    expect(page).not.toContain('Work · Host A');
     expect(page).toContain('Repository: Demo (Example/project)');
     expect(page.indexOf('Open issues')).toBeLessThan(page.indexOf('#42'));
     expect(page).not.toContain('Host A · Fleet');
@@ -187,6 +189,9 @@ describe('Work first screen', () => {
     const explicit = await render({ surface: 'work' });
     expect(explicit.openScreen).not.toHaveBeenCalledWith(expect.objectContaining({ screenId: 'services' }));
     expect(text(explicit.renderer).split(notice)).toHaveLength(2);
+    // Unlinked repositories make issue data unavailable; they never read as an
+    // empty open-issue list.
+    expect(text(explicit.renderer)).not.toContain('No open issues');
     expect(host.readIssues).not.toHaveBeenCalled();
     // The Services screen shows the same single notice with a guide that only
     // explains the operator procedure and starts no read or settings write.
@@ -342,7 +347,7 @@ describe('Work first screen', () => {
     host.hosts.push({ serverId: 'host-b', label: 'Host B', status: 'online' });
     host.readIssues.mockImplementation(async () => pageAt([issue(42, { title: 'HOST_B_TITLE' })]));
     await switchTo('host-b');
-    expect(text(renderer)).toContain('Work · Host B');
+    expect(text(renderer)).toContain('Repository: Demo (Example/project)');
     expect(text(renderer)).toContain('HOST_B_TITLE');
     expect(text(renderer)).not.toContain('HOST_A_TITLE');
     expect(text(renderer)).not.toContain('SECOND_REPOSITORY_TITLE');
@@ -352,19 +357,25 @@ describe('Work first screen', () => {
     expect(text(renderer)).toContain('HOST_B_TITLE');
   });
 
-  it('links the Work health summary directly to Services and keeps inventory off Work', async () => {
+  it('shows the Work service health as text and navigates through a separate View services action', async () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press, openScreen } = await render();
-    const summary = () => renderer.root.findByProps({ accessibilityLabel: 'Services summary' });
-    expect(summary().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { disabled: false, busy: false } });
-    expect(summary().props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
-    expect(summary().findByType('Text' as any).children.join('')).toBe('Services: current · 1 of 3 groups needs attention');
+    const health = () => renderer.root.findByProps({ testID: 'orbi-work-health' });
+    // Current complete evidence is readable text, never a control.
+    expect(health().props.accessibilityRole).toBeUndefined();
+    expect(health().findAll(node => node.type === ('Pressable' as any))).toHaveLength(0);
+    expect(health().children.join('')).toBe('1 of 3 service groups needs attention');
+    // A separate existing button carries the navigation and a 44-unit target.
+    const view = () => renderer.root.findByProps({ accessibilityLabel: 'View services' });
+    expect(view().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { disabled: false, busy: false } });
+    expect(view().props.style({ pressed: false })).toMatchObject({ minHeight: 44 });
+    expect(view().findByType('Text' as any).children.join('')).toBe('View services');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Services summary' })).toHaveLength(0);
     // No inventory rows, slots or controls are embedded on Work.
     expect(renderer.root.findAllByProps({ testID: 'orbi-host-services' })).toHaveLength(0);
     expect(renderer.root.findAll(node => typeof node.props.testID === 'string' && node.props.testID.startsWith('orbi-family-'))).toHaveLength(0);
-    // The summary is the direct navigation to the host-scoped Services screen
-    // with the selected deployment kept.
-    await press('Services summary');
+    // The button opens this host's Services screen and keeps the selected deployment.
+    await press('View services');
     expect(openScreen).toHaveBeenLastCalledWith({ screenId: 'services', params: { deploymentId: 'demo' } });
     // A retained, offline or undecided inventory publishes no attention count.
     host.hosts[0].status = 'offline';
@@ -373,8 +384,44 @@ describe('Work first screen', () => {
     expect(text(offline.renderer)).toContain('Offline · current activity unknown');
     expect(text(offline.renderer)).not.toMatch(/\d+ of \d+ (?:observed )?groups? needs? attention/);
     const offlineWork = await render({ surface: 'work' });
-    expect(text(offlineWork.renderer)).toContain('Services: unavailable · current activity unknown');
+    expect(offlineWork.renderer.root.findByProps({ testID: 'orbi-work-health' }).children.join('')).toBe('Service check unavailable · current activity unknown');
     expect(text(offlineWork.renderer)).toContain('Selected host is offline. No other host will be used.');
+  });
+
+  it('derives the service health copy from the observed count and never claims all-clear without current evidence', async () => {
+    const health = (renderer: ReactTestRenderer) => renderer.root.findByProps({ testID: 'orbi-work-health' }).children.join('');
+    const running = (label: string) => family(label, 'unmatched', null, [unit(`${label}@1.service`, 'service', 'active', 'running')]);
+    // The acceptance case: ten clean observed groups read as plain text.
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: Array.from({ length: 10 }, (_, index) => running(`orbi-svc${index}`)) }));
+    expect(health((await render()).renderer)).toBe('10 service groups · No failures observed');
+    // Count and pluralization follow the actual observation.
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [running('orbi')] }));
+    expect(health((await render()).renderer)).toBe('1 service group · No failures observed');
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [running('orbi'), running('orbi-other')] }));
+    expect(health((await render()).renderer)).toBe('2 service groups · No failures observed');
+    host.readInventory.mockResolvedValue(inventory({ state: 'complete', groups: [family('orbi', 'unmatched', null, [unit('orbi@1.service', 'service', 'failed', 'failed')])] }));
+    expect(health((await render()).renderer)).toBe('1 of 1 service group needs attention');
+    // A partial check names only what it observed and never reads as all-clear.
+    host.readInventory.mockResolvedValue(inventory({ state: 'partial', groups: [running('orbi'), running('orbi-other')] }));
+    const partial = await render();
+    expect(health(partial.renderer)).toBe('2 service groups observed · Partial check, so groups and failures may be missing');
+    expect(text(partial.renderer)).not.toContain('No failures observed');
+    // Off, denied and loading evidence report the limitation, never a count.
+    host.readInventory.mockReset().mockResolvedValue(inventory({ state: 'off' }));
+    expect(health((await render()).renderer)).toBe('Service check off · current activity unknown');
+    host.readInventory.mockResolvedValue(inventory({ state: 'unavailable' }));
+    expect(health((await render()).renderer)).toBe('Service check unavailable · current activity unknown');
+    host.readInventory.mockReset().mockImplementationOnce(() => new Promise(() => {}));
+    expect(health((await render()).renderer)).toBe('Reading host services · current activity unknown');
+    // A failed refresh keeps no current count: the retained evidence reads as stale.
+    host.readInventory.mockReset().mockResolvedValue(inventory({ state: 'complete', groups: [running('orbi')] }));
+    const stale = await render();
+    expect(health(stale.renderer)).toBe('1 service group · No failures observed');
+    host.readInventory.mockRejectedValue(new Error('SECRET'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31000); await settle(); });
+    expect(health(stale.renderer)).toBe('Service check stale · current activity unknown');
+    expect(health(stale.renderer)).not.toMatch(/\d+ service group/);
+    expect(text(stale.renderer)).not.toContain('SECRET');
   });
 
   it('declares width-independent wrapping, 44-unit targets and screen-reader names for 360/390/430 phone layouts', async () => {
@@ -387,7 +434,7 @@ describe('Work first screen', () => {
     const work = renderer.root.findByProps({ testID: 'orbi-work' });
     expect(text(renderer)).toContain(`Repository: ${longLabel} (${longRepo})`);
     expect(text(renderer)).toContain('x'.repeat(400));
-    expect(renderer.root.findByProps({ testID: 'orbi-work-heading' }).props.accessibilityRole).toBe('header');
+    expect(renderer.root.findByProps({ testID: 'orbi-work-issues-heading' }).props.accessibilityRole).toBe('header');
     const repositories = renderer.root.findByProps({ testID: 'orbi-work-repositories' });
     expect(repositories.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
     for (const control of work.findAll(node => node.type === ('Pressable' as any))) {
@@ -405,7 +452,7 @@ describe('Work first screen', () => {
         expect(textNode.props.allowFontScaling).not.toBe(false);
       }
     }
-    for (const label of ['Inspect issue 42', `Open ${longRepo} issue 42 on GitHub`, 'Refresh issues', 'Services summary',
+    for (const label of ['Inspect issue 42', `Open ${longRepo} issue 42 on GitHub`, 'Refresh issues', 'View services',
       'Browse open issues', 'Browse closed issues', 'Browse all issues', 'All labels', 'Filter by label ai-ready']) {
       expect(renderer.root.findAllByProps({ accessibilityLabel: label }).length).toBeGreaterThanOrEqual(1);
     }
@@ -434,9 +481,12 @@ describe('Work first screen', () => {
     expect(control('Work repository Demo').props.accessibilityState.selected).toBe(true);
     expect(controlStyle('Work repository Demo')).toMatchObject({ backgroundColor: colors.surface2, borderColor: colors.accent });
     expect(control('Work repository Second').props.accessibilityState.selected).toBe(false);
-    // The health summary and the persistent navigation are buttons, not headers.
-    expect(control('Services summary').props.accessibilityRole).toBe('button');
-    expect(controlStyle('Services summary')).toMatchObject({ minHeight: 44, backgroundColor: colors.surface1 });
+    // Only the separate View services action is a button; the health summary is text.
+    expect(control('View services').props.accessibilityRole).toBe('button');
+    expect(controlStyle('View services')).toMatchObject({ minHeight: 44, backgroundColor: colors.surface1 });
+    const health = renderer.root.findByProps({ testID: 'orbi-work-health' });
+    expect(health.props.accessibilityRole).toBeUndefined();
+    expect(health.findAll(node => node.type === ('Pressable' as any))).toHaveLength(0);
     for (const tab of navLabels) expect(control(tab).props.accessibilityRole).toBe('button');
     expect(control('Open Work').props.accessibilityState).toMatchObject({ selected: true });
     expect(controlStyle('Open Work')).toMatchObject({ minHeight: 44, backgroundColor: colors.surface2, borderColor: colors.accent });
@@ -454,7 +504,7 @@ describe('Work first screen', () => {
     const link = row(renderer, 42).findAll(node => node.type === ('ExternalLink' as any));
     expect(link).toHaveLength(1);
     expect(link[0].props.accessibilityRole).toBe('link');
-    for (const testID of ['orbi-work-heading', 'orbi-work-issues-status']) {
+    for (const testID of ['orbi-work-health', 'orbi-work-issues-status']) {
       expect(renderer.root.findByProps({ testID }).props.accessibilityRole).not.toBe('button');
     }
   });
@@ -472,7 +522,7 @@ describe('Work first screen', () => {
     expect(control('Browse open issues').props.style({ pressed: false }))
       .toMatchObject({ backgroundColor: light.colors.surface2, borderColor: light.colors.accent });
     expect(control('Inspect issue 42').findByType('Text' as any).props.style.color).toBe(light.colors.foreground);
-    for (const name of ['Inspect issue 42', 'Refresh issues', 'Services summary', 'Open Services']) {
+    for (const name of ['Inspect issue 42', 'Refresh issues', 'View services', 'Open Services']) {
       expect(control(name).findByType('Text' as any).props.style.color).toBe(light.colors.foreground);
     }
   });
