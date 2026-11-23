@@ -65,7 +65,10 @@ const serviceGroups = (count: number) => `${count} service group${count === 1 ? 
 function serviceHealthSummary(observation: Observation<ServiceInventory> | undefined, connected: boolean, foreground: boolean) {
   if (!connected || !foreground) return 'Service check unavailable · current activity unknown';
   if (observation === undefined) return 'Reading host services · current activity unknown';
-  if (observation.state === 'stale') return 'Service check stale · current activity unknown';
+  // A stale envelope outranks the payload word only when retained observation rows
+  // are what it qualifies; an off or unavailable answer has no last success, so its
+  // own word stays visible instead of reading as stale (same rule as Services).
+  if (observation.state === 'stale' && observation.lastSuccessfulAt !== null) return 'Service check stale · current activity unknown';
   const data = observation.data;
   if (data === null) return 'Service check unavailable · current activity unknown';
   if (data.state === 'off') return 'Service check off · current activity unknown';
