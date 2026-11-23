@@ -4,7 +4,7 @@ import { useHosts, useRpc } from '@getpaseo/plugin/client';
 import { SidebarRow } from '@getpaseo/plugin/client/ui';
 import { ScrollView, Text, View } from 'react-native';
 import { deploymentsList, type DeploymentCatalog, type Observation } from '../shared/common';
-import { useForeground, useObservationQuery } from './observation';
+import { claimOf, useForeground, useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
 import { Fleet } from './fleet';
 import { HostServices, observedDeploymentIds, useHostServicesQuery } from './host-overview';
@@ -105,7 +105,10 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   // never survives into another host or a reassigned catalog entry.
   const workKey = `${props.host.id}:${catalog?.entries.map(entry => `${entry.id}:${entry.repo}:${entry.status}`).join(',') ?? ''}`;
   const requestedIssue = props.params.issue !== undefined && /^[1-9][0-9]*$/.test(props.params.issue) ? Number(props.params.issue) : null;
-  const transport = query.observation?.state === 'available' ? 'current' : query.observation?.state ?? (connected && foreground ? 'loading' : 'unavailable');
+  // The catalog envelope's word, with this screen's own mapping of the settled
+  // 'available' word to 'current'; the claim decides it once.
+  const catalogClaim = claimOf(query.observation, { connected, foreground });
+  const transport = catalogClaim.state === 'available' ? 'current' : catalogClaim.state;
   const deploymentParams: Record<string, string> = selectedDeployment ? { deploymentId: selectedDeployment.id } : {};
   const catalogProblems = query.observation?.problems ?? [];
   const target = (next: string) => next === 'fleet'

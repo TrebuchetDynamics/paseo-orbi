@@ -6,7 +6,7 @@ import type { ControlAction, DeploymentCatalog, Observation } from '../shared/co
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
 import type { ControlObservation, ControlOutcome, ControlReason } from '../shared/service-control';
 import { servicesControl } from '../shared/service-control';
-import { useObservationQuery } from './observation';
+import { claimOf, readingEvidence, useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
 import { associationOf, authorizedEntry, displayNames } from './repository-catalog';
 
@@ -37,7 +37,7 @@ export function useHostServicesQuery(options: { hostId: string; connected: boole
       // success. 'off' is a startup permission answer and 'unavailable' is a
       // denied or failed read; neither may later read as this host's last
       // successful observation.
-      const succeeded = data.state === 'complete' || data.state === 'partial';
+      const succeeded = readingEvidence(data.state);
       return {
         state: data.state === 'partial' ? 'partial' : data.state === 'unavailable' ? 'unavailable' : 'available',
         observedAt, lastSuccessfulAt: succeeded ? observedAt : null,
@@ -84,7 +84,7 @@ function sortFamilies(groups: readonly InventoryGroup[]): InventoryGroup[] {
 // evidence the detailed rows use. A denied, off or failed check publishes no
 // count at all; a partial check counts only observed groups.
 export function serviceAttention(inventory: ServiceInventory | null | undefined) {
-  if (!inventory || (inventory.state !== 'complete' && inventory.state !== 'partial')) return null;
+  if (!inventory || !readingEvidence(inventory.state)) return null;
   return {
     failed: inventory.groups.filter(group => summarizeFamily(group).facts.includes('failed')).length,
     total: inventory.groups.length,
@@ -97,7 +97,7 @@ export function serviceAttention(inventory: ServiceInventory | null | undefined)
 // that produced no evidence ('off', denied/unavailable) returns null so a
 // deployment row never claims "not observed" from a check that failed.
 export function observedDeploymentIds(inventory: ServiceInventory | null | undefined): string[] | null {
-  if (!inventory || (inventory.state !== 'complete' && inventory.state !== 'partial')) return null;
+  if (!inventory || !readingEvidence(inventory.state)) return null;
   return [...new Set(inventory.groups.filter(group => group.association === 'matched' && group.deploymentId !== null).map(group => group.deploymentId!))];
 }
 
@@ -417,9 +417,12 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
   const [setupExpanded, setSetupExpanded] = useState(false);
   const observation = query.observation;
   const data = observation?.data ?? null;
+  // The claim decides what this reading may say and publish; the sentences, word
+  // mapping, testIDs and problem rendering below stay exactly as they were.
+  const claim = claimOf(observation, { connected, foreground });
   const families = sortFamilies(data?.groups ?? []);
   const names = displayNames(families, entries);
-  const stale = observation?.state === 'stale' && observation.lastSuccessfulAt !== null;
+  const stale = claim.stale;
   if (selected !== null) {
     const group = families.find(candidate => candidate.label === selected) ?? null;
     return <ServiceDetails hostId={hostId} hostLabel={hostLabel} theme={theme} group={group}
@@ -427,24 +430,17 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
       lastSeen={stale ? observation!.lastSuccessfulAt : null} catalogConfirmed={catalogConfirmed} />;
   }
   const attention = families.filter(group => summarizeFamily(group).facts.includes('failed')).length;
-  const off = data?.state === 'off';
+  const off = claim.state === 'off';
   // A confirmed unconfigured catalog explains the missing repository detail once
   // on the Services screen instead of repeating a badge on every row. 'off' shows
   // no service rows at all, so the explanation belongs to the rows this state shows.
   const unconfigured = catalogUnconfigured && !off;
-  // The observation envelope decides a state the payload cannot show: a first
-  // read that already failed is a settled 'unavailable', not progress. Offline
-  // and background still fall back to undecided when no read has settled.
-  const state = data?.state ?? observation?.state ?? (!connected || !foreground ? 'unavailable' : 'loading');
-  // Only fresh evidence may publish counts, and only a fresh complete empty
-  // check may publish absence. Off/loading, unavailable, stale and offline are
-  // undecided, not empty.
-  const evidence = data !== null && (data.state === 'complete' || data.state === 'partial');
-  const current = evidence && connected && foreground
-    && (observation?.state === 'available' || observation?.state === 'partial');
-  // A partial check with no confirmed rows may be missing units; it never
-  // publishes a zero count that could read as an empty host.
-  const countEvidence = current && (families.length > 0 || data?.state === 'complete');
+  // A first read that already failed is a settled 'unavailable', not progress,
+  // and only fresh evidence may publish a count: off/loading, unavailable, stale
+  // and offline are undecided, not empty.
+  const state = claim.state;
+  const current = claim.count;
+  const absence = claim.absence;
   const inventoryProblems = (data?.problems ?? []).map(problem => `${problem.source}: ${problem.code}`);
   const transportProblems = observation?.problems.map(problem => `${problem.source}: ${problem.code}`) ?? [];
   const problems = [...inventoryProblems, ...transportProblems].join('; ');
@@ -454,15 +450,15 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
   // absence claim survives a failed refresh or disconnect.
   const lastSeen = stale ? observation!.lastSuccessfulAt : null;
   // A payload that answered 'unavailable' and a first read that failed both mean
-  // the same settled fact. Offline already owns its one undecided line, so it
-  // never repeats this sentence.
-  const unavailable = data?.state === 'unavailable' || (data === null && connected && observation?.state === 'unavailable');
+  // the same settled fact. A disconnected host with no answer already owns its
+  // one undecided line, so it never repeats this sentence.
+  const unavailable = claim.state === 'unavailable' && (claim.reach || claim.payload !== null);
   const copies = [
-    current && data?.state === 'complete' && families.length === 0 ? 'No Orbi units found.' : '',
-    current && data?.state === 'partial' && families.length === 0 ? 'Partial · no units confirmed; units may be missing.' : '',
-    current && data?.state === 'partial' && families.length > 0 ? 'Partial · units may be missing.' : '',
+    absence && families.length === 0 ? 'No Orbi units found.' : '',
+    current && claim.payload === 'partial' && families.length === 0 ? 'Partial · no units confirmed; units may be missing.' : '',
+    current && claim.payload === 'partial' && families.length > 0 ? 'Partial · units may be missing.' : '',
     unavailable ? 'Unavailable · current activity unknown.' : '',
-    state === 'loading' ? 'Reading services…' : '',
+    claim.reading ? 'Reading services…' : '',
     stale ? `Last success: ${observation!.lastSuccessfulAt}` : '',
     failed ? 'Read failed · check systemd/DBus access.' : '',
     limited ? 'Read limited · units may be missing.' : '',
@@ -471,7 +467,7 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
   return <View testID="orbi-host-services" style={panel}>
     <Text accessibilityRole="header" testID="orbi-services-heading" style={text}>{`Services · ${hostLabel}`}</Text>
     <Text style={text}>{off ? 'Service check off · activity unknown' : stale ? 'Stale · current activity unknown' : `Services: ${state === 'complete' ? 'Current' : state}`}</Text>
-    {countEvidence && families.length > 0 && <Text testID="orbi-attention-count" style={text}>{`${attention} of ${families.length} ${data?.state === 'partial' ? 'observed ' : ''}groups ${attention === 1 ? 'needs' : 'need'} attention`}</Text>}
+    {current && families.length > 0 && <Text testID="orbi-attention-count" style={text}>{`${attention} of ${families.length} ${claim.payload === 'partial' ? 'observed ' : ''}groups ${attention === 1 ? 'needs' : 'need'} attention`}</Text>}
     {!connected && <Text style={text}>Offline · current activity unknown</Text>}
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}
     {!!problems && <Text accessibilityRole="alert" style={text}>{problems}</Text>}
