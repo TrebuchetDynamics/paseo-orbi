@@ -726,9 +726,20 @@ describe('host states and authority', () => {
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, press } = await render();
     const servicesTexts = () => renderer.root.findByProps({ testID: 'orbi-host-services' }).findAllByType('Text' as any).map(node => node.children.join(''));
-    // Exactly one notice on the screen, above the first host service row.
-    expect(text(renderer).split(explanation)).toHaveLength(2);
-    expect(text(renderer).indexOf(explanation)).toBeLessThan(text(renderer).indexOf('orbi'));
+    // The host identity and service status lead; the one repository notice stays
+    // above the first host service row.
+    const page = () => text(renderer);
+    expect(page().split(explanation)).toHaveLength(2);
+    const heading = page().indexOf('Services · Host A');
+    const status = page().indexOf('Services: Current');
+    const notice = page().indexOf(explanation);
+    const firstRow = page().indexOf('orbi');
+    expect(heading).toBeGreaterThanOrEqual(0);
+    expect(status).toBeGreaterThan(heading);
+    expect(notice).toBeGreaterThan(status);
+    expect(firstRow).toBeGreaterThan(notice);
+    // The one shared repository block lives inside the service panel on this route.
+    expect(renderer.root.findByProps({ testID: 'orbi-host-services' }).findByProps({ testID: 'orbi-catalog' })).toBeDefined();
     const instructions = () => renderer.root.findByProps({ accessibilityLabel: 'Setup guide' });
     expect(instructions().props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { expanded: false } });
     expect(instructions().props.style({ pressed: false })).toMatchObject({ minHeight: 44 });

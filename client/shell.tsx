@@ -119,6 +119,43 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   useEffect(() => {
     if (route === 'fleet' && unconfiguredCatalog && !wantsWork) openScreen({ screenId: 'services', params: deploymentParams });
   }, [route, unconfiguredCatalog, wantsWork]);
+  // One render of the shared repository block. The Services list hands it to the
+  // service panel so host identity and service status lead; every other route,
+  // and the service detail view, keeps today's position and suppression.
+  const servicesList = route === 'services' && selectedService === null;
+  const repositoryBlock = <View testID="orbi-catalog" style={{ gap: 8 }}>
+    {/* The Paseo header already names the host on Runs; repeating it there is noise. */}
+    {route !== 'fleet' && route !== 'services' && route !== 'runs' && <Text style={text}>Selected host: {props.host.label}</Text>}
+    {!connected && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
+    {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
+    {transport !== 'current' && <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>{`Catalog: ${!connected ? 'offline' : transport}`}</Text>}
+    {!!catalogProblems.length && <Text accessibilityRole="alert" style={text}>{catalogProblems.map(p => `${p.source}: ${p.code}`).join('; ')}</Text>}
+    {!serviceDetail && (!catalog || unconfiguredCatalog || catalog.state === 'invalid' || catalogReadFailed) && <View accessibilityLabel="Orbi setup" testID="orbi-setup" style={{ gap: 8 }}>
+      <Text style={text}>{!catalog
+        ? (transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.')
+        : catalogReadFailed && !unconfiguredCatalog
+          ? 'Catalog read failed. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'
+          : unconfiguredCatalog
+            ? unconfiguredNotice
+            : 'Issue reads are unavailable: the configured repository catalog is invalid. Ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
+      <ActionButton label="Setup guide" accessibilityName="Setup guide" expanded={guideOpen} theme={props.theme}
+        onPress={() => setGuideOpen(value => !value)} />
+      {guideOpen && <View accessibilityLabel="Repository setup guide" style={{ gap: 8 }}>
+        <Text style={text}>Repositories come from an authorized JSON file the operator provides through PASEO_ORBI_CONFIG at plugin startup. The operator must provide or repair that file, then explicitly reload this plugin.</Text>
+        <Text style={text}>The Setup guide only explains that operator procedure: it does not configure authorization, apply settings, discover repositories or reload the plugin. Host service inventory is independent, so Services still shows discovered Orbi units without a repository catalog.</Text>
+      </View>}
+      {(catalogReadFailed || !catalog || catalog.state === 'invalid') && <ActionButton label={query.refreshing ? 'Refreshing' : 'Refresh'} accessibilityName="Refresh"
+        disabled={!query.canRefresh} busy={query.refreshing} theme={props.theme} onPress={() => { void query.refresh(); }} />}
+    </View>}
+    {catalog?.state === 'configured' && <>
+      {catalog.entries.length === 0 && <Text style={text}>No configured deployments.</Text>}
+      {catalog.entries.filter(entry => entry.status !== 'available').map(entry => <View key={entry.id}>
+        <Text style={text}>{entry.label} ({entry.repo}): {entry.status}</Text>
+        {entry.problems.map((p, i) => <Text key={i} style={text}>{p.source}: {p.code}</Text>)}
+        <Text style={text}>Ask the operator to repair the authorized configuration/source profile and reload this plugin.</Text>
+      </View>)}
+    </>}
+  </View>;
   return <ScrollView ref={scroller} scrollEventThrottle={16}
     onScroll={event => { if (route === 'services' && selectedService === null) listOffset.current = event.nativeEvent.contentOffset.y; }}
     style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }} contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 12 }}>
@@ -126,44 +163,12 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       {navigation.map(next => <ActionButton key={next} label={title(next)} accessibilityName={`Open ${title(next)}`} selected={route === next}
         theme={props.theme} onPress={() => openScreen(target(next))} />)}
     </View>
-    <View testID="orbi-catalog" style={{ gap: 8 }}>
-      {/* The Paseo header already names the host on Runs; repeating it there is noise. */}
-      {route !== 'fleet' && route !== 'services' && route !== 'runs' && <Text style={text}>Selected host: {props.host.label}</Text>}
-      {!connected && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
-      {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
-      {transport !== 'current' && <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>{`Catalog: ${!connected ? 'offline' : transport}`}</Text>}
-      {!!catalogProblems.length && <Text accessibilityRole="alert" style={text}>{catalogProblems.map(p => `${p.source}: ${p.code}`).join('; ')}</Text>}
-      {!serviceDetail && (!catalog || unconfiguredCatalog || catalog.state === 'invalid' || catalogReadFailed) && <View accessibilityLabel="Orbi setup" testID="orbi-setup" style={{ gap: 8 }}>
-        <Text style={text}>{!catalog
-          ? (transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.')
-          : catalogReadFailed && !unconfiguredCatalog
-            ? 'Catalog read failed. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'
-            : unconfiguredCatalog
-              ? unconfiguredNotice
-              : 'Issue reads are unavailable: the configured repository catalog is invalid. Ask the operator to repair the authorized JSON file provided through PASEO_ORBI_CONFIG and explicitly reload this plugin.'}</Text>
-        <ActionButton label="Setup guide" accessibilityName="Setup guide" expanded={guideOpen} theme={props.theme}
-          onPress={() => setGuideOpen(value => !value)} />
-        {guideOpen && <View accessibilityLabel="Repository setup guide" style={{ gap: 8 }}>
-          <Text style={text}>Repositories come from an authorized JSON file the operator provides through PASEO_ORBI_CONFIG at plugin startup. The operator must provide or repair that file, then explicitly reload this plugin.</Text>
-          <Text style={text}>The Setup guide only explains that operator procedure: it does not configure authorization, apply settings, discover repositories or reload the plugin. Host service inventory is independent, so Services still shows discovered Orbi units without a repository catalog.</Text>
-        </View>}
-        {(catalogReadFailed || !catalog || catalog.state === 'invalid') && <ActionButton label={query.refreshing ? 'Refreshing' : 'Refresh'} accessibilityName="Refresh"
-          disabled={!query.canRefresh} busy={query.refreshing} theme={props.theme} onPress={() => { void query.refresh(); }} />}
-      </View>}
-      {catalog?.state === 'configured' && <>
-        {catalog.entries.length === 0 && <Text style={text}>No configured deployments.</Text>}
-        {catalog.entries.filter(entry => entry.status !== 'available').map(entry => <View key={entry.id}>
-          <Text style={text}>{entry.label} ({entry.repo}): {entry.status}</Text>
-          {entry.problems.map((p, i) => <Text key={i} style={text}>{p.source}: {p.code}</Text>)}
-          <Text style={text}>Ask the operator to repair the authorized configuration/source profile and reload this plugin.</Text>
-        </View>)}
-      </>}
-    </View>
+    {!servicesList && repositoryBlock}
     {route === 'services' ? <HostServices
       hostId={props.host.id} hostLabel={props.host.label} connected={connected} foreground={foreground}
       theme={props.theme} compact={props.layout.compact}
       entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} catalogConfirmed={catalogConfirmed}
-      openScreen={openScreen} query={inventory} selected={selectedService}
+      openScreen={openScreen} query={inventory} selected={selectedService} repositoryBlock={repositoryBlock}
       onSelect={label => setSelectedService(label)}
       onBack={() => { restoreList.current = true; setSelectedService(null); }} />
       : route === 'fleet' ? <>
