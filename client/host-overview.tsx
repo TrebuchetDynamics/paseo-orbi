@@ -480,7 +480,10 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
   // on the Services screen instead of repeating a badge on every row. 'off' shows
   // no service rows at all, so the explanation belongs to the rows this state shows.
   const unconfigured = catalogUnconfigured && !off;
-  const state = data?.state ?? (!connected || !foreground ? 'unavailable' : 'loading');
+  // The observation envelope decides a state the payload cannot show: a first
+  // read that already failed is a settled 'unavailable', not progress. Offline
+  // and background still fall back to undecided when no read has settled.
+  const state = data?.state ?? observation?.state ?? (!connected || !foreground ? 'unavailable' : 'loading');
   // Only fresh evidence may publish counts, and only a fresh complete empty
   // check may publish absence. Off/loading, unavailable, stale and offline are
   // undecided, not empty.
@@ -498,11 +501,15 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
   // Retained rows keep their last observed facts, labelled per row; no count or
   // absence claim survives a failed refresh or disconnect.
   const lastSeen = stale ? observation!.lastSuccessfulAt : null;
+  // A payload that answered 'unavailable' and a first read that failed both mean
+  // the same settled fact. Offline already owns its one undecided line, so it
+  // never repeats this sentence.
+  const unavailable = data?.state === 'unavailable' || (data === null && connected && observation?.state === 'unavailable');
   const copies = [
     current && data?.state === 'complete' && families.length === 0 ? 'No Orbi units found.' : '',
     current && data?.state === 'partial' && families.length === 0 ? 'Partial · no units confirmed; units may be missing.' : '',
     current && data?.state === 'partial' && families.length > 0 ? 'Partial · units may be missing.' : '',
-    data?.state === 'unavailable' ? 'Unavailable · current activity unknown.' : '',
+    unavailable ? 'Unavailable · current activity unknown.' : '',
     state === 'loading' ? 'Reading services…' : '',
     stale ? `Last success: ${observation!.lastSuccessfulAt}` : '',
     failed ? 'Read failed · check systemd/DBus access.' : '',
