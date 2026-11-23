@@ -8,7 +8,7 @@ import {
   issueBrowseStateTitle, issueBrowseStates, issueLabelShortcuts, issueReadRepair, issuesList,
   type IssueBrowseState, type IssuePage, type IssueSummary,
 } from '../shared/issues';
-import { useObservationQuery } from './observation';
+import { claimOf, useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
 import { GitHubEvidenceLink } from './github-evidence-link';
 import { LabelChips } from './label-chip';
@@ -61,20 +61,17 @@ const serviceGroups = (count: number) => `${count} service group${count === 1 ? 
 // One readable health line: only a current complete or partial reading may
 // publish a count, and the copy names exactly what was observed. A partial check
 // never reads as all-clear, and off, denied, stale, loading or offline evidence
-// reports the limitation instead of a stale current count.
+// reports the limitation instead of a stale current count. The sentences stay
+// here; claimOf decides what the reading may claim.
 function serviceHealthSummary(observation: Observation<ServiceInventory> | undefined, connected: boolean, foreground: boolean) {
-  if (!connected || !foreground) return 'Service check unavailable · current activity unknown';
-  if (observation === undefined) return 'Reading host services · current activity unknown';
-  // A stale envelope outranks the payload word only when retained observation rows
-  // are what it qualifies; an off or unavailable answer has no last success, so its
-  // own word stays visible instead of reading as stale (same rule as Services).
-  if (observation.state === 'stale' && observation.lastSuccessfulAt !== null) return 'Service check stale · current activity unknown';
-  const data = observation.data;
-  if (data === null) return 'Service check unavailable · current activity unknown';
-  if (data.state === 'off') return 'Service check off · current activity unknown';
-  if (data.state === 'unavailable') return 'Service check unavailable · current activity unknown';
-  const attention = serviceAttention(data)!;
-  if (data.state === 'partial') return attention.failed === 0
+  const claim = claimOf(observation, { connected, foreground });
+  if (!claim.reach) return 'Service check unavailable · current activity unknown';
+  if (claim.reading) return 'Reading host services · current activity unknown';
+  if (claim.stale) return 'Service check stale · current activity unknown';
+  if (claim.state === 'off') return 'Service check off · current activity unknown';
+  if (!claim.count) return 'Service check unavailable · current activity unknown';
+  const attention = serviceAttention(observation?.data ?? null)!;
+  if (attention.partial) return attention.failed === 0
     ? `${serviceGroups(attention.total)} observed · Partial check, so groups and failures may be missing`
     : `Partial check · ${attention.failed} of ${serviceGroups(attention.total)} ${attention.failed === 1 ? 'needs' : 'need'} attention, and more may be missing`;
   return attention.failed === 0
@@ -111,7 +108,9 @@ export function Work(props: PluginScreenProps & {
   const observation = issues.observation;
   // An offline host or a backgrounded app allows no read at all, so the section
   // never claims activity it cannot have: it says unavailable and names the cause.
-  const state = observation?.state ?? (props.connected && props.foreground ? 'loading' : 'unavailable');
+  // The claim decides the word; this section only labels it (available as current).
+  const issueClaim = claimOf(observation, { connected: props.connected, foreground: props.foreground });
+  const state = issueClaim.state;
   const page = observation?.data ?? null;
   const codes = (observation?.problems ?? []).map(problem => problem.code);
   const repair = codes.includes('auth_denied') || codes.includes('rate_limited') ? issueReadRepair : '';

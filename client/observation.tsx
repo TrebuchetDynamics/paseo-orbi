@@ -9,6 +9,62 @@ import { ActionButton } from './action-button';
 // as well as QueryClient's ordinary same-key coalescing; never reuse a cancelled result.
 const pendingReads = new WeakMap<QueryClient, Map<string, Promise<unknown>>>();
 
+// Every screen decides what it may claim about a host reading here, once. The
+// observation envelope owns freshness; a screen keeps its own sentence, word
+// mapping and testIDs, but never re-derives what the evidence may publish.
+export type Reach = { connected: boolean; foreground: boolean };
+// The reading words a payload can answer with. A catalog, a page or a detail
+// payload carries none of them, so it never outranks its envelope's word.
+export type PayloadReading = 'complete' | 'partial' | 'off' | 'unavailable';
+export type ClaimState = Observation<unknown>['state'] | PayloadReading | 'loading';
+export type Claim = Readonly<{
+  // The envelope's own word, or null before a read settles.
+  envelope: Observation<unknown>['state'] | null;
+  // The payload's reading word, or null when it carries none.
+  payload: PayloadReading | null;
+  // The one decided word: an off answer, retained stale evidence, the payload's
+  // word, the envelope's word, then loading/unavailable.
+  state: ClaimState;
+  // Whether a read is possible at all (connected and foreground).
+  reach: boolean;
+  // Whether retained observation evidence outranks the payload word.
+  stale: boolean;
+  // Whether a first read is in progress.
+  reading: boolean;
+  // Whether a count may publish: only current reading evidence may.
+  count: boolean;
+  // Whether an absence claim may publish: only a current complete reading may.
+  absence: boolean;
+}>;
+const readingWord = (data: unknown): PayloadReading | null => {
+  const state = data !== null && typeof data === 'object' ? (data as { state?: unknown }).state : null;
+  return state === 'complete' || state === 'partial' || state === 'off' || state === 'unavailable' ? state : null;
+};
+// The one evidence predicate: only a complete or partial check produced rows, so
+// only it may publish a count, and only a complete one may publish absence.
+export const readingEvidence = (state: unknown) => state === 'complete' || state === 'partial';
+
+export function claimOf(observation: Observation<unknown> | undefined, reach: Reach): Claim {
+  const envelope = observation?.state ?? null;
+  const payload = readingWord(observation?.data);
+  const reachable = reach.connected && reach.foreground;
+  // A stale envelope outranks the payload word only when retained observations are
+  // what it qualifies: an off or unavailable answer has no last success, so its own
+  // word stays visible instead of reading as stale (same rule on every screen).
+  const stale = envelope === 'stale' && observation !== undefined && observation.lastSuccessfulAt !== null;
+  const count = reachable && readingEvidence(payload) && (envelope === 'available' || envelope === 'partial');
+  return {
+    envelope, payload, reach: reachable, stale, count,
+    // One branch order for every screen: an off answer, retained stale evidence,
+    // the payload's word, the envelope's word, then no settled read at all.
+    state: payload === 'off' ? 'off' : stale ? 'stale' : payload ?? envelope ?? (reachable ? 'loading' : 'unavailable'),
+    reading: reachable && envelope === null,
+    // Off, denied, unavailable, stale, loading and offline evidence publish no
+    // count; a partial reading never claims absence.
+    absence: count && payload === 'complete',
+  };
+}
+
 export function useForeground() {
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
   useEffect(() => {
