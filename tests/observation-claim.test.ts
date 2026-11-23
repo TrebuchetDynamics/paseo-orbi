@@ -1,8 +1,13 @@
 import './helpers/host';
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
+import { createElement } from 'react';
+import { act, create } from 'react-test-renderer';
+import type { PluginClientContext, PluginHostProps } from '@getpaseo/plugin/client';
 import { claimOf, type Claim, type Reach } from '../client/observation';
+import { HostServices } from '../client/host-overview';
 import type { Observation } from '../shared/common';
+import type { ServiceInventory } from '../shared/services';
 
 const stamp = '2026-11-19T18:00:00.000Z';
 // A hand-built envelope: the state table below owns which combination is expected,
@@ -64,6 +69,43 @@ describe('one reading claim for every screen', () => {
   it('reads the payload word only from the closed reading vocabulary', () => {
     expect(claimOf({ state: 'available', observedAt: stamp, lastSuccessfulAt: stamp, data: { state: 'unavailable' }, problems: [] }, reach)).toMatchObject({ payload: 'unavailable' });
     expect(claimOf({ state: 'available', observedAt: stamp, lastSuccessfulAt: stamp, data: { state: 'invalid' }, problems: [] }, reach)).toMatchObject({ payload: null, state: 'available' });
+  });
+});
+
+// Copy guard for the one Services sentence the claim now decides: a settled
+// failure keeps its line while reads are paused in the background, and a
+// disconnected host owns its own 'Offline' line instead, exactly as before.
+const servicesText = (connected: boolean, foreground: boolean, observation: Observation<ServiceInventory> | undefined) => {
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(createElement(HostServices, {
+      hostId: 'host-a', hostLabel: 'Host A', compact: true, connected, foreground, entries: null,
+      catalogUnconfigured: false, catalogConfirmed: false,
+      theme: { colors: { surface0: '#111', surface1: '#222', surface2: '#2a2a2a', border: '#555', foreground: '#eee', foregroundMuted: '#aaa', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } } as PluginHostProps['theme'],
+      openScreen: (() => undefined) as unknown as PluginClientContext['openScreen'],
+      query: { observation, refreshing: false, canRefresh: false, refresh: () => Promise.resolve(undefined) },
+      selected: null, onSelect: () => undefined, onBack: () => undefined,
+    }));
+  });
+  const text = renderer.root.findAllByType('Text' as never).map(node => node.children.join('')).join('\n');
+  act(() => renderer.unmount());
+  return text;
+};
+
+describe('a screen keeps its own sentence for the decided claim', () => {
+  const failed: Observation<ServiceInventory> = { state: 'unavailable', observedAt: stamp, lastSuccessfulAt: null, data: null, problems: [] };
+  it('keeps the settled failure line while paused background reads show no offline line', () => {
+    const paused = servicesText(true, false, failed);
+    expect(paused).toContain('Unavailable · current activity unknown.');
+    expect(paused).toContain('The app is in the background. Host service reads are paused.');
+    expect(paused).not.toContain('Offline · current activity unknown');
+  });
+  it('lets the offline line own the undecided state and adds no settled failure sentence', () => {
+    const offline = servicesText(false, true, failed);
+    expect(offline).toContain('Offline · current activity unknown');
+    expect(offline).not.toContain('Unavailable · current activity unknown.');
+    // No settled read at all: only the paused-read line, never a failure claim.
+    expect(servicesText(true, false, undefined)).not.toContain('Unavailable · current activity unknown.');
   });
 });
 

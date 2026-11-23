@@ -450,9 +450,11 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
   // absence claim survives a failed refresh or disconnect.
   const lastSeen = stale ? observation!.lastSuccessfulAt : null;
   // A payload that answered 'unavailable' and a first read that failed both mean
-  // the same settled fact. A disconnected host with no answer already owns its
-  // one undecided line, so it never repeats this sentence.
-  const unavailable = claim.state === 'unavailable' && (claim.reach || claim.payload !== null);
+  // the same settled fact. A disconnected host owns its own 'Offline' line
+  // instead of repeating this sentence; paused background reads keep it, so the
+  // sentence every state shows stays exactly as it was before the claim.
+  const unavailable = claim.state === 'unavailable'
+    && (claim.payload !== null || (connected && claim.envelope !== null));
   const copies = [
     absence && families.length === 0 ? 'No Orbi units found.' : '',
     current && claim.payload === 'partial' && families.length === 0 ? 'Partial · no units confirmed; units may be missing.' : '',
