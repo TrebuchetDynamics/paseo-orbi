@@ -422,6 +422,22 @@ describe('Work first screen', () => {
     expect(health(stale.renderer)).toBe('Service check stale · current activity unknown');
     expect(health(stale.renderer)).not.toMatch(/\d+ service group/);
     expect(text(stale.renderer)).not.toContain('SECRET');
+    // A stale envelope outranks the payload word only when retained evidence
+    // qualifies it: an off or unavailable answer carries no observation rows, so a
+    // failed recheck keeps the answer the check actually gave.
+    for (const [state, copy] of [
+      ['off', 'Service check off · current activity unknown'],
+      ['unavailable', 'Service check unavailable · current activity unknown'],
+    ] as const) {
+      host.readInventory.mockReset().mockResolvedValue(inventory({ state }));
+      const retained = await render();
+      expect(health(retained.renderer)).toBe(copy);
+      host.readInventory.mockRejectedValue(new Error('SECRET'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(31000); await settle(); });
+      expect(health(retained.renderer)).toBe(copy);
+      expect(health(retained.renderer)).not.toContain('stale');
+      expect(text(retained.renderer)).not.toContain('SECRET');
+    }
   });
 
   it('declares width-independent wrapping, 44-unit targets and screen-reader names for 360/390/430 phone layouts', async () => {
