@@ -690,6 +690,28 @@ describe('host states and authority', () => {
     }
   });
 
+  it('settles a failed first inventory read as unavailable instead of still reading', async () => {
+    host.readInventory.mockRejectedValue(new Error('SECRET raw transport error'));
+    const { renderer, switchTo } = await render();
+    const page = text(renderer);
+    // The read already failed, so the screen reports the failure, not progress.
+    expect(page).toContain('Services: unavailable');
+    expect(page).toContain('Unavailable · current activity unknown.');
+    expect(page).toContain('filesystem: refresh_failed');
+    expect(page).not.toContain('Reading services…');
+    expect(page).not.toContain('Services: loading');
+    expect(page).not.toContain('SECRET');
+    // A real read failure keeps its retry.
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh services' }).props).toMatchObject({ disabled: false });
+    // Offline with no snapshot still owns one undecided line and never repeats it.
+    host.hosts[0].status = 'offline';
+    await switchTo('host-a');
+    expect(text(renderer)).toContain('Offline · current activity unknown');
+    expect(text(renderer)).not.toContain('Unavailable · current activity unknown.');
+    expect(text(renderer)).not.toContain('Reading services…');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh services' }).props).toMatchObject({ disabled: true });
+  });
+
   it('disables refresh without reading another host when offline', async () => {
     host.hosts[0].status = 'offline';
     const { renderer, press } = await render();
