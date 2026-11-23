@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PluginClientContext, PluginHostProps } from '@getpaseo/plugin/client';
 import { useRpc } from '@getpaseo/plugin/client';
 import { Text, View } from 'react-native';
@@ -447,10 +447,13 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
 // The Services screen owns the observed host inventory list. It is scoped to the
 // selected host, shows every observed group failures first, and hands one group
 // at a time to the diagnostic view; it reads nothing else.
-export function HostServices({ hostId, hostLabel, theme, compact, connected, foreground, entries, catalogUnconfigured, catalogConfirmed, openScreen, query, selected, onSelect, onBack }: {
+export function HostServices({ hostId, hostLabel, theme, compact, connected, foreground, entries, catalogUnconfigured, catalogConfirmed, openScreen, query, selected, onSelect, onBack, repositoryBlock }: {
   hostId: string; hostLabel: string; theme: PluginHostProps['theme']; compact: boolean;
   connected: boolean; foreground: boolean;
   entries: DeploymentCatalog['entries'] | null; catalogUnconfigured: boolean;
+  // The one shared repository block (setup notice and guide) belongs to the list,
+  // immediately above the rows, so host identity and service status lead.
+  repositoryBlock?: ReactNode;
   // The catalog was actually read (configured or confirmed unconfigured), so an
   // unlinked service may say so instead of presenting an unknown as a fact.
   catalogConfirmed: boolean;
@@ -533,6 +536,7 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
     </View> : <ActionButton label={query.refreshing ? 'Refreshing' : 'Refresh services'} accessibilityName="Refresh services"
       disabled={!query.canRefresh} busy={query.refreshing} theme={theme} onPress={() => { void query.refresh(); }} />}
     {copies.map(copy => <Text key={copy} style={text}>{copy}</Text>)}
+    {repositoryBlock}
     {families.map(group => <ServiceRow key={`${hostId}:${group.label}`} group={group} name={names.get(group.label)!}
       theme={theme} entries={entries} openScreen={openScreen} showUnlinked={!unconfigured} lastSeen={lastSeen}
       onDetails={() => onSelect(group.label)} />)}
