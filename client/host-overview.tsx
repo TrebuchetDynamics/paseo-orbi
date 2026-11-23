@@ -8,6 +8,7 @@ import type { ControlObservation, ControlOutcome, ControlReason } from '../share
 import { servicesControl } from '../shared/service-control';
 import { useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
+import { associationOf, authorizedEntry, displayNames } from './repository-catalog';
 
 // Host-first Overview. It reads one host-scoped services.inventory({}) snapshot
 // and never resolves a repository: an association carries a deployment id only
@@ -105,61 +106,6 @@ const unitLine = (unit: InventoryUnit) => {
   const template = unit.id.includes('@.') ? ' (template, not a running service)' : '';
   return `${unit.id}: ${runtime}; unit file ${unit.unitFileState ?? 'not observed'}${template}`;
 };
-// The full association context belongs to View diagnostics. An unlinked
-// conclusion is only stated when this host's repository catalog was actually
-// read, so a failed, invalid or still-loading catalog never reads as "not
-// linked"; discovery alone is not authority either way.
-const associationText = (group: InventoryGroup, entry: DeploymentCatalog['entries'][number] | null, catalogConfirmed: boolean) => {
-  if (group.association === 'matched') {
-    return entry
-      ? `Matches configured deployment ${entry.label} (${entry.repo}) by unit name. Unit origin is not verified; this association is display-only.`
-      : 'Associated deployment is not in the current authorized catalog. Repository detail stays unavailable until the operator restores authorization and reloads.';
-  }
-  if (group.association === 'incompatible') {
-    return 'A configured deployment claims this unit prefix, but its source profile is unsupported for repository detail. This compatibility limit does not mean the runner is broken.';
-  }
-  if (group.association === 'ambiguous') {
-    return 'Multiple configured deployments claim this unit prefix. Repository detail stays unavailable until the operator makes the association unique.';
-  }
-  if (!catalogConfirmed) return 'This host’s repository catalog could not be read, so no repository link is confirmed. Discovery is not authority.';
-  return 'Discovered on this host only; no configured deployment claims this unit name, so repository detail is unavailable. Discovery is not authority.';
-};
-// One short association line leads the service facts; the long explanation is
-// revealed by View diagnostics.
-function associationNote(group: InventoryGroup, entry: DeploymentCatalog['entries'][number] | null, catalogConfirmed: boolean): string {
-  if (group.association === 'matched') {
-    return entry
-      ? `Matches configured deployment ${entry.label} (${entry.repo}) by unit name.`
-      : 'Associated deployment is not in the current authorized catalog.';
-  }
-  if (group.association === 'incompatible') return 'Source profile unsupported for repository detail.';
-  if (group.association === 'ambiguous') return 'Multiple configured deployments claim this unit prefix.';
-  return catalogConfirmed ? 'Not linked to a repository.' : 'Repository link not confirmed: this host’s repository catalog could not be read.';
-}
-
-// These names are presentation only: never use a slug for authorization or navigation.
-const shortName = (label: string) => /^orbi-(.+)-[a-f0-9]{8}$/.exec(label)?.[1] ?? label;
-function authorizedEntry(group: InventoryGroup, entries: DeploymentCatalog['entries'] | null) {
-  const candidates = entries?.filter(candidate => candidate.id === group.deploymentId) ?? [];
-  return group.association === 'matched' && candidates.length === 1 && candidates[0].status === 'available' ? candidates[0] : null;
-}
-function displayNames(groups: InventoryGroup[], entries: DeploymentCatalog['entries'] | null) {
-  const names = new Map(groups.map(group => {
-    const collision = groups.some(other => other.label !== group.label && shortName(other.label) === shortName(group.label));
-    return [group.label, authorizedEntry(group, entries)?.repo ?? `${shortName(group.label)}${collision ? ` · ${group.label.slice(-8)}` : ''}`];
-  }));
-  // Resolve final-name collisions, including raw/short names and collisions
-  // introduced by a fallback. Exact labels are unique inventory identities.
-  for (;;) {
-    const counts = new Map<string, number>();
-    for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
-    let changed = false;
-    for (const [label, name] of names) {
-      if (counts.get(name)! > 1 && name !== label) { names.set(label, label); changed = true; }
-    }
-    if (!changed) return names;
-  }
-}
 const isFailed = (unit: InventoryUnit | undefined) => unit?.runtime != null && (unit.runtime.activeState === 'failed' || unit.runtime.subState === 'failed');
 const compareSlots = (left: string, right: string) => {
   const a = left.replace(/^0+/, '') || '0', b = right.replace(/^0+/, '') || '0';
@@ -410,6 +356,9 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
   const entry = group === null ? null : authorizedEntry(group, entries);
+  // One classification owns both association sentences: the short line that
+  // leads this view and the long explanation revealed by View diagnostics.
+  const association = group === null ? null : associationOf(group, entry, catalogConfirmed);
   // Only a group with numeric slots gets the explanation: an absent slot is not
   // invented and an empty list gains no diagnostic clutter.
   const slots = group === null ? [] : slotLines(group);
@@ -427,14 +376,14 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
         <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
         {slots.map(line => <Text key={line} style={text}>{line}</Text>)}
         {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
-        <Text testID="orbi-service-association" style={text}>{associationNote(group, entry, catalogConfirmed)}</Text>
+        <Text testID="orbi-service-association" style={text}>{association!.note}</Text>
         <Text style={text}>Unit activity does not establish issue delivery.</Text>
         {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} />}
         <ActionButton label="View diagnostics" accessibilityName="View diagnostics" expanded={diagnostics}
           theme={theme} onPress={() => setDiagnostics(value => !value)} />
         {diagnostics && <View accessibilityLabel="Service diagnostics" testID="orbi-service-diagnostics" style={{ gap: 8 }}>
           {slots.length > 0 && <Text testID="orbi-service-slot-explanation" style={text}>{slotExplanation}</Text>}
-          <Text style={text}>{associationText(group, entry, catalogConfirmed)}</Text>
+          <Text style={text}>{association!.detail}</Text>
           <Text style={text}>Raw unit data follows.</Text>
           <View testID="orbi-service-units" style={{ gap: 2 }}>
             {group.units.map(unit => <Text key={`${hostId}:${unit.id}`} style={secondary}>{unitLine(unit)}</Text>)}
