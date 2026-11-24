@@ -8,7 +8,7 @@ import type { ControlObservation, ControlOutcome, ControlReason } from '../share
 import { servicesControl } from '../shared/service-control';
 import { claimOf, readingEvidence, useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
-import { associationOf, authorizedEntry, displayNames } from './repository-catalog';
+import { associationOf, authorizedEntry, displayNames, type CatalogEvidence } from './repository-catalog';
 
 // Host-first Overview. It reads one host-scoped services.inventory({}) snapshot
 // and never resolves a repository: an association carries a deployment id only
@@ -345,7 +345,7 @@ function ServiceRow({ group, name, theme, entries, openScreen, showUnlinked, las
 // passed or stale unit/path can never become authority for what is shown. The
 // service name, failed-first slot facts and freshness lead; setup material and
 // the raw unit records never occupy the default view.
-export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries, openScreen, onBack, lastSeen, catalogConfirmed }: {
+export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries, openScreen, onBack, lastSeen, catalogEvidence }: {
   hostId: string; hostLabel: string; theme: PluginHostProps['theme'];
   group: InventoryGroup | null; name: string | null;
   entries: DeploymentCatalog['entries'] | null;
@@ -354,16 +354,16 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
   // Retained evidence keeps its last successful time here too, so the facts on
   // this view never read as a current observation.
   lastSeen: string | null;
-  // True only when this host's repository catalog was actually read, so the
-  // unlinked statement is confirmed rather than inferred from a failed read.
-  catalogConfirmed: boolean;
+  // The shell's explicit catalog evidence: only a settled read can confirm or rule
+  // out a link, so a pending read is never reported as a failure or an absence.
+  catalogEvidence: CatalogEvidence;
 }) {
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
   const entry = group === null ? null : authorizedEntry(group, entries);
   // One classification owns both association sentences: the short line that
   // leads this view and the long explanation revealed by View diagnostics.
-  const association = group === null ? null : associationOf(group, entry, catalogConfirmed);
+  const association = group === null ? null : associationOf(group, entry, catalogEvidence);
   // Only a group with numeric slots gets the explanation: an absent slot is not
   // invented and an empty list gains no diagnostic clutter.
   const slots = group === null ? [] : slotLines(group);
@@ -408,16 +408,16 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
 // The Services screen owns the observed host inventory list. It is scoped to the
 // selected host, shows every observed group failures first, and hands one group
 // at a time to the diagnostic view; it reads nothing else.
-export function HostServices({ hostId, hostLabel, theme, compact, connected, foreground, entries, catalogUnconfigured, catalogConfirmed, openScreen, query, selected, onSelect, onBack, repositoryBlock }: {
+export function HostServices({ hostId, hostLabel, theme, compact, connected, foreground, entries, catalogUnconfigured, catalogEvidence, openScreen, query, selected, onSelect, onBack, repositoryBlock }: {
   hostId: string; hostLabel: string; theme: PluginHostProps['theme']; compact: boolean;
   connected: boolean; foreground: boolean;
   entries: DeploymentCatalog['entries'] | null; catalogUnconfigured: boolean;
   // The one shared repository block (setup notice and guide) belongs to the list,
   // immediately above the rows, so host identity and service status lead.
   repositoryBlock?: ReactNode;
-  // The catalog was actually read (configured or confirmed unconfigured), so an
-  // unlinked service may say so instead of presenting an unknown as a fact.
-  catalogConfirmed: boolean;
+  // The shell's explicit repository-catalog evidence for this host: a match may
+  // only be stated as absent, unavailable or confirmed from a settled read.
+  catalogEvidence: CatalogEvidence;
   openScreen: PluginClientContext['openScreen'];
   query: ReturnType<typeof useHostServicesQuery>;
   // One selected family label; the list survives Back without a remount.
@@ -439,7 +439,7 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
     const group = families.find(candidate => candidate.label === selected) ?? null;
     return <ServiceDetails hostId={hostId} hostLabel={hostLabel} theme={theme} group={group}
       name={group === null ? null : names.get(group.label)!} entries={entries} openScreen={openScreen} onBack={onBack}
-      lastSeen={stale ? observation!.lastSuccessfulAt : null} catalogConfirmed={catalogConfirmed} />;
+      lastSeen={stale ? observation!.lastSuccessfulAt : null} catalogEvidence={catalogEvidence} />;
   }
   const attention = families.filter(group => summarizeFamily(group).facts.includes('failed')).length;
   const off = claim.state === 'off';

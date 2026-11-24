@@ -80,7 +80,7 @@ const servicesText = (connected: boolean, foreground: boolean, observation: Obse
   act(() => {
     renderer = create(createElement(HostServices, {
       hostId: 'host-a', hostLabel: 'Host A', compact: true, connected, foreground, entries: null,
-      catalogUnconfigured: false, catalogConfirmed: false,
+      catalogUnconfigured: false, catalogEvidence: 'unavailable',
       theme: { colors: { surface0: '#111', surface1: '#222', surface2: '#2a2a2a', border: '#555', foreground: '#eee', foregroundMuted: '#aaa', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } } as PluginHostProps['theme'],
       openScreen: (() => undefined) as unknown as PluginClientContext['openScreen'],
       query: { observation, refreshing: false, canRefresh: false, refresh: () => Promise.resolve(undefined) },

@@ -42,35 +42,56 @@ const unlinked = {
   detail: 'Discovered on this host only; no configured deployment claims this unit name, so repository detail is unavailable. Discovery is not authority.',
 } as const;
 const unconfirmed = {
-  classification: 'unmatched',
+  classification: 'unconfirmed',
   note: 'Repository link not confirmed: this host’s repository catalog could not be read.',
   detail: 'This host’s repository catalog could not be read, so no repository link is confirmed. Discovery is not authority.',
 } as const;
+const pending = {
+  classification: 'pending',
+  note: 'Repository link not yet confirmed: this host’s repository catalog has not been read yet.',
+  detail: 'Repository link not yet confirmed: this host’s repository catalog has not been read yet, so no repository link is confirmed. Discovery is not authority.',
+} as const;
+const evidence = ['pending', 'unavailable', 'confirmed'] as const;
 
 describe('one classification returns both association sentences', () => {
   it('classifies a matched association through its authorized catalog entry', () => {
-    // catalogConfirmed adds nothing to a matched association: the entry, not the
-    // catalog read, decides this copy.
-    for (const catalogConfirmed of [true, false]) expect(associationOf(family('matched', 'demo'), demo, catalogConfirmed)).toEqual(matched);
+    // Positive evidence wins over the catalog read state: the entry, not the
+    // read, decides this copy and keeps the existing match sentence.
+    for (const catalog of evidence) expect(associationOf(family('matched', 'demo'), demo, catalog)).toEqual(matched);
   });
-  it('classifies a matched association whose deployment is not authorized', () => {
-    for (const catalogConfirmed of [true, false]) expect(associationOf(family('matched', 'demo'), null, catalogConfirmed)).toEqual(matchedUnavailable);
+  it('classifies a matched association whose deployment is not authorized only when the read settled', () => {
+    expect(associationOf(family('matched', 'demo'), null, 'confirmed')).toEqual(matchedUnavailable);
+    // A settled read that confirmed nothing is unavailable, never an absence claim.
+    expect(associationOf(family('matched', 'demo'), null, 'unavailable')).toEqual(unconfirmed);
+    expect(associationOf(family('matched', 'demo'), null, 'pending')).toEqual(pending);
   });
   it('classifies an incompatible association', () => {
     // A stray entry or an unreadable catalog cannot change this sentence.
-    for (const catalogConfirmed of [true, false]) for (const entry of [null, demo]) {
-      expect(associationOf(family('incompatible'), entry, catalogConfirmed)).toEqual(incompatible);
+    for (const catalog of evidence) for (const entry of [null, demo]) {
+      expect(associationOf(family('incompatible'), entry, catalog)).toEqual(incompatible);
     }
   });
   it('classifies an ambiguous association', () => {
-    for (const catalogConfirmed of [true, false]) for (const entry of [null, demo]) {
-      expect(associationOf(family('ambiguous'), entry, catalogConfirmed)).toEqual(ambiguous);
+    for (const catalog of evidence) for (const entry of [null, demo]) {
+      expect(associationOf(family('ambiguous'), entry, catalog)).toEqual(ambiguous);
     }
   });
-  it('classifies an unmatched association by whether the catalog was actually read', () => {
+  it('classifies an unmatched association by the catalog evidence', () => {
     for (const entry of [null, demo]) {
-      expect(associationOf(family('unmatched'), entry, true)).toEqual(unlinked);
-      expect(associationOf(family('unmatched'), entry, false)).toEqual(unconfirmed);
+      expect(associationOf(family('unmatched'), entry, 'confirmed')).toEqual(unlinked);
+      expect(associationOf(family('unmatched'), entry, 'unavailable')).toEqual(unconfirmed);
+      expect(associationOf(family('unmatched'), entry, 'pending')).toEqual(pending);
+    }
+  });
+  it('never states failure, absence or authorization trouble while the catalog is pending', () => {
+    // Acceptance for #113: an in-flight catalog is not evidence about the link.
+    for (const group of [family('matched', 'demo'), family('unmatched')]) {
+      const association = associationOf(group, null, 'pending');
+      expect(association).toEqual(pending);
+      for (const sentence of [association.note, association.detail]) {
+        expect(sentence).toContain('Repository link not yet confirmed');
+        expect(sentence).not.toMatch(/failed|could not be read|not in the current authorized|unauthoriz|restore/i);
+      }
     }
   });
 });
