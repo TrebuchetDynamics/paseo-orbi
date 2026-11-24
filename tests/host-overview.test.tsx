@@ -492,6 +492,57 @@ describe('service details lead with the service and slot status', () => {
   });
 });
 
+describe('service details without numbered slots', () => {
+  // The known auxiliary exporter has no @N instance: one observed unit carries
+  // the whole group's state, so no slot line can name it.
+  const exporter = (activeState: string, subState: string) => inventory({ state: 'complete', groups: [
+    { label: 'orbi-exporter', kind: 'auxiliary', association: 'unmatched', deploymentId: null,
+      units: [unit('orbi-exporter.service', 'service', activeState, subState)] } as InventoryGroup,
+  ] });
+  const slotted = inventory({ state: 'complete', groups: [family('orbi-unclaimed', 'unmatched', null, [
+    unit('orbi-unclaimed@1.service', 'service', 'inactive', 'dead'),
+    unit('orbi-unclaimed@1.timer', 'timer', 'active', 'waiting'),
+  ])] });
+
+  it('keeps a failed service without a numbered slot visible when Details opens with diagnostics closed', async () => {
+    host.readInventory.mockResolvedValue(exporter('failed', 'failed'));
+    const { renderer, press } = await render();
+    expect(rowPage(renderer, 'orbi-exporter')).toContain('Worker failed');
+    await press('Details for orbi-exporter');
+    const page = text(renderer);
+    expect(page).toContain('orbi-exporter');
+    expect(page).toContain('Worker failed');
+    expect(page).toContain('Unit activity does not establish issue delivery');
+    // The status is the list's own derivation: no slot or timer is synthesized
+    // and no raw unit record appears before the disclosure.
+    expect(page).not.toMatch(/Slot \d/);
+    expect(page).not.toContain('orbi-exporter.service');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-units' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-slot-explanation' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-status' })).toHaveLength(1);
+  });
+
+  it('keeps retained-evidence freshness explicit beside that status', async () => {
+    host.readInventory.mockResolvedValue(exporter('failed', 'failed'));
+    const { renderer, press } = await render();
+    host.readInventory.mockRejectedValue(new Error('failed'));
+    await press('Refresh services');
+    expect(text(renderer)).toContain('Stale · current activity unknown');
+    await press('Details for orbi-exporter');
+    const page = text(renderer);
+    expect(page).toContain('Worker failed');
+    expect(page).toContain(`Last seen ${stamp}. Current activity unknown.`);
+  });
+
+  it('shows no fallback status when the group has numbered slot lines', async () => {
+    host.readInventory.mockResolvedValue(slotted);
+    const { renderer, press } = await render();
+    await press('Details for orbi-unclaimed');
+    expect(text(renderer)).toContain('Slot 1 · Worker idle · Timer waiting');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-service-status' })).toHaveLength(0);
+  });
+});
+
 describe('compact first-screen triage', () => {
   it('names the selected host, attention count, first failed slot and remaining failures before any other group', async () => {
     host.hosts[0].label = 'BlueBlack';
