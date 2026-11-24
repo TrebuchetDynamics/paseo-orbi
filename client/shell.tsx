@@ -157,7 +157,10 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
       {(catalogReadFailed || !catalog || catalog.state === 'invalid') && <ActionButton label={query.refreshing ? 'Refreshing' : 'Refresh'} accessibilityName="Refresh"
         disabled={!query.canRefresh} busy={query.refreshing} theme={props.theme} onPress={() => { void query.refresh(); }} />}
     </View>}
-    {catalog?.state === 'configured' && <>
+    {/* The configured-catalog listing and its repair instruction are repository facts
+        about this host, not about the one service a detail view opened: another
+        repository's rejection stays on every list route and never leads a detail. */}
+    {!serviceDetail && catalog?.state === 'configured' && <>
       {catalog.entries.length === 0 && <Text style={text}>No configured deployments.</Text>}
       {catalog.entries.filter(entry => entry.status !== 'available').map(entry => <View key={entry.id}>
         <Text style={text}>{entry.label} ({entry.repo}): {entry.status}</Text>

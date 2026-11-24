@@ -447,6 +447,65 @@ it('service_details_lead_with_the_service_and_slot_status_before_setup', async (
   expect(renderer.root.findByProps({ accessibilityLabel: 'Details for orbi-unclaimed' })).toBeDefined();
 });
 
+it('keeps another repository’s rejection and repair notice off an available service’s details', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+  // Mixed configured catalog: one available deployment whose units this host
+  // observed, plus one rejected deployment whose source profile no longer matches
+  // its pinned compatibility fingerprint. Both go through the real server gate.
+  const available = await fixture('release'), rejected = await fixture('installed');
+  cleanups.push(available.cleanup, rejected.cleanup);
+  await writeFile(rejected.configPath, rejected.toml.replace('Example/project', 'Other/repository').replace('unit_name = "demo"', 'unit_name = "second"'));
+  await writeFile(join(rejected.source, 'src/orbi/config.py'), '# changed unsupported source\n');
+  await available.save([available.entry, { ...rejected.entry, id: 'second', label: 'Second', repo: 'Other/repository' }]);
+  vi.stubEnv('PASEO_ORBI_CONFIG', available.authorization);
+  vi.spyOn(ReadPorts.prototype, 'hostInventory').mockResolvedValue(
+    'orbi-demo@1.service loaded inactive dead Orbi Runner\norbi-demo@1.timer loaded active waiting Orbi Timer\n');
+  const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+  const stopServer = serverEntry({ handle: (contract: any, handler: any) => {
+    handlers.set(contract.name, async input => contract.output.parse(await handler(contract.input.parse(input))));
+  } } as PluginServerContext);
+  cleanups.push(stopServer);
+  for (const [name, mock] of Object.entries({ 'deployments.list': host.readCatalog, 'services.inventory': host.readInventory })) {
+    mock.mockReset().mockImplementation(input => handlers.get(name)!(input));
+  }
+  host.readControl.mockReset();
+  const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
+  const stopClient = clientEntry({ addScreen: (screen: any) => { screens.set(screen.id, screen.Component); return vi.fn(); }, addSidebarHeaderItem: () => vi.fn(), openScreen: vi.fn() } as unknown as PluginClientContext);
+  cleanups.push(stopClient);
+  const query = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => query.clear());
+  const theme = { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111', surface1: '#222', surface2: '#333', border: '#555', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } };
+  vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
+  const Screen = screens.get('services')!;
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<QueryClientProvider client={query}><Screen theme={theme} host={{ id: 'host-a', label: 'Host A' }} layout={{ compact: true, platform: 'ios' }} params={{}} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  const flush = async () => { for (let n = 0; n < 20 && query.isFetching() > 0; n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); }); };
+  const waitFor = async (condition: () => boolean) => { for (let n = 0; n < 200 && !condition(); n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); }); };
+  const press = async (label: string) => { await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress()); await flush(); };
+  await waitFor(() => text().includes('Other/repository') && text().includes('orbi-demo'));
+  const repair = 'Ask the operator to repair the authorized configuration/source profile and reload this plugin.';
+  // The list names the rejected repository, its problem and its repair guidance.
+  expect(text()).toContain('Second (Other/repository): unsupported_source_profile');
+  expect(text()).toContain('compatibility: unsupported_source_profile');
+  expect(text()).toContain(repair);
+  await press('Details for Example/project');
+  const details = text();
+  // The available service keeps its own association and the host catalog block ...
+  expect(details).toContain('Matches configured deployment Demo (Example/project) by unit name.');
+  expect(renderer.root.findAllByProps({ testID: 'orbi-catalog' })).toHaveLength(1);
+  // ... while the unrelated repository's rejection, problem and instruction are absent.
+  expect(details).not.toContain('Other/repository');
+  expect(details).not.toContain('Second (');
+  expect(details).not.toContain('unsupported_source_profile');
+  expect(details).not.toContain(repair);
+  // Back on the list the same rejected entry and its guidance are still visible.
+  await press('Back to services');
+  expect(renderer.root.findByProps({ testID: 'orbi-services-heading' }).props.children).toBe('Services · Host A');
+  expect(text()).toContain('Second (Other/repository): unsupported_source_profile');
+  expect(text()).toContain(repair);
+});
+
 it('keeps a deferred catalog read pending instead of a failed or unauthorized repository link', async () => {
   vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
   const f = await fixture(); cleanups.push(f.cleanup);
