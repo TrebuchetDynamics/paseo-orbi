@@ -5,6 +5,7 @@ import { SidebarRow } from '@getpaseo/plugin/client/ui';
 import { ScrollView, Text, View } from 'react-native';
 import { deploymentsList, type DeploymentCatalog, type Observation } from '../shared/common';
 import { claimOf, useForeground, useObservationQuery } from './observation';
+import type { CatalogEvidence } from './repository-catalog';
 import { ActionButton } from './action-button';
 import { Fleet } from './fleet';
 import { HostServices, observedDeploymentIds, useHostServicesQuery } from './host-overview';
@@ -105,6 +106,12 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   // never survives into another host or a reassigned catalog entry.
   const workKey = `${props.host.id}:${catalog?.entries.map(entry => `${entry.id}:${entry.repo}:${entry.status}`).join(',') ?? ''}`;
   const requestedIssue = props.params.issue !== undefined && /^[1-9][0-9]*$/.test(props.params.issue) ? Number(props.params.issue) : null;
+  // The association's repository evidence: only a settled read confirms or rules
+  // out a link. Until then it is pending, so an in-flight catalog is never shown
+  // as a failed, absent or unauthorized deployment, and no action follows it.
+  const catalogEvidence: CatalogEvidence = catalogConfirmed
+    ? 'confirmed'
+    : !catalog && !catalogReadFailed ? 'pending' : 'unavailable';
   // The catalog envelope's word, with this screen's own mapping of the settled
   // 'available' word to 'current'; the claim decides it once.
   const catalogClaim = claimOf(query.observation, { connected, foreground });
@@ -170,7 +177,7 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
     {route === 'services' ? <HostServices
       hostId={props.host.id} hostLabel={props.host.label} connected={connected} foreground={foreground}
       theme={props.theme} compact={props.layout.compact}
-      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} catalogConfirmed={catalogConfirmed}
+      entries={catalog?.entries ?? null} catalogUnconfigured={unconfiguredCatalog} catalogEvidence={catalogEvidence}
       openScreen={openScreen} query={inventory} selected={selectedService} repositoryBlock={repositoryBlock}
       onSelect={label => setSelectedService(label)}
       onBack={() => { restoreList.current = true; setSelectedService(null); }} />
