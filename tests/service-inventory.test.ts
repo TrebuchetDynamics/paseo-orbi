@@ -340,7 +340,11 @@ describe('host_inventory_registration', () => {
 
   it('registers services.inventory and snapshots the startup opt-in', async () => {
     const f = await fixture(); cleanups.push(f.cleanup); vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
-    const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory');
+    // The off registration must not depend on an inherited flag: unset it for this
+    // process (afterEach restores it) and install the fixture adapter before either
+    // registration so no path can reach the live host inventory.
+    vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', undefined);
+    const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockImplementation(async operation => operation === 'runtime' ? runtime : installed);
     const processSpy = vi.spyOn(ReadPorts.prototype, 'process');
     const readSpy = vi.spyOn(ReadPorts.prototype, 'read');
     const register = () => {
@@ -350,12 +354,11 @@ describe('host_inventory_registration', () => {
     };
     const off = register();
     const offResult = parse(await off({}));
-    expect(offResult).toEqual({ state: 'off', observedAt: null, sources: [], groups: [], problems: [] });
+    expect(offResult).toEqual(OFF);
     expect(hostInventory).not.toHaveBeenCalled();
     expect(() => servicesInventory.input.parse({ deploymentId: 'demo' })).toThrow();
 
     vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
-    hostInventory.mockImplementation(async operation => operation === 'runtime' ? runtime : installed);
     const enabled = register();
     vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '0');
     const result = parse(await enabled({}));
