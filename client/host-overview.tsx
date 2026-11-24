@@ -143,6 +143,14 @@ function slotState(unit: InventoryUnit | undefined, timer = false): string {
   if (runtime.activeState === 'active' && runtime.subState === (timer ? 'waiting' : 'running')) return timer ? 'Timer waiting' : 'Worker running';
   return `${subject} ${runtime.activeState}/${runtime.subState}`;
 }
+// One group-status derivation for the list row and for a detail view whose group
+// has no numbered slot to explain. A named failure already carries the failed
+// fact, so "Failed" is never repeated beside it.
+function familyStatus(group: InventoryGroup) {
+  const { facts } = summarizeFamily(group);
+  const failure = failureSummary(group);
+  return { failure, status: facts.filter(fact => fact !== 'failed' || failure === null) };
+}
 // One explanation for the whole list, not once per slot: the two subjects are
 // parts of one slot, so neither an idle worker nor a waiting timer is a second
 // service and a waiting timer does not establish that an issue is queued.
@@ -314,10 +322,7 @@ function ServiceRow({ group, name, theme, entries, openScreen, showUnlinked, las
 }) {
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
-  const { facts } = summarizeFamily(group);
-  const failure = failureSummary(group);
-  // A named failure already carries the failed fact; do not repeat "Failed".
-  const status = facts.filter(fact => fact !== 'failed' || failure === null);
+  const { failure, status } = familyStatus(group);
   const entry = authorizedEntry(group, entries);
   return <View testID={`orbi-family-${group.label}`} style={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
     <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
@@ -362,6 +367,9 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
   // Only a group with numeric slots gets the explanation: an absent slot is not
   // invented and an empty list gains no diagnostic clutter.
   const slots = group === null ? [] : slotLines(group);
+  // A group without a numbered slot has no slot line to carry its state, so the
+  // list's own group status keeps the observed state and failure visible here.
+  const status = group !== null && slots.length === 0 ? familyStatus(group) : null;
   // Diagnostics are a local disclosure: activating it reads nothing and changes
   // no state outside this view. A different selection starts closed again.
   const [diagnostics, setDiagnostics] = useState(false);
@@ -375,6 +383,10 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
         {/* Name, failed-first slot facts and freshness lead; setup and raw units never occupy this view. */}
         <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
         {slots.map(line => <Text key={line} style={text}>{line}</Text>)}
+        {status !== null && <View testID="orbi-service-status" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {status.failure !== null && <Text style={text}>{status.failure}</Text>}
+          {status.status.map(fact => <Text key={fact} style={text}>{familyFactText[fact]}</Text>)}
+        </View>}
         {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
         <Text testID="orbi-service-association" style={text}>{association!.note}</Text>
         <Text style={text}>Unit activity does not establish issue delivery.</Text>
