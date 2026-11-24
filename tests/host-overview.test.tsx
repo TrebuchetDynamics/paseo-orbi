@@ -441,6 +441,53 @@ describe('service details lead with the service and slot status', () => {
     expect(text(renderer)).not.toContain('Discovered on this host only');
   });
 
+  it('reports a still-pending catalog read as not yet confirmed instead of failed or unauthorized', async () => {
+    host.readInventory.mockResolvedValue(hostA);
+    let finishCatalog!: (value: DeploymentCatalog) => void;
+    host.readCatalog.mockImplementation(() => new Promise(resolve => { finishCatalog = resolve as typeof finishCatalog; }));
+    const { renderer, press } = await render();
+    // Inventory arrived first: the matched family has no catalog entry yet and the
+    // unmatched family has no confirmed absence. Neither is a catalog failure, and
+    // pending evidence unlocks no repository action on the list either.
+    expect(repositoryActions(renderer)).toHaveLength(0);
+    await press('Details for orbi-demo');
+    expect(association(renderer).props.children).toBe('Repository link not yet confirmed: this host’s repository catalog has not been read yet.');
+    const page = text(renderer);
+    expect(page).not.toContain('not in the current authorized catalog');
+    expect(page).not.toContain('restore authorization');
+    expect(page).not.toContain('could not be read');
+    expect(page).not.toContain('Not linked to a repository.');
+    await press('View diagnostics');
+    expect(text(renderer)).toContain('Repository link not yet confirmed: this host’s repository catalog has not been read yet, so no repository link is confirmed');
+    await press('Back to services');
+    await press('Details for orbi');
+    expect(association(renderer).props.children).toBe('Repository link not yet confirmed: this host’s repository catalog has not been read yet.');
+    await press('Back to services');
+    // The same view shows the supported result once the read settles.
+    await act(async () => finishCatalog(catalog([demo]))); await settle();
+    // Settled positive evidence is the only evidence that offers the action.
+    expect(repositoryActions(renderer)).toHaveLength(1);
+    await press('Details for Example/project');
+    expect(association(renderer).props.children).toBe('Matches configured deployment Demo (Example/project) by unit name.');
+    await press('Back to services');
+    await press('Details for orbi');
+    expect(association(renderer).props.children).toBe('Not linked to a repository.');
+  });
+
+  it('settles a failed catalog read as unavailable for a matched family, never absent', async () => {
+    host.readInventory.mockResolvedValue(hostA);
+    host.readCatalog.mockRejectedValue(new Error('SECRET'));
+    const { renderer, press } = await render();
+    // A settled read that confirmed nothing offers no repository action.
+    expect(repositoryActions(renderer)).toHaveLength(0);
+    await press('Details for orbi-demo');
+    expect(association(renderer).props.children).toBe('Repository link not confirmed: this host’s repository catalog could not be read.');
+    const page = text(renderer);
+    expect(page).not.toContain('not in the current authorized catalog');
+    expect(page).not.toContain('Repository link not yet confirmed');
+    expect(page).not.toContain('SECRET');
+  });
+
   it('keeps an unlinked claim confirmed only while the catalog read succeeds', async () => {
     host.readInventory.mockResolvedValue(unlinked);
     host.readCatalog.mockResolvedValue({ state: 'unconfigured', entries: [], problems: [] });
@@ -735,7 +782,11 @@ describe('host states and authority', () => {
     if (state === 'unconfigured') expect(text(renderer)).not.toContain('PASEO_ORBI_CONFIG');
     expect(repositoryActions(renderer)).toHaveLength(0);
     await press('Details for orbi-demo');
-    expect(text(renderer)).toContain('not in the current authorized catalog');
+    // Only a confirmed read may call the deployment absent; an invalid catalog is
+    // settled evidence that could not confirm the link.
+    expect(text(renderer)).toContain(state === 'unconfigured'
+      ? 'not in the current authorized catalog'
+      : 'Repository link not confirmed: this host’s repository catalog could not be read.');
     await press('Back to services');
     await press('Setup guide');
     expect(text(renderer)).toContain('PASEO_ORBI_CONFIG');

@@ -447,6 +447,75 @@ it('service_details_lead_with_the_service_and_slot_status_before_setup', async (
   expect(renderer.root.findByProps({ accessibilityLabel: 'Details for orbi-unclaimed' })).toBeDefined();
 });
 
+it('keeps a deferred catalog read pending instead of a failed or unauthorized repository link', async () => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+  const f = await fixture(); cleanups.push(f.cleanup);
+  vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+  // Host inventory arrives first: one family the host config claims (matched, no
+  // catalog entry yet) and one it does not (unmatched, no confirmed absence).
+  vi.spyOn(ReadPorts.prototype, 'hostInventory').mockImplementation(async operation => operation === 'runtime'
+    ? 'orbi-demo@1.service loaded inactive dead Demo Worker\norbi-demo@1.timer loaded active waiting Demo Timer\norbi-unclaimed@1.service loaded inactive dead Unclaimed Worker\n'
+    : 'orbi-demo@1.service enabled\norbi-demo@1.timer enabled\norbi-unclaimed@1.service enabled\n');
+  const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+  const stopServer = serverEntry({ handle: (contract: any, handler: any) => {
+    handlers.set(contract.name, async input => contract.output.parse(await handler(contract.input.parse(input))));
+  } } as PluginServerContext);
+  cleanups.push(stopServer);
+  // The real catalog handler answers only after the pending read is inspected.
+  let releaseCatalog!: () => void;
+  const catalogGate = new Promise<void>(resolve => { releaseCatalog = resolve; });
+  host.readCatalog.mockReset().mockImplementation(async input => { await catalogGate; return handlers.get('deployments.list')!(input); });
+  host.readInventory.mockReset().mockImplementation(input => handlers.get('services.inventory')!(input));
+  host.readControl.mockReset();
+  const screens = new Map<string, React.ComponentType<PluginScreenProps>>();
+  const stopClient = clientEntry({ addScreen: (screen: any) => { screens.set(screen.id, screen.Component); return vi.fn(); }, addSidebarHeaderItem: () => vi.fn(), openScreen: vi.fn() } as unknown as PluginClientContext);
+  cleanups.push(stopClient);
+  const query = new QueryClient({ defaultOptions: { queries: { retry: false } } }); cleanups.push(() => query.clear());
+  const theme = { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111', surface1: '#222', surface2: '#333', border: '#555', accent: '#abc', accentForeground: '#000', statusSuccess: '#0f0', statusWarning: '#ff0', statusDanger: '#f00' } };
+  vi.useFakeTimers(); vi.setSystemTime(new Date(stamp));
+  const Screen = screens.get('services')!;
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<QueryClientProvider client={query}><Screen theme={theme} host={{ id: 'host-a', label: 'Host A' }} layout={{ compact: true, platform: 'ios' }} params={{}} /></QueryClientProvider>); });
+  cleanups.push(async () => { await act(async () => renderer.unmount()); });
+  const text = () => renderer.root.findAllByType('Text' as any).map(n => n.children.join('')).join('\n');
+  const flush = async () => { for (let n = 0; n < 50; n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); }); };
+  const waitFor = async (condition: () => boolean) => { for (let n = 0; n < 200 && !condition(); n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); }); };
+  await waitFor(() => text().includes('orbi-demo') && text().includes('orbi-unclaimed'));
+  expect(text()).toContain('Catalog: loading');
+  const press = async (label: string) => {
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress());
+    await flush();
+  };
+  const note = () => renderer.root.findByProps({ testID: 'orbi-service-association' }).props.children;
+  const repositoryActions = () => renderer.root.findAll(node => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.startsWith('View repository'));
+  const pendingCopy = 'Repository link not yet confirmed: this host’s repository catalog has not been read yet.';
+  // Matched family without an entry yet: not confirmed, not absent, not unauthorized.
+  await press('Details for orbi-demo');
+  expect(note()).toBe(pendingCopy);
+  expect(text()).not.toContain('not in the current authorized catalog');
+  expect(text()).not.toContain('restore authorization');
+  expect(text()).not.toContain('could not be read');
+  // Pending evidence unlocks no repository action.
+  expect(repositoryActions()).toHaveLength(0);
+  await press('View diagnostics');
+  expect(text()).toContain('Repository link not yet confirmed: this host’s repository catalog has not been read yet, so no repository link is confirmed');
+  await press('Back to services');
+  // Unmatched family: still not a confirmed absence.
+  await press('Details for orbi-unclaimed');
+  expect(note()).toBe(pendingCopy);
+  expect(text()).not.toContain('Not linked to a repository.');
+  await press('Back to services');
+  // The read settles: the same view shows its supported result.
+  await act(async () => { releaseCatalog(); });
+  await waitFor(() => text().includes('Example/project'));
+  await press('Details for Example/project');
+  expect(note()).toBe('Matches configured deployment Demo (Example/project) by unit name.');
+  await press('Back to services');
+  await press('Details for orbi-unclaimed');
+  expect(note()).toBe('Not linked to a repository.');
+  expect(host.readControl).not.toHaveBeenCalled();
+});
+
 it('validated catalog enables bounded exact-repo issue reads while discovery-only inventory stays independent', async () => {
   vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
   const f = await fixture(); cleanups.push(f.cleanup);
