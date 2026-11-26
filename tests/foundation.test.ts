@@ -354,7 +354,9 @@ describe('package_and_registration', () => {
     const client = queryClient();
     for (const screen of screens) {
       const renderer = await render(client, React.createElement(screen.Component, { ...props, params: { deploymentId: 'demo' } }));
-      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'services' ? 'Service check off · activity unknown' : 'select a repository to browse');
+      // A selected available repository is named by the heading, not a prompt;
+      // the other catalogs (rejected/empty/invalid) keep the selection prompt.
+      expect(JSON.stringify(renderer.toJSON())).toContain(screen.id === 'fleet' ? 'Fleet — read-only' : screen.id === 'services' ? 'Service check off · activity unknown' : `${screen.title} · Demo (Example/project)`);
       expect(JSON.stringify(renderer.toJSON())).toContain('config_mismatch');
       const screenText = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
       if (screen.id === 'fleet') {
@@ -380,11 +382,10 @@ describe('package_and_registration', () => {
         expect(screenText()).toContain('Services · Host A');
         expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
       } else {
-        expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo')).toHaveLength(1);
-        const selectors = renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '));
-        expect(selectors).toHaveLength(1);
-        await act(async () => selectors[0].props.onPress());
-        expect(openScreen).toHaveBeenCalledWith({ screenId: screen.id, params: { deploymentId: 'demo' } });
+        // Demo is the one available repository and it is the selected one: the
+        // heading names it and no switch list (nor the rejected entry) is offered.
+        expect(screenText()).not.toContain('select a repository to browse');
+        expect(renderer.root.findAll(node => node.props.accessibilityLabel?.startsWith('Select '))).toHaveLength(0);
       }
       const navigation = renderer.root.findByProps({ testID: 'orbi-navigation' });
       expect(navigation.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });

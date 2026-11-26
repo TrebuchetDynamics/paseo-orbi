@@ -193,8 +193,15 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
         </View>}
       </> : !selectionPossible ? null : <>
         <View testID={`orbi-${route}`} style={{ gap: 12 }}>
-          <Text style={text}>{title(route)} — select a repository to browse</Text>
-          {selectableEntries.map(entry => <Text key={entry.id} accessibilityRole="button" accessibilityLabel={`Select ${entry.label}`} onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })} style={text}>{entry.label} ({entry.repo})</Text>)}
+          {/* A selection names the repository this screen shows; the list stays only
+              while another available repository can be switched to. */}
+          <Text style={text}>{selectedDeployment
+            ? `${title(route)} · ${selectedDeployment.label} (${selectedDeployment.repo})`
+            : `${title(route)} — select a repository to browse`}</Text>
+          {(!selectedDeployment || selectableEntries.length > 1) && selectableEntries.map(entry => <ActionButton key={entry.id}
+            label={`${entry.label} (${entry.repo})`} accessibilityName={`Select ${entry.label}`}
+            selected={entry.id === selectedDeployment?.id} theme={props.theme}
+            onPress={() => openScreen({ screenId: route, params: { deploymentId: entry.id } })} />)}
           {selectedDeployment && (route === 'issues'
             ? <Issues key={`${featureKey}:${requestedIssue ?? ''}`} deploymentId={selectedDeployment.id} repo={selectedDeployment.repo} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} openScreen={openScreen} initialIssue={requestedIssue} />
             : route === 'runs' ? <Runs key={`${featureKey}:${props.params.issue ?? ''}:${props.params.runId ?? ''}`} repo={selectedDeployment.repo} deploymentId={selectedDeployment.id} hostId={props.host.id} connected={connected} foreground={foreground} theme={props.theme} params={props.params} />

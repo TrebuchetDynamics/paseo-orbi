@@ -535,6 +535,67 @@ it('configured_runs_keeps_a_usable_selector_and_a_valid_deployment_link', async 
   expect(visible()).not.toContain('Link a repository to see its runs.');
 });
 
+it('selected_runs_names_the_shown_repository_and_switches_between_available_ones', async () => {
+  vi.useFakeTimers();
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+  const demo = { id: 'demo', label: 'Demo', repo, status: 'available', problems: [] };
+  const other = { id: 'other', label: 'Other', repo: 'Example/other', status: 'available', problems: [] };
+  const catalog = (...entries: unknown[]) => host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', entries, problems: [] });
+  catalog(demo, other);
+  host.readRuns.mockClear(); host.readRun.mockClear();
+  host.readRuns.mockResolvedValue(observation([]));
+  const openScreen = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+  const mount = async (params: Record<string, string>) => {
+    if (renderer) await act(async () => renderer.unmount());
+    client.clear();
+    await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} params={params} openScreen={openScreen} /></QueryClientProvider>); });
+    await settle(); await settle();
+  };
+  cleanups.push(async () => { if (renderer) { await act(async () => renderer.unmount()); client.clear(); } });
+  const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+  const selector = (label: string) => renderer.root.findAll(node => node.props.accessibilityLabel === label);
+  await mount({ deploymentId: 'demo' });
+  // The heading names the repository that is shown, not a prompt to select one.
+  expect(text()).toContain('Runs · Demo (Example/project)');
+  expect(text()).not.toContain('select a repository to browse');
+  // Two available repositories keep a keyboard-reachable switch, with the shown one selected.
+  expect(selector('Select Demo')).toHaveLength(1); expect(selector('Select Other')).toHaveLength(1);
+  expect(selector('Select Demo')[0].props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { selected: true, disabled: false, busy: false } });
+  expect(selector('Select Other')[0].props).toMatchObject({ accessibilityRole: 'button', accessibilityState: { selected: false } });
+  await act(async () => { selector('Select Other')[0].props.onPress(); });
+  expect(openScreen).toHaveBeenCalledWith({ screenId: 'runs', params: { deploymentId: 'other' } });
+  // One available repository has nothing to switch to: no list at all.
+  catalog(demo);
+  await mount({ deploymentId: 'demo' });
+  expect(text()).toContain('Runs · Demo (Example/project)');
+  expect(text()).not.toContain('select a repository to browse');
+  expect(selector('Select Demo')).toHaveLength(0);
+});
+
+it('selected_issues_and_blockers_name_the_shown_repository_too', async () => {
+  vi.useFakeTimers();
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+  host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', entries: [
+    { id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+  host.readBlockers.mockReset().mockResolvedValue({ state: 'unavailable', data: null, observedAt: new Date().toISOString(), lastSuccessfulAt: null, problems: [] });
+  for (const route of ['issues', 'blockers'] as const) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let renderer!: ReactTestRenderer;
+    const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+    await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} route={route} params={{ deploymentId: 'demo' }} openScreen={vi.fn()} /></QueryClientProvider>); });
+    await settle(); await settle();
+    const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+    const heading = route === 'issues' ? 'Issues' : 'Blockers';
+    expect(text(), route).toContain(`${heading} · Demo (Example/project)`);
+    expect(text(), route).not.toContain('select a repository to browse');
+    expect(renderer.root.findAll(node => node.props.accessibilityLabel === 'Select Demo'), route).toHaveLength(0);
+    await act(async () => renderer.unmount()); client.clear();
+  }
+});
+
 it('projects complete tool-result activity, including incremental reads, without exposing output', async () => {
   const f = await membershipFixture();
   const input = { deploymentId: 'demo', issue: 42, runId: '22222222' };
