@@ -113,7 +113,10 @@ function DeploymentDetail({ entry, connected, foreground, ...props }: Props & {
     }}</ObservationView>
     <WorkspaceShortcut hostId={props.host.id} deploymentId={entry.id} repo={entry.repo}
       connected={connected} foreground={foreground} theme={props.theme} />
-    <Text style={text}>Unit reads unavailable? Ask the operator to check user-unit access, then Refresh. No controls change services.</Text>
+    <Text style={text}>{'Unit reads unavailable? Ask the operator to check user-unit access, then Refresh. '}
+      {entry.controls === null
+        ? 'This view only reads. No service actions are granted for this repository.'
+        : 'This view only reads. Granted Start, Stop and Restart are on Services → Details.'}</Text>
   </View>;
 }
 
