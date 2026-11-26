@@ -1221,4 +1221,96 @@ describe('operator-authorized service controls on the diagnostic view', () => {
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Confirm stop slot 1' })).toHaveLength(0);
     expect(host.readControl).toHaveBeenCalledTimes(1);
   });
+
+  // A retained snapshot is not a current slot state. Acting on it could start or
+  // stop a slot that no longer is what the view still shows, so the details offer
+  // no new action until a current read succeeds again.
+  const actionControls = (renderer: ReactTestRenderer) => renderer.root.findAll(node =>
+    typeof node.props.accessibilityLabel === 'string' && /^(Start|Stop|Restart|Confirm|Cancel) /.test(node.props.accessibilityLabel));
+  const hiddenLine = 'Actions are hidden until services are read again.';
+
+  it('hides the actions disclosure and slot controls while the details show Last seen data', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    expect(actionControls(renderer).length).toBeGreaterThan(0);
+    // A failed Refresh services keeps the previous data and turns it into Last seen
+    // evidence; the retained slot facts stay readable, but they are not actionable.
+    await press('Back to services');
+    host.readInventory.mockRejectedValue(new Error('failed'));
+    await press('Refresh services');
+    expect(text(renderer)).toContain('Stale · current activity unknown');
+    await press('Details for Example/project');
+    expect(text(renderer)).toContain(`Last seen ${stamp}. Current activity unknown.`);
+    expect(text(renderer)).toContain('Slot 1 · Worker idle · Timer waiting');
+    expect(text(renderer)).toContain(hiddenLine);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-1' })).toHaveLength(0);
+    expect(actionControls(renderer)).toHaveLength(0);
+    expect(host.readControl).not.toHaveBeenCalled();
+  });
+
+  it('hides the actions when a disconnect leaves the open details on Last seen data', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press, switchTo } = await render();
+    await openActions(press);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Stop slot 1' })).toHaveLength(1);
+    host.hosts[0].status = 'offline';
+    await switchTo('host-a');
+    expect(text(renderer)).toContain(`Last seen ${stamp}. Current activity unknown.`);
+    expect(text(renderer)).toContain(hiddenLine);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
+    expect(actionControls(renderer)).toHaveLength(0);
+    expect(host.readControl).not.toHaveBeenCalled();
+  });
+
+  it('drops an unsubmitted confirmation on Last seen data and restores the actions collapsed after a reread', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-1' })).toHaveLength(1);
+    host.readInventory.mockRejectedValue(new Error('failed'));
+    await refreshInventory();
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-1' })).toHaveLength(0);
+    expect(host.readControl).not.toHaveBeenCalled();
+    // Current evidence returns: the disclosure is back, collapsed, and the
+    // confirmation that was open during the stale period is not restored. The read
+    // answers at the current time, so the retained 60 s age rule does not apply.
+    host.readInventory.mockImplementation(async () => inventory({ state: 'complete', observedAt: new Date().toISOString(), groups: hostA.groups }));
+    await refreshInventory();
+    expect(text(renderer)).not.toContain(hiddenLine);
+    expect(text(renderer)).not.toContain('Last seen');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props.accessibilityState).toMatchObject({ expanded: false });
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-1' })).toHaveLength(0);
+    await press('Actions for orbi-demo');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-1' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Start slot 1' }).props.disabled).toBe(false);
+    expect(host.readControl).not.toHaveBeenCalled();
+  });
+
+  it('keeps an in-flight submit and its result visible when the evidence turns stale', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    let finish!: (value: unknown) => void;
+    host.readControl.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Start slot 1');
+    await press('Confirm start slot 1');
+    host.readInventory.mockRejectedValue(new Error('failed'));
+    await refreshInventory();
+    expect(text(renderer)).toContain(hiddenLine);
+    expect(text(renderer)).toContain('Submitting start · Slot 1…');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
+    await act(async () => finish(answer())); await settle();
+    // The real outcome is never lost, even though no new action may be offered.
+    expect(text(renderer)).toContain('Start succeeded · Slot 1 · Running');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
+    expect(host.readControl).toHaveBeenCalledTimes(1);
+  });
 });
