@@ -854,6 +854,59 @@ describe('Issues user journey', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain('Browse issue evidence');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' })).toBeDefined();
   });
+  it('shows no GitHub repair step when every issue read succeeded', async () => {
+    vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+    host.readCatalog.mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+    const record = { number: 4, title: 'CLEAN_ROW_TITLE', url: `https://github.com/${repo}/issues/4`,
+      githubState: 'open' as const, updatedAt: '2026-10-15T06:20:00Z', labels: ['ai-blocked'], ...classifyIssue('open', ['ai-blocked']) };
+    host.readIssues.mockReset().mockResolvedValue(issuesList.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z',
+      lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [], data: { repo, page: 1, hasNextPage: false, dependencyStatus: 'unknown', records: [record] } }));
+    host.readIssue.mockReset().mockResolvedValue(issuesGet.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z',
+      lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [], data: { issue: record,
+        reports: selectReports(repo, 4, [comment(1, `${marker()}\n${block('progress', reports.progress)}`)], ['runner'], true),
+        dependencies: { complete: true, observedAt: '2026-11-14T23:00:00Z', records: [], problems: [] }, mergeEvidence: 'unknown' } }));
+    const { renderer, settle } = await renderIssues();
+    const text = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join('')).join('\n');
+    // A clean page read leaves no failure suggestion; the sentence belongs to a reported code.
+    expect(text()).toContain('CLEAN_ROW_TITLE');
+    expect(text()).not.toMatch(/auth_denied|rate_limited|gh authentication|reset gate/);
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
+    expect(text()).toContain('Example/project#4');
+    expect(text()).not.toMatch(/auth_denied|rate_limited|gh authentication|reset gate/);
+  });
+  it('shows only the rate-limit repair step for a rate-limited page read', async () => {
+    vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+    host.readCatalog.mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+    host.readIssues.mockReset().mockResolvedValue(issuesList.output.parse({ state: 'unavailable', observedAt: '2026-11-14T23:00:00Z',
+      lastSuccessfulAt: null, problems: [{ source: 'github', code: 'rate_limited' }], data: null }));
+    const { renderer } = await renderIssues();
+    const lines = renderer.root.findAllByType('Text' as any).map(node => node.children.join(''));
+    const text = lines.join('\n');
+    expect(text).toContain('github: rate_limited');
+    expect(lines.filter(line => line === "Wait for GitHub's retry/reset time, then Refresh.")).toHaveLength(1);
+    expect(text).not.toMatch(/auth_denied|gh authentication/);
+  });
+  it('shows the auth repair step only in the selected issue detail that reported it', async () => {
+    vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
+    host.readCatalog.mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+    const record = { number: 4, title: 'CLEAN_ROW_TITLE', url: `https://github.com/${repo}/issues/4`,
+      githubState: 'open' as const, updatedAt: '2026-10-15T06:20:00Z', labels: ['ai-blocked'], ...classifyIssue('open', ['ai-blocked']) };
+    host.readIssues.mockReset().mockResolvedValue(issuesList.output.parse({ state: 'available', observedAt: '2026-11-14T23:00:00Z',
+      lastSuccessfulAt: '2026-11-14T23:00:00Z', problems: [], data: { repo, page: 1, hasNextPage: false, dependencyStatus: 'unknown', records: [record] } }));
+    // Only the detail read is denied; the page read that succeeded must stay free of repair copy.
+    host.readIssue.mockReset().mockResolvedValue(issuesGet.output.parse({ state: 'unavailable', observedAt: '2026-11-14T23:00:00Z',
+      lastSuccessfulAt: null, problems: [{ source: 'github', code: 'auth_denied' }], data: null }));
+    const { renderer, settle } = await renderIssues();
+    const lines = () => renderer.root.findAllByType('Text' as any).map(node => node.children.join(''));
+    const auth = "Ask the operator to repair the daemon user's existing gh authentication or permissions, then Refresh.";
+    expect(lines().join('\n')).not.toMatch(/auth_denied|gh authentication/);
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 4' }).props.onPress()); await settle(); await settle();
+    const visible = lines();
+    expect(visible.join('\n')).toContain('github: auth_denied');
+    expect(visible.filter(line => line === auth)).toHaveLength(1);
+    expect(visible.indexOf(auth)).toBeGreaterThan(visible.indexOf('Issue #4 — selected row; detail below.'));
+    expect(visible.join('\n')).not.toContain('Wait for GitHub');
+  });
 });
 
 it('looks_up_an_issue_number_without_changing_browse_rows_or_page_limit', async () => {

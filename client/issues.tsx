@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useRpc, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
-import { issuesList, issuesGet, issueStates, issueBrowseStates, issueBrowseStateTitle, issueLabelShortcuts, issueReadRepair, validIssueLabel, type IssueBrowseState, type IssueDetail, type IssuePage } from '../shared/issues';
+import { issuesList, issuesGet, issueStates, issueBrowseStates, issueBrowseStateTitle, issueLabelShortcuts, validIssueLabel, type IssueBrowseState, type IssueDetail, type IssuePage } from '../shared/issues';
 import { waitGuidance } from '../shared/blockers';
 import { ObservationView, useObservationQuery } from './observation';
 import { GitHubEvidenceLink } from './github-evidence-link';
@@ -71,11 +71,10 @@ export function Issues(props: Props) {
   const listed = selected !== null && query.observation?.data?.records.some(record => record.number === selected) === true;
   const panel = selected === null ? null : <View>
     <Text style={text}>Issue #{selected} — {listed ? 'selected row; detail below.' : 'detail read by number; not a browse-page membership claim.'}</Text>
-    <ObservationView {...detail} theme={props.theme} refreshLabel="Refresh selected issue">{data => <Detail data={data} {...props} />}</ObservationView>
+    <ObservationView {...detail} theme={props.theme} refreshLabel="Refresh selected issue" repair>{data => <Detail data={data} {...props} />}</ObservationView>
   </View>;
   return <View>
     <Text style={text}>Ready candidate does not promise pickup. Dependency status is unknown until an issue is selected. Labels are evidence, not execution instructions.</Text>
-    <Text style={text}>{issueReadRepair}</Text>
     <TextInput accessibilityLabel="Issue number to inspect" value={issueText} onChangeText={setIssueText} keyboardType="number-pad" style={{ ...text, borderColor: props.theme.colors.foreground, borderWidth: 1 }} />
     <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue by number" disabled={!lookup} onPress={() => { if (lookup) select(Number(issueText)); }}><Text style={text}>Inspect issue</Text></Pressable>
     {!listed && panel}
@@ -98,7 +97,7 @@ export function Issues(props: Props) {
       </Pressable>
       {labelText.length > 0 && !labelApplicable && <Text style={text}>A label filter is 1-100 printable characters and cannot contain commas.</Text>}
     </View>
-    <ObservationView {...query} theme={props.theme} refreshLabel="Refresh issue page">{data => <View>
+    <ObservationView {...query} theme={props.theme} refreshLabel="Refresh issue page" repair>{data => <View>
       <Text style={text}>{data.repo} — Page {data.page}. This displayed page is not the complete active scope.</Text>
       {data.records.length === 0 && <Text style={text}>{data.hasNextPage
         ? 'No issues on this observed page. Pull-request entries are excluded; continue to the next page.'
