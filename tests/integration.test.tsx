@@ -16,6 +16,7 @@ import serverEntry from '../index.server';
 import clientEntry from '../index.client';
 import { issuesList, issuesGet } from '../shared/issues';
 import { servicesInventory } from '../shared/services';
+import { blockersList } from '../shared/blockers';
 import { ReadError, ReadPorts } from '../server/read-ports';
 import { fixture } from './helpers/fixtures';
 import records from './fixtures/runs/records.json';
@@ -653,6 +654,33 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   ] as const) await expect(handlers.get(name)!({ deploymentId: 'demo', ...input })).rejects.toThrow('deployment_unavailable');
   expect(processPort).not.toHaveBeenCalled(); expect(reads).not.toHaveBeenCalled();
 });
+
+it.each(['v0748', 'v0765'] as const)('%s deployment answers every Work, Services, Issues, Runs and Blockers read', async profile => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+  const f = await fixture(profile); cleanups.push(f.cleanup);
+  await mkdir(join(f.repoDir, '.orbi'));
+  await writeFile(join(f.repoDir, '.orbi/health.json'), JSON.stringify({ runs: [], last_pickup_ts: 1794697100, alerted: [] }));
+  vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+  // Only the external process port is injected; configuration, hash gate and RPC
+  // contracts are real, so an unsupported engine checkout could never reach here.
+  vi.spyOn(ReadPorts.prototype, 'process').mockImplementation(async (_id, operation) => {
+    if (operation.kind === 'systemctl-show') return 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=static\nResult=success\nExecMainStatus=0\n';
+    if (operation.kind === 'journalctl') return '';
+    if (operation.kind === 'gh-api-get' && operation.resource === 'issues') return response([]);
+    throw new Error(`unexpected operation ${operation.kind}`);
+  });
+  const handlers = new Map<string, (input: any) => Promise<any>>();
+  cleanups.push(serverEntry({ handle: (c: any, h: any) => handlers.set(c.name, h) } as unknown as PluginServerContext));
+  const adapter = profile === 'v0748' ? 'orbi-0.7.48-release' : 'orbi-0.7.65-release';
+  expect((await handlers.get('deployments.list')!({})).entries[0]).toMatchObject({ id: 'demo', repo: 'Example/project', adapter, status: 'available' });
+  // Work: the configured-repository detail and its issue rows.
+  expect(await handlers.get('fleet.read')!({ deploymentId: 'demo' })).toMatchObject({ state: 'available', data: { repo: 'Example/project', profile: adapter } });
+  expect(issuesList.output.parse(await handlers.get('issues.list')!({ deploymentId: 'demo', page: 1 }))).toMatchObject({ state: 'available', data: { repo: 'Example/project', records: [] } });
+  // Services, Runs and Blockers answer for the same deployment.
+  expect(servicesInventory.output.parse(await handlers.get('services.inventory')!({}))).toMatchObject({ state: 'complete' });
+  expect(await handlers.get('runs.list')!({ deploymentId: 'demo' })).toMatchObject({ state: 'available', data: [] });
+  expect(blockersList.output.parse(await handlers.get('blockers.list')!({ deploymentId: 'demo', page: 1 }))).toMatchObject({ state: 'available', data: { repo: 'Example/project', records: [] } });
+}, 60000);
 
 it('artifact_contract', async () => {
   // Read the candidate tracked file set, NOT a directory copy containing ignored
