@@ -5,6 +5,7 @@ import contribute from '../index.server';
 import { ConfigRepository } from '../server/config';
 import { ReadPorts } from '../server/read-ports';
 import { createServiceControl, executeControl, type ControlPort, type ControlRun } from '../server/service-control';
+import { createServiceInventory } from '../server/service-inventory';
 import { servicesControl } from '../shared/service-control';
 import type { ControlAction } from '../shared/common';
 import { fixture } from './helpers/fixtures';
@@ -51,6 +52,48 @@ describe('operator-granted service controls', () => {
     const second = port();
     await createServiceControl({ repository, port: second.port })({ deploymentId: 'demo', slot: 1, action: 'stop' });
     expect(second.runs).toEqual([[process.execPath, '-e', 'process.exit(0)', 'orbi-demo@1.service']]);
+  });
+
+  it('discards the cached host inventory snapshot only after a successful action', async () => {
+    const { repository } = await loaded({ controls: grant(['start']) });
+    let active = true;
+    const calls: string[] = [];
+    const inventory = createServiceInventory({ enabled: true, claims: () => [], port: {
+      clock: () => new Date('2026-11-21T00:00:00Z'),
+      hostInventory: vi.fn(async (operation: 'runtime' | 'installed') => {
+        calls.push(operation);
+        return operation === 'runtime'
+          ? 'orbi-demo@1.service loaded ' + (active ? 'active running' : 'inactive dead') + ' Orbi Runner\n'
+          : 'orbi-demo@.service disabled\n';
+      }),
+    } });
+    const activeState = async () => (await inventory({})).groups.flatMap(group => group.units)
+      .find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState;
+    const control = (run: () => ControlRun) => createServiceControl({
+      repository, port: port({ run }).port, onSucceeded: () => inventory.invalidate(),
+    });
+    expect(await activeState()).toBe('active');
+    expect(calls).toEqual(['runtime', 'installed']);
+
+    // Success because the command exited 0 and the resulting state was observed.
+    const succeeded = await control(() => { active = false; return { state: 'exited', code: 0 }; })({ deploymentId: 'demo', slot: 1, action: 'start' });
+    expect(succeeded.outcome).toBe('succeeded');
+    expect(await activeState()).toBe('inactive');
+    expect(calls).toEqual(['runtime', 'installed', 'runtime', 'installed']);
+
+    // Failed, unknown and denied outcomes keep the cached snapshot: the changed
+    // host state stays invisible within the 30-second window.
+    active = true;
+    expect((await control(() => ({ state: 'exited', code: 3 }))({ deploymentId: 'demo', slot: 1, action: 'start' })).outcome).toBe('failed');
+    expect(await activeState()).toBe('inactive');
+    expect(calls).toHaveLength(4);
+    expect((await control(() => ({ state: 'timeout' }))({ deploymentId: 'demo', slot: 1, action: 'start' })).outcome).toBe('unknown');
+    expect(await activeState()).toBe('inactive');
+    expect(calls).toHaveLength(4);
+    // 'stop' is not in this grant, so it is denied before any execution.
+    expect((await control(() => ({ state: 'exited', code: 0 }))({ deploymentId: 'demo', slot: 1, action: 'stop' })).outcome).toBe('denied');
+    expect(await activeState()).toBe('inactive');
+    expect(calls).toHaveLength(4);
   });
 
   it('denies forged, unknown, stale, revoked and unapproved requests before mutation', async () => {

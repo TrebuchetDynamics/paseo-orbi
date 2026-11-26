@@ -42,8 +42,11 @@ export default function contribute(server: PluginServerContext) {
   // actor, which the result records as null instead of inventing one. The
   // action runs through a separate mutation adapter, and its resulting state is
   // re-read through the existing bounded read port.
-  const control = Promise.all([repository, ports]).then(([config, reads]) => createServiceControl({
+  const control = Promise.all([repository, ports, inventory]).then(([config, reads, serviceInventory]) => createServiceControl({
     repository: config, signal: lifetime.signal, actor: null,
+    // A successful action discards the snapshot read before it, so the next
+    // Refresh services or poll reads the host again.
+    onSucceeded: () => serviceInventory.invalidate(),
     port: {
       now: () => new Date(),
       run: (argv, timeoutMs) => executeControl(argv, timeoutMs),

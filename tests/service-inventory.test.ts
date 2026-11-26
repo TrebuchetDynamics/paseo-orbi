@@ -6,6 +6,7 @@ import { ConfigRepository } from '../server/config';
 import { ReadError, ReadPorts } from '../server/read-ports';
 import { createServiceInventory, OVERALL_DEADLINE_MS, ROW_LIMIT, SNAPSHOT_TTL_MS } from '../server/service-inventory';
 import { servicesInventory } from '../shared/services';
+import { servicesControl } from '../shared/service-control';
 import contribute from '../index.server';
 import { fixture } from './helpers/fixtures';
 
@@ -194,6 +195,74 @@ describe('host_service_inventory', () => {
     expect(hostInventory).toHaveBeenCalledTimes(4);
   });
 
+  it('discards the cached snapshot on invalidation and reads the host again', async () => {
+    let currentRuntime = 'orbi-demo@1.service loaded active running Orbi Runner\n';
+    const hostInventory = vi.fn(async (operation: 'runtime' | 'installed') =>
+      operation === 'runtime' ? currentRuntime : 'orbi-demo@.service disabled\n');
+    const read = createServiceInventory({ enabled: true, claims: () => [], port: {
+      clock: () => new Date('2026-11-14T23:00:00Z'), hostInventory,
+    } });
+    const activeState = async () => (await read({})).groups.flatMap(group => group.units)
+      .find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState;
+    expect(await activeState()).toBe('active');
+    expect(hostInventory).toHaveBeenCalledTimes(2);
+    // The action happened between the two reads; the old snapshot is still within TTL.
+    currentRuntime = 'orbi-demo@1.service loaded inactive dead Orbi Runner\n';
+    expect(await activeState()).toBe('active');
+    expect(hostInventory).toHaveBeenCalledTimes(2);
+    read.invalidate();
+    expect(await activeState()).toBe('inactive');
+    expect(hostInventory).toHaveBeenCalledTimes(4);
+  });
+
+  it('never reads the host when invalidated while off or revoked', async () => {
+    const offPort = stubPort();
+    const offRead = createServiceInventory({ enabled: false, claims: () => [], port: offPort.port });
+    offRead.invalidate();
+    expect(parse(await offRead({}))).toEqual(OFF);
+    expect(offPort.calls).toEqual([]);
+
+    const grant = new AbortController();
+    const revokedPort = stubPort();
+    const revokedRead = createServiceInventory({ enabled: true, claims: () => [], port: revokedPort.port, signal: grant.signal });
+    expect(parse(await revokedRead({})).state).toBe('complete');
+    expect(revokedPort.calls).toEqual(['runtime', 'installed']);
+    grant.abort();
+    revokedRead.invalidate();
+    expect(parse(await revokedRead({}))).toEqual(OFF);
+    expect(revokedPort.calls).toEqual(['runtime', 'installed']);
+  });
+
+  it('does not cache a read that was in flight when invalidated', async () => {
+    const calls: string[] = [];
+    let releaseRuntime!: (value: string) => void;
+    let runtimeReads = 0;
+    const beforeAction = 'orbi-demo@1.service loaded inactive dead Orbi Runner\n';
+    const afterAction = 'orbi-demo@1.service loaded active running Orbi Runner\n';
+    const read = createServiceInventory({ enabled: true, claims: () => [], port: {
+      clock: () => new Date('2026-11-14T23:00:00Z'),
+      hostInventory: vi.fn((operation: 'runtime' | 'installed') => {
+        calls.push(operation);
+        if (operation === 'installed') return Promise.resolve('orbi-demo@.service disabled\n');
+        runtimeReads++;
+        return runtimeReads === 1
+          ? new Promise<string>(resolve => { releaseRuntime = resolve; })
+          : Promise.resolve(afterAction);
+      }),
+    } });
+    const pending = read({});
+    expect(calls).toEqual(['runtime']);
+    // The action succeeded while this pre-action read was still in flight.
+    read.invalidate();
+    releaseRuntime(beforeAction);
+    expect(parse(await pending).state).toBe('complete');
+    expect(calls).toEqual(['runtime', 'installed']);
+    // The pre-action result answered its waiting caller but was not cached.
+    const next = parse(await read({}));
+    expect(calls).toEqual(['runtime', 'installed', 'runtime', 'installed']);
+    expect(next.groups.flatMap(group => group.units).find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState).toBe('active');
+  });
+
   it('drops a paused read and never launches the second source once monitoring is revoked', async () => {
     const calls: string[] = [];
     const grant = new AbortController();
@@ -336,6 +405,35 @@ describe('host_inventory_registration', () => {
     const after = parse(await read({}));
     expect(after).toEqual(OFF);
     expect(hostInventory).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards the registered snapshot after a successful action through the real RPCs', async () => {
+    const f = await fixture(); cleanups.push(f.cleanup);
+    await f.save([{ ...f.entry, controls: {
+      admittedClientsOperate: true, actions: ['start'], commands: { start: [process.execPath, '-e', 'process.exit(0)', '{unit}'] },
+    } }]);
+    vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+    vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+    let facts = 'active running';
+    const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockImplementation(async operation =>
+      operation === 'runtime' ? `orbi-demo@1.service loaded ${facts} Orbi Runner\n` : 'orbi-demo@.service disabled\n');
+    const show = vi.spyOn(ReadPorts.prototype, 'process').mockResolvedValue('LoadState=loaded\nActiveState=inactive\nSubState=dead\n');
+    const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+    cleanups.push(contribute({ handle: (contract: { name: string }, handler: (input: unknown) => Promise<unknown>) => { handlers.set(contract.name, handler); } } as unknown as PluginServerContext));
+    const read = handlers.get('services.inventory')!;
+    const activeState = async () => parse(await read({})).groups.flatMap(group => group.units)
+      .find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState;
+    expect(await activeState()).toBe('active');
+    expect(hostInventory).toHaveBeenCalledTimes(2);
+
+    // The operator's Start reports success: the shared snapshot is discarded, so the
+    // next services read (Refresh services or the 30 s check) reads the host again.
+    const result = servicesControl.output.parse(await handlers.get('services.control')!({ deploymentId: 'demo', slot: 1, action: 'start' }));
+    expect(result.outcome).toBe('succeeded');
+    expect(show).toHaveBeenCalledTimes(1);
+    facts = 'inactive dead';
+    expect(await activeState()).toBe('inactive');
+    expect(hostInventory).toHaveBeenCalledTimes(4);
   });
 
   it('registers services.inventory and snapshots the startup opt-in', async () => {
