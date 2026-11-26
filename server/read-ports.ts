@@ -148,10 +148,16 @@ class ChildOperations {
   async dispose() { await Promise.all([...this.children.values()].map(stop => stop())); }
 }
 
+// One closed order per caller: the Issues browser reads newest updates first,
+// while the Runs/Blockers scope scans creation order, which a later update or
+// label change cannot move between pages of a live page-number scan.
+export const issueOrders = ['updated_desc', 'created_asc'] as const;
+export type IssueOrder = (typeof issueOrders)[number];
+
 export type ProcessOperation =
   | { kind: 'systemctl-show'; slot: number; unit: 'service' | 'timer' }
   | { kind: 'journalctl'; slot: number }
-  | { kind: 'gh-api-get'; resource: 'issues'; state: IssueBrowseState; label?: string; page: number }
+  | { kind: 'gh-api-get'; resource: 'issues'; state: IssueBrowseState; label?: string; order: IssueOrder; page: number }
   | { kind: 'gh-api-get'; resource: 'comments' | 'dependencies' | 'issue'; issue: number; page: number }
   | { kind: 'gh-api-get'; resource: 'pull'; pr: number; page: number }
   | { kind: 'gh-api-get'; resource: 'checks'; sha: string; page: number };
@@ -302,9 +308,11 @@ export class ReadPorts {
         // Server-side state and one exact literal label: both are fixed query
         // parameters of allowlisted fields, never command or URL text.
         if (!issueBrowseStates.includes(operation.state)) throw new ReadError('unsafe_path');
+        if (!issueOrders.includes(operation.order)) throw new ReadError('unsafe_path');
         if (operation.label !== undefined && !validIssueLabel(operation.label)) throw new ReadError('unsafe_path');
         const label = operation.label === undefined ? '' : `&labels=${encodeURIComponent(operation.label)}`;
-        endpoint = `${root}/issues?state=${operation.state}${label}&sort=updated&direction=desc&${paging}`;
+        const order = operation.order === 'created_asc' ? 'sort=created&direction=asc' : 'sort=updated&direction=desc';
+        endpoint = `${root}/issues?state=${operation.state}${label}&${order}&${paging}`;
       } else if (operation.resource === 'comments' || operation.resource === 'dependencies' || operation.resource === 'issue') {
         if (!Number.isSafeInteger(operation.issue) || operation.issue < 1) throw new ReadError('unsafe_path');
         endpoint = `${root}/issues/${operation.issue}`;

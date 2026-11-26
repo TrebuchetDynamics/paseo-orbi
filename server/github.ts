@@ -74,8 +74,8 @@ export class GitHubReader {
     const labelDetails = raw.labels.map(label => ({ name: label.name, color: labelColor(label.color) }));
     return { number: raw.number, title: raw.title, url: `https://github.com/${repo}/issues/${raw.number}`, githubState: raw.state, updatedAt: raw.updated_at, labels, labelDetails, ...classifyIssue(raw.state, labels) };
   }
-  private async collect<T>(id: string, key: string, operation: (page: number) => ProcessOperation, parse: (value: unknown) => { records: T[]; count: number }): Promise<CompleteCollection<T>> {
-    const start = this.now(), records: T[] = [];
+  private async collect<T>(id: string, key: string, operation: (page: number) => ProcessOperation, parse: (value: unknown) => { records: T[]; count: number }, identity?: (record: T) => number): Promise<CompleteCollection<T>> {
+    const start = this.now(), records: T[] = [], seen = new Set<number>();
     let failure: Problem['code'] = 'incomplete';
     try {
       for (let page = 1; page <= 10; page++) {
@@ -84,6 +84,13 @@ export class GitHubReader {
         if (this.now() - start >= 60000) throw new GitHubError('deadline');
         if (result.count > 100) throw new GitHubError('invalid_response');
         records.push(...result.records);
+        if (identity) {
+          // A live page-number scan can return the same item on two pages, and that
+          // same shift leaves another item out. Such a scan is not complete membership.
+          const numbers = result.records.map(identity);
+          if (numbers.some(number => seen.has(number))) throw new GitHubError('incomplete');
+          for (const number of numbers) seen.add(number);
+        }
         if (result.count < 100) {
           const collection = { complete: true, observedAt: this.stamp(), records, problems: [] };
           this.remember(this.complete, key, collection); return collection;
@@ -95,10 +102,12 @@ export class GitHubReader {
   }
   async listIssueScope(id: string): Promise<CompleteCollection<IssueSummary>> {
     const { repo } = this.repository.resolve(id), key = `${id}:${repo}:scope`;
-    return this.coalesce(key, () => this.collect(id, key, page => ({ kind: 'gh-api-get', resource: 'issues', state: 'open', page }), value => {
+    // Creation order cannot be moved by the label/comment updates Orbi performs
+    // during the scan; a repeated issue number is reported as incomplete instead.
+    return this.coalesce(key, () => this.collect(id, key, page => ({ kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'created_asc', page }), value => {
       const raw = z.array(RawIssue).parse(value);
       return { count: raw.length, records: raw.filter(r => !r.pull_request).map(r => this.summary(repo, r)) };
-    }));
+    }, record => record.number));
   }
   async listIssues(id: string, page: number, state: IssueBrowseState = 'open', label: string | null = null): Promise<Observation<IssuePage>> {
     const { repo } = this.repository.resolve(id);
@@ -112,7 +121,7 @@ export class GitHubReader {
     const key = `${id}:${repo}:issues:${state}:${label ?? ''}:${page}`;
     return this.coalesce(key, async () => {
       try {
-        const operation = { kind: 'gh-api-get' as const, resource: 'issues' as const, state, ...(label === null ? {} : { label }), page };
+        const operation = { kind: 'gh-api-get' as const, resource: 'issues' as const, state, ...(label === null ? {} : { label }), order: 'updated_desc' as const, page };
         const raw = z.array(RawIssue).max(100).parse(await this.request(id, operation));
         const data: IssuePage = { repo, page, hasNextPage: raw.length === 100, records: raw.filter(r => !r.pull_request).map(r => this.summary(repo, r)), dependencyStatus: 'unknown', state, label };
         const now = this.stamp();
