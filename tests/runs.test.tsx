@@ -267,8 +267,8 @@ it('checks_and_selection_lifecycle', async () => {
   const press = async (label: string) => { await act(async () => { renderer.root.findAll(node => node.type === ('Pressable' as any) && node.props.accessibilityLabel === label)[0].props.onPress(); }); await settle(); await settle(); };
   const visible = () => JSON.stringify(renderer.toJSON());
   await settle(); await settle();
-  expect(visible()).toContain('config_mismatch'); expect(visible()).toContain('no interactive attachment');
-  expect(visible()).toContain('Stage checks is not test success');
+  expect(visible()).toContain('config_mismatch'); expect(visible()).toContain('no attachment or steering');
+  expect(visible()).toContain('Stage checks are not test results');
   expect(host.readRun).not.toHaveBeenCalled();
   await press('Inspect run 42 22222222');
   expect(visible()).toContain('stale_head'); expect(visible()).toContain('head.sha');
@@ -318,6 +318,51 @@ it('checks_and_selection_lifecycle', async () => {
   for (const text of renderer.root.findAllByType('Text' as any)) expect(text.props.style.color).toBe('#eee');
   await act(async () => renderer.unmount()); client.clear();
   expect(host.listeners.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+});
+
+it('shows_github_repair_steps_only_next_to_a_reported_problem', async () => {
+  vi.useFakeTimers();
+  host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
+  host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', entries: [{ id: 'demo', label: 'Demo', repo, status: 'available', problems: [] }], problems: [] });
+  host.readRuns.mockReset().mockResolvedValue(observation([row]));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer!: ReactTestRenderer;
+  const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(2); }); };
+  await act(async () => { renderer = create(<QueryClientProvider client={client}><Shell {...screenProps} /></QueryClientProvider>); });
+  await settle(); await settle();
+  cleanups.push(async () => { await act(async () => renderer.unmount()); client.clear(); });
+  const nodes = () => renderer.root.findAllByType('Text' as any);
+  const lines = () => nodes().map(node => node.children.map(child => typeof child === 'string' ? child : '').join(''));
+  const text = () => lines().join('\n');
+  const auth = "Ask the operator to repair the daemon user's existing gh authentication or permissions, then Refresh.";
+  // A successful read keeps the one scope line and the cadence, and suggests no repair.
+  expect(text()).toContain('Read-only observations, not proof a process is alive. Stage checks are not test results. External Pi sessions are not Paseo agents: no attachment or steering.');
+  expect(text()).toContain('Summary refresh: 30 seconds while foreground/connected.');
+  expect(text()).not.toMatch(/auth_denied|rate_limited|reset gate/);
+  // No unavailable activity is reported while a complete session is attributed.
+  expect(text()).not.toContain('Check the session writer externally and Refresh; do not infer idle.');
+  // A reported problem prints its repair sentence once, directly after the alert evidence.
+  host.readRuns.mockResolvedValue({ ...observation([row]), state: 'partial', problems: [{ source: 'github', code: 'auth_denied' }] });
+  await act(async () => { renderer.root.findByProps({ testID: 'orbi-runs' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); });
+  await settle(); await settle();
+  const reported = lines();
+  const index = reported.indexOf('github: auth_denied');
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(nodes()[index].props.accessibilityRole).toBe('alert');
+  expect(reported[index + 1]).toBe(auth);
+  expect(reported.filter(line => line === auth)).toHaveLength(1);
+  // Unavailable activity earns the session-writer step next to its own evidence line.
+  host.readRuns.mockResolvedValue(observation([{ ...row, sessions: [] }]));
+  await act(async () => { renderer.root.findByProps({ testID: 'orbi-runs' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); });
+  await settle(); await settle();
+  const activity = lines();
+  const unavailable = activity.findIndex(line => line.startsWith('Activity unavailable — no attributed session evidence.'));
+  expect(activity[unavailable]).toBe('Activity unavailable — no attributed session evidence. Check the session writer externally and Refresh; do not infer idle.');
+  expect(activity).not.toContain(auth); // the earlier repair sentence is gone with its problem
+  expect(activity).not.toContain('github: auth_denied');
+  await act(async () => renderer.unmount()); client.clear();
+  expect(vi.getTimerCount()).toBe(0);
   host.hosts = [{ serverId: 'host-a', label: 'Host A', status: 'online' }];
 });
 

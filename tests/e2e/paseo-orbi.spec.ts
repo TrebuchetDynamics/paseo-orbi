@@ -26,7 +26,11 @@ for (const view of views) {
     if (scenario === 'stale') { await assertState(page, view, 'available'); await state(host, 'stale'); await page.waitForTimeout(30100); await refresh(page, view); }
     await assertState(page, view, scenario);
     if (scenario !== 'empty') {
-      await expect(page.getByText(view === 'fleet' ? /Ask the operator to check/ : /auth_denied: ask the operator/).first()).toBeVisible();
+      // Runs and Blockers print a repair step only next to the code they reported:
+      // a 401 reports auth_denied, the partial fixture reports network_failed.
+      const repair = view === 'fleet' ? /Ask the operator to check/ : view === 'issues' ? /auth_denied: ask the operator/
+        : /Ask the operator to repair the daemon user's existing gh authentication|Repair access externally, then Refresh/;
+      await expect(page.getByText(repair).first()).toBeVisible();
       await state(host, 'available'); // only fixture writer repairs; the observer never mutates
       await page.waitForTimeout(30100); await refresh(page, view);
       await assertState(page, view, 'available');

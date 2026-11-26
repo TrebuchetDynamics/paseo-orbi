@@ -71,11 +71,10 @@ export function Blockers(props: Props) {
   const lookup = /^[1-9][0-9]*$/.test(issueText) && Number.isSafeInteger(Number(issueText));
   return <View style={{ gap: 12 }}>
     <Text style={text}>Recovery stays Orbi/operator-owned. Guidance and reported retry safety never authorize recovery. This screen only reads evidence.</Text>
-    <Text style={text}>auth_denied: ask the operator to repair the daemon user's existing gh authentication/permissions externally, then Refresh. rate_limited: wait for GitHub's reset gate. incomplete/network_failed: repair access externally and Refresh; unavailable evidence never means no blockers.</Text>
     <Text style={text} accessibilityRole="link" onPress={() => { void Linking.openURL('https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/src/orbi/failure.py#L45').catch(() => undefined); }}>Failure schema source (pinned v1)</Text>
     <TextInput accessibilityLabel="Issue number to inspect" value={issueText} onChangeText={setIssueText} keyboardType="number-pad" style={{ ...text, borderColor: props.theme.colors.foreground, borderWidth: 1 }} />
     <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue by number" disabled={!lookup} onPress={() => { if (lookup) select(Number(issueText)); }}><Text style={text}>Inspect issue</Text></Pressable>
-    <ObservationView {...query} theme={props.theme}>{data => <View style={{ gap: 12 }}>
+    <ObservationView {...query} theme={props.theme} repair>{data => <View style={{ gap: 12 }}>
       <Text style={text}>{data.repo} — Blockers page {data.page}; scope {data.complete ? 'complete' : 'incomplete / retained membership'}</Text>
       {data.records.length === 0 && <Text style={text}>{data.complete ? data.page === 1 ? 'No blockers in the complete observed scope.' : 'No blockers on this page.' : 'Blocker membership unavailable; not an empty success.'}</Text>}
       {data.records.length > 0 && <AttentionSummary records={data.records} complete={data.complete} theme={props.theme} />}
@@ -88,7 +87,7 @@ export function Blockers(props: Props) {
     </View>}</ObservationView>
     {selected !== null && <View style={{ gap: 8 }}>
       <Text style={text}>Issue #{selected} — looked-up evidence; not blocker-scope membership or a page candidate claim.</Text>
-      <ObservationView {...detail} theme={props.theme}>{data => <BlockerEvidence data={data} theme={props.theme} deploymentId={props.deploymentId} openScreen={props.openScreen} />}</ObservationView>
+      <ObservationView {...detail} theme={props.theme} repair>{data => <BlockerEvidence data={data} theme={props.theme} deploymentId={props.deploymentId} openScreen={props.openScreen} />}</ObservationView>
     </View>}
   </View>;
 }
