@@ -25,6 +25,7 @@ import { readFile, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ReportSelection, IssueDetail, IssuePage, issuesList, issuesGet, issueStates, neutralLabelColor, labelForeground, labelLuminance } from '../shared/issues';
 import { GitHubReader } from '../server/github';
+import { BlockersReader } from '../server/blockers';
 import { ReadPorts, type ProcessOperation } from '../server/read-ports';
 import { ConfigRepository } from '../server/config';
 import { fixture } from './helpers/fixtures';
@@ -81,11 +82,11 @@ describe('lifecycle_and_pagination', () => {
     expect(first.data?.dependencyStatus).toBe('unknown');
     // Open is the browse default and an explicit server-side state, never all.
     expect(first.data).toMatchObject({ state: 'open', label: null });
-    expect(f.process.mock.calls[0][1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 });
+    expect(f.process.mock.calls[0][1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'updated_desc', page: 1 });
     for (const state of ['closed', 'all'] as const) {
       f.advance(); f.process.mockResolvedValueOnce(response([rest.issue]));
       expect((await f.reader.listIssues('demo', 1, state)).data).toMatchObject({ state, label: null });
-      expect(f.process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state, page: 1 });
+      expect(f.process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state, order: 'updated_desc', page: 1 });
     }
     f.advance(); f.process.mockResolvedValueOnce(response({}, 401));
     const stale = await f.reader.listIssues('demo', 1);
@@ -147,7 +148,7 @@ describe('lifecycle_and_pagination', () => {
       { process, clock: () => new Date(now) });
     const first = await reader.listIssues('demo', 1, 'open', 'good first issue');
     expect(first.data).toMatchObject({ state: 'open', label: 'good first issue', records: [{ number: 1 }] });
-    expect(process.mock.calls[0][1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'good first issue', page: 1 });
+    expect(process.mock.calls[0][1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'good first issue', order: 'updated_desc', page: 1 });
     // Same identity is a cache hit; a different state, label, page or repository is not.
     expect((await reader.listIssues('demo', 1, 'open', 'good first issue')).data?.records[0].number).toBe(1);
     expect(process).toHaveBeenCalledTimes(1);
@@ -170,10 +171,10 @@ describe('lifecycle_and_pagination', () => {
     expect(() => issuesList.input.parse({ deploymentId: 'demo', page: 1, state: 'merged' })).toThrow();
     expect(() => issuesList.input.parse({ deploymentId: 'demo', page: 1, label: 'bad,label' })).toThrow();
     now += 1; await reader.listIssues('demo', 10, 'all', 'good first issue');
-    expect(process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'all', label: 'good first issue', page: 10 });
+    expect(process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'all', label: 'good first issue', order: 'updated_desc', page: 10 });
     // A literal non-ASCII label is accepted as written; encoding is the port's job.
     now += 1; await reader.listIssues('demo', 2, 'closed', 'bug ünïcode');
-    expect(process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'closed', label: 'bug ünïcode', page: 2 });
+    expect(process.mock.calls.at(-1)?.[1]).toEqual({ kind: 'gh-api-get', resource: 'issues', state: 'closed', label: 'bug ünïcode', order: 'updated_desc', page: 2 });
     await expect(reader.listIssues('demo', 11, 'open')).rejects.toThrow('unsafe_path');
   });
   it('collects complete open membership across pages; capped/failed initial reads establish nothing', async () => {
@@ -182,15 +183,56 @@ describe('lifecycle_and_pagination', () => {
     f.process.mockResolvedValueOnce(response(page)).mockResolvedValueOnce(response([{ ...rest.issue, number: 101 }]));
     const good = await f.reader.listIssueScope('demo');
     expect(good.complete).toBe(true); expect(good.records).toHaveLength(101);
-    expect(f.process.mock.calls.map(([, op]) => op)).toEqual([1, 2].map(page => ({ kind: 'gh-api-get', resource: 'issues', state: 'open', page })));
-    f.advance(); f.process.mockResolvedValue(response(page));
+    // The scope scans creation order ascending, so updates cannot move an issue across pages.
+    expect(f.process.mock.calls.map(([, op]) => op)).toEqual([1, 2].map(page => ({ kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'created_asc', page })));
+    // Ten full pages of distinct issues hit the page cap rather than a duplicate.
+    const distinct = (page: number) => Array.from({ length: 100 }, (_, i) => ({ ...rest.issue, number: (page - 1) * 100 + i + 1 }));
+    f.advance(); f.process.mockImplementation(async (_id, op) => response(distinct(op.kind === 'gh-api-get' ? op.page : 1)));
     const capped = await f.reader.listIssueScope('demo');
     expect(capped).toMatchObject({ complete: false, records: good.records, observedAt: good.observedAt, problems: [{ code: 'incomplete' }] });
     expect(f.process).toHaveBeenCalledTimes(12);
-    const initial = fakeReader(); initial.process.mockResolvedValue(response(page));
+    const initial = fakeReader(); initial.process.mockImplementation(async (_id, op) => response(distinct(op.kind === 'gh-api-get' ? op.page : 1)));
     expect(await initial.reader.listIssueScope('demo')).toMatchObject({ complete: false, records: [] });
     const failure = fakeReader(); failure.process.mockResolvedValueOnce(response(page)).mockRejectedValueOnce(new Error('NETWORK_SECRET'));
     expect(await failure.reader.listIssueScope('demo')).toMatchObject({ complete: false, records: [], problems: [{ code: 'network_failed' }] });
+  });
+  it('reports a scope scan that repeats an issue number as incomplete and never returns duplicates', async () => {
+    const f = fakeReader();
+    const page = Array.from({ length: 100 }, (_, i) => ({ ...rest.issue, number: i + 1 }));
+    f.process.mockResolvedValueOnce(response(page)).mockResolvedValueOnce(response([]));
+    const good = await f.reader.listIssueScope('demo');
+    expect(good).toMatchObject({ complete: true });
+    expect(good.records.map(record => record.number)).toEqual(Array.from({ length: 100 }, (_, i) => i + 1));
+    // A page 2 that repeats the last page-1 number is the observable symptom of a
+    // live order shift: the scan is not complete membership, even though every
+    // page is full and the read succeeded.
+    f.advance(); f.process.mockResolvedValue(response(page.slice(1).concat({ ...rest.issue, number: 100 })));
+    const repeated = await f.reader.listIssueScope('demo');
+    expect(repeated).toMatchObject({ complete: false, records: good.records, observedAt: good.observedAt, problems: [{ source: 'github', code: 'incomplete' }] });
+    expect(repeated.records).toEqual(good.records);
+    const numbers = repeated.records.map(record => record.number);
+    expect(new Set(numbers).size).toBe(numbers.length);
+    // Without a previous complete scope the same duplicate establishes no membership.
+    const initial = fakeReader();
+    initial.process.mockResolvedValueOnce(response(page)).mockResolvedValueOnce(response(page.slice(1).concat({ ...rest.issue, number: 100 })));
+    expect(await initial.reader.listIssueScope('demo')).toMatchObject({ complete: false, records: [], problems: [{ code: 'incomplete' }] });
+    // User outcome: Blockers reports unavailable membership (its "not an empty
+    // success" copy) instead of claiming a complete scope with no blockers.
+    const scoped = fakeReader();
+    const many = page.map(record => ({ ...record, labels: record.number === 1 ? [{ name: 'ai-blocked' }] : [{ name: 'ai-ready' }] }));
+    scoped.process.mockResolvedValueOnce(response(many)).mockResolvedValueOnce(response([]));
+    expect(await scoped.reader.listIssueScope('demo')).toMatchObject({ complete: true });
+    scoped.advance();
+    scoped.process.mockImplementation(async (_id, op) => {
+      if (op.kind !== 'gh-api-get') throw new Error('unexpected operation');
+      if (op.resource === 'comments') return response([]);
+      return response(op.page === 1 ? many : many.slice(1).concat({ ...many[0], number: 100, labels: [{ name: 'ai-ready' }] }));
+    });
+    const blockers = new BlockersReader({ resolve: () => ({ repo }) as unknown as ReturnType<ConfigRepository['resolve']> }, scoped.reader,
+      { clock: () => new Date(scoped.now()), statArtifact: vi.fn() } as unknown as Pick<ReadPorts, 'clock' | 'statArtifact'>);
+    const observed = await blockers.list({ deploymentId: 'demo', page: 1 });
+    expect(observed.data).toMatchObject({ complete: false, records: [{ issue: { number: 1 } }] });
+    expect(observed.problems).toContainEqual({ source: 'github', code: 'incomplete' });
   });
 });
 
@@ -346,7 +388,7 @@ describe('github_boundary_and_backoff', () => {
   });
   it('reduces the final child deadline to the remaining 60-second collection budget', async () => {
     const f = fakeReader();
-    f.process.mockImplementation(async () => { f.advance(9800); return response(Array.from({ length: 100 }, () => rest.issue)); });
+    f.process.mockImplementation(async (_id, op) => { f.advance(9800); return response(Array.from({ length: 100 }, (_, i) => ({ ...rest.issue, number: (op.kind === 'gh-api-get' ? op.page - 1 : 0) * 100 + i + 1 }))); });
     expect(await f.reader.listIssueScope('demo')).toMatchObject({ complete: false, problems: [{ code: 'deadline' }] });
     expect(f.process.mock.calls[6][2]).toBe(1200);
   });
@@ -445,12 +487,14 @@ describe('github_boundary_and_backoff', () => {
     vi.stubEnv('PATH', bin);
     const ports = new ReadPorts(await ConfigRepository.load(f.authorization)); cleanups.push(() => ports.dispose());
     const operations: [ProcessOperation, string][] = [
-      [{ kind: 'gh-api-get', resource: 'issues', state: 'all', page: 2 }, 'issues?state=all&sort=updated&direction=desc&per_page=100&page=2'],
-      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 }, 'issues?state=open&sort=updated&direction=desc&per_page=100&page=1'],
-      [{ kind: 'gh-api-get', resource: 'issues', state: 'closed', page: 1 }, 'issues?state=closed&sort=updated&direction=desc&per_page=100&page=1'],
-      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'good first issue', page: 3 }, 'issues?state=open&labels=good%20first%20issue&sort=updated&direction=desc&per_page=100&page=3'],
-      [{ kind: 'gh-api-get', resource: 'issues', state: 'closed', label: 'type: bug', page: 1 }, 'issues?state=closed&labels=type%3A%20bug&sort=updated&direction=desc&per_page=100&page=1'],
-      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'bug ünïcode', page: 1 }, 'issues?state=open&labels=bug%20%C3%BCn%C3%AFcode&sort=updated&direction=desc&per_page=100&page=1'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'all', order: 'updated_desc', page: 2 }, 'issues?state=all&sort=updated&direction=desc&per_page=100&page=2'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'updated_desc', page: 1 }, 'issues?state=open&sort=updated&direction=desc&per_page=100&page=1'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'closed', order: 'updated_desc', page: 1 }, 'issues?state=closed&sort=updated&direction=desc&per_page=100&page=1'],
+      // The Runs/Blockers scope scans creation order ascending; browsing keeps updated descending.
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'created_asc', page: 1 }, 'issues?state=open&sort=created&direction=asc&per_page=100&page=1'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'good first issue', order: 'updated_desc', page: 3 }, 'issues?state=open&labels=good%20first%20issue&sort=updated&direction=desc&per_page=100&page=3'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'closed', label: 'type: bug', order: 'updated_desc', page: 1 }, 'issues?state=closed&labels=type%3A%20bug&sort=updated&direction=desc&per_page=100&page=1'],
+      [{ kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'bug ünïcode', order: 'updated_desc', page: 1 }, 'issues?state=open&labels=bug%20%C3%BCn%C3%AFcode&sort=updated&direction=desc&per_page=100&page=1'],
       [{ kind: 'gh-api-get', resource: 'comments', issue: 4, page: 3 }, 'issues/4/comments?per_page=100&page=3'],
       [{ kind: 'gh-api-get', resource: 'dependencies', issue: 4, page: 1 }, 'issues/4/dependencies/blocked_by?per_page=100&page=1'],
       [{ kind: 'gh-api-get', resource: 'issue', issue: 4, page: 1 }, 'issues/4'],
@@ -460,10 +504,11 @@ describe('github_boundary_and_backoff', () => {
     for (const [operation, endpoint] of operations) expect(JSON.parse(await ports.process('demo', operation))).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', `repos/${repo}/${endpoint}`]);
     for (const operation of [
       { kind: 'gh-api-get', resource: 'checks', sha: '../main', page: 1 }, { kind: 'gh-api-get', resource: 'pull', pr: 0, page: 1 }, { kind: 'gh-api-get', resource: 'comments', issue: -1, page: 1 },
-      // Server-side state and label are closed enums; no arbitrary query text passes.
-      { kind: 'gh-api-get', resource: 'issues', state: 'merged', page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'bad,label', page: 1 },
-      { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'ai-ready\n', page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'x'.repeat(101), page: 1 },
-      { kind: 'gh-api-get', resource: 'issues', state: 'open', page: 11 },
+      // Server-side state, label and order are closed enums; no arbitrary query text passes.
+      { kind: 'gh-api-get', resource: 'issues', state: 'merged', order: 'updated_desc', page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'bad,label', order: 'updated_desc', page: 1 },
+      { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'ai-ready\n', order: 'updated_desc', page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'open', label: 'x'.repeat(101), order: 'updated_desc', page: 1 },
+      { kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'created_desc', page: 1 }, { kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 },
+      { kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'updated_desc', page: 11 },
     ]) await expect(ports.process('demo', operation as ProcessOperation)).rejects.toThrow('unsafe_path');
     const http = response({}, 429, { 'Retry-After': '90' });
     await writeFile(script, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(http)});process.stderr.write('STDERR_CANARY');process.exit(1);`);

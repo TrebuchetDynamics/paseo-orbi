@@ -263,7 +263,7 @@ describe('bounded_reads_and_lifecycle', () => {
     expect(JSON.parse(await ports.process('demo', { kind: 'journalctl', slot: 2 })).args).toEqual(['--user', '-u', 'orbi-demo@2.service', '--no-pager', '--since', '-1 hour', '-n', '200', '-o', 'json']);
     expect(JSON.parse(await ports.process('demo', { kind: 'gh-api-get', resource: 'comments', issue: 2, page: 1 })).args).toEqual(['api', '--hostname', 'github.com', '--method', 'GET', '--include', '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', 'repos/Example/project/issues/2/comments?per_page=100&page=1']);
     await expect(ports.process('demo', { kind: 'systemctl-show', slot: 3, unit: 'service' })).rejects.toThrow('unsafe_path');
-    await expect(ports.process('demo', { kind: 'gh-api-get', resource: 'issues', state: 'open', page: 11 })).rejects.toThrow('unsafe_path');
+    await expect(ports.process('demo', { kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'updated_desc', page: 11 })).rejects.toThrow('unsafe_path');
   });
   it('caps combined output and redacts process errors', async () => {
     const ports = await processFixture('process.stderr.write("SECRET_CANARY".repeat(100000));process.stdout.write("x".repeat(1048577))');

@@ -607,7 +607,7 @@ it('validated catalog enables bounded exact-repo issue reads while discovery-onl
     data: { repo: f.entry.repo, page: 1, hasNextPage: false, records: [{ number: 42, labels: ['ai-ready'], state: 'Ready candidate' }] },
   });
   // Browse defaults to server-side open state, never one all-state page filtered locally.
-  expect(operations).toEqual([{ id: 'demo', operation: { kind: 'gh-api-get', resource: 'issues', state: 'open', page: 1 } }]);
+  expect(operations).toEqual([{ id: 'demo', operation: { kind: 'gh-api-get', resource: 'issues', state: 'open', order: 'updated_desc', page: 1 } }]);
   expect(processPort.mock.calls[0]?.[2]).toBe(10000);
   // Bounded page scope: the typed contract refuses out-of-range pages before any read.
   expect(issuesList.input.parse({ deploymentId: 'demo', page: 10 })).toEqual({ deploymentId: 'demo', page: 10, state: 'open' });
