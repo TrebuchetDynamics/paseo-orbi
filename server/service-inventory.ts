@@ -18,8 +18,8 @@ export type ServiceInventoryReader = {
   (input: Record<string, never>): Promise<ServiceInventory>;
   // Discards the cached host snapshot after a successful service action. A read
   // already in flight may still answer its waiting callers, but its pre-action
-  // result is not cached; the next call starts a new host read. Never starts a
-  // read itself.
+  // result is neither cached nor joined: the next call starts a new host read.
+  // Never starts a read itself.
   invalidate(): void;
 };
 
@@ -136,6 +136,9 @@ export function createServiceInventory(options: {
   let cached: ServiceInventory | null = null;
   let cachedAt = 0;
   let inFlight: Promise<ServiceInventory> | null = null;
+  // Generation the current inFlight read started in. A read that started before
+  // an invalidation carries pre-action data, so it is never joined afterwards.
+  let inFlightGeneration = 0;
   // Bumped by invalidate(): a refresh that started earlier must not cache its
   // pre-action result when it finishes after the invalidation.
   let generation = 0;
@@ -193,9 +196,12 @@ export function createServiceInventory(options: {
     if (!options.enabled || revoked()) return offAndDiscard();
     const now = options.port.clock().getTime();
     if (cached && now - cachedAt < SNAPSHOT_TTL_MS) return cached;
-    if (!inFlight) {
+    // Join only a read that started after the latest invalidation: a read that
+    // started earlier answers its own callers but never this one, which starts a
+    // new host read so its answer reflects the action.
+    if (!inFlight || inFlightGeneration !== generation) {
       const startedAtGeneration = generation;
-      inFlight = refresh().then(value => {
+      const started: Promise<ServiceInventory> = refresh().then(value => {
         // A snapshot that outlived the grant is never cached or returned.
         if (revoked()) return offAndDiscard();
         // A read that started before an invalidation carries pre-action data:
@@ -204,7 +210,12 @@ export function createServiceInventory(options: {
           cached = value; cachedAt = options.port.clock().getTime();
         }
         return value;
-      }).finally(() => { inFlight = null; });
+      }).finally(() => {
+        // An older read that finishes later must not clear a newer one.
+        if (inFlight === started) inFlight = null;
+      });
+      inFlight = started;
+      inFlightGeneration = startedAtGeneration;
     }
     return inFlight;
   };

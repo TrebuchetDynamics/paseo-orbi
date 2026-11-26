@@ -263,6 +263,41 @@ describe('host_service_inventory', () => {
     expect(next.groups.flatMap(group => group.units).find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState).toBe('active');
   });
 
+  it('starts a new read after invalidation instead of joining a pre-action read', async () => {
+    const calls: string[] = [];
+    const releases: ((value: string) => void)[] = [];
+    const beforeAction = 'orbi-demo@1.service loaded inactive dead Orbi Runner\n';
+    const afterAction = 'orbi-demo@1.service loaded active running Orbi Runner\n';
+    const read = createServiceInventory({ enabled: true, claims: () => [], port: {
+      clock: () => new Date('2026-11-14T23:00:00Z'),
+      hostInventory: vi.fn((operation: 'runtime' | 'installed') => {
+        calls.push(operation);
+        if (operation === 'installed') return Promise.resolve('orbi-demo@.service disabled\n');
+        return new Promise<string>(resolve => { releases.push(resolve); });
+      }),
+    } });
+    const activeState = (inventory: ReturnType<typeof parse>) => inventory.groups.flatMap(group => group.units)
+      .find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState;
+    // A poll started before the action is still waiting for systemd.
+    const preAction = read({});
+    expect(calls).toEqual(['runtime']);
+    // The action succeeded and Refresh services is pressed while that poll is held.
+    read.invalidate();
+    const postAction = read({});
+    // The caller after the action reads systemd again instead of joining the older read.
+    expect(calls).toEqual(['runtime', 'runtime']);
+    // The older read keeps answering its own caller with the state from before the action.
+    releases[0](beforeAction);
+    expect(activeState(parse(await preAction))).toBe('inactive');
+    expect(calls).toEqual(['runtime', 'runtime', 'installed']);
+    releases[1](afterAction);
+    expect(activeState(parse(await postAction))).toBe('active');
+    expect(calls).toEqual(['runtime', 'runtime', 'installed', 'installed']);
+    // Inside the TTL the newer read is the cached one: nothing is read again.
+    expect(activeState(parse(await read({})))).toBe('active');
+    expect(calls).toEqual(['runtime', 'runtime', 'installed', 'installed']);
+  });
+
   it('drops a paused read and never launches the second source once monitoring is revoked', async () => {
     const calls: string[] = [];
     const grant = new AbortController();
@@ -434,6 +469,39 @@ describe('host_inventory_registration', () => {
     facts = 'inactive dead';
     expect(await activeState()).toBe('inactive');
     expect(hostInventory).toHaveBeenCalledTimes(4);
+  });
+
+  it('starts a new read through the real RPCs when an action succeeds while an older read is held', async () => {
+    const f = await fixture(); cleanups.push(f.cleanup);
+    await f.save([{ ...f.entry, controls: {
+      admittedClientsOperate: true, actions: ['start'], commands: { start: [process.execPath, '-e', 'process.exit(0)', '{unit}'] },
+    } }]);
+    vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+    vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+    const releases: ((value: string) => void)[] = [];
+    const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockImplementation((operation: 'runtime' | 'installed') => {
+      if (operation === 'installed') return Promise.resolve('orbi-demo@.service disabled\n');
+      return new Promise<string>(resolve => { releases.push(resolve); });
+    });
+    vi.spyOn(ReadPorts.prototype, 'process').mockResolvedValue('LoadState=loaded\nActiveState=active\nSubState=running\n');
+    const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+    cleanups.push(contribute({ handle: (contract: { name: string }, handler: (input: unknown) => Promise<unknown>) => { handlers.set(contract.name, handler); } } as unknown as PluginServerContext));
+    const activeState = (value: unknown) => parse(value).groups.flatMap(group => group.units)
+      .find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState;
+    const read = handlers.get('services.inventory')!;
+    const stale = read({});
+    // The operator's Start succeeds while the earlier poll still waits on systemd.
+    const result = servicesControl.output.parse(await handlers.get('services.control')!({ deploymentId: 'demo', slot: 1, action: 'start' }));
+    expect(result.outcome).toBe('succeeded');
+    // Refresh services reads systemd again instead of joining the pre-action read.
+    const fresh = read({});
+    // The RPC handler defers the read by a microtask; it starts before the older read finishes.
+    await vi.waitFor(() => expect(hostInventory.mock.calls.map(call => call[0])).toEqual(['runtime', 'runtime']));
+    releases[0]('orbi-demo@1.service loaded inactive dead Orbi Runner\n');
+    expect(activeState(await stale)).toBe('inactive');
+    releases[1]('orbi-demo@1.service loaded active running Orbi Runner\n');
+    expect(activeState(await fresh)).toBe('active');
+    expect(hostInventory.mock.calls.map(call => call[0])).toEqual(['runtime', 'runtime', 'installed', 'installed']);
   });
 
   it('registers services.inventory and snapshots the startup opt-in', async () => {
