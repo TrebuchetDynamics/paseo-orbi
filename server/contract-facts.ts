@@ -30,8 +30,9 @@ import { ReadError, readBytes } from './read-ports';
 //   journal         src/orbi/journal.py       `run_start`, `run_end`,
 //                                              `worktree_cleaned`, `worktree_retained`
 //                                              each exactly once as a key of the
-//                                              `JOURNAL_EVENTS: dict[str, str] = {` block
-//                                              -> "journal <name>".
+//                                              `JOURNAL_EVENTS: dict[str, str] = {` block;
+//                                              a blank or comment line of that block is
+//                                              never a key -> "journal <name>".
 //   journal-format  src/orbi/journal.py       exactly one trimmed line
 //                                              `return "%(levelname)s %(message)s"` and
 //                                              one `record.msg = f"[{_CURRENT_RUN_ID}] {record.msg}"`
@@ -155,9 +156,11 @@ function markerFacts(sources: ReadonlyArray<readonly [string, string]>): string[
 }
 
 function journalFacts(text: string): string[] {
-  const body = block(text, JOURNAL_HEADER, 'journal.py').join('\n');
+  // Only a code line of the block carries an event: a commented-out entry is not a key.
+  const lines = block(text, JOURNAL_HEADER, 'journal.py').map(line => line.trim())
+    .filter(line => line !== '' && !line.startsWith('#'));
   return journalEvents.map(name => {
-    const seen = body.split(`"${name}":`).length - 1;
+    const seen = lines.filter(line => line.startsWith(`"${name}":`)).length;
     if (seen !== 1) return refuse(`journal.py: event ${name} found ${seen} times`);
     return `journal ${name}`;
   });

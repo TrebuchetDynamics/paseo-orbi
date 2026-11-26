@@ -128,6 +128,16 @@ describe('contract_facts_drift', () => {
       refused: true,
     },
     {
+      // A comment line of the block is not a key: commenting the entry out removes it.
+      name: 'commented-out run_end journal event',
+      run: f => edit(f, 'src/orbi/journal.py', replace(
+        '    "run_end": "a delivery ended (result, PR, commit)",',
+        '    # "run_end": "a delivery ended (result, PR, commit)",',
+      )),
+      refused: true,
+      reason: 'journal.py: event run_end found 0 times',
+    },
+    {
       name: 'changed journal log format line',
       run: f => edit(f, 'src/orbi/journal.py', replace('return "%(levelname)s %(message)s"', 'return "%(levelname)s: %(message)s"')),
       refused: true,
