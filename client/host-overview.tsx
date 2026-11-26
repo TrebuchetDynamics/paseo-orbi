@@ -229,9 +229,12 @@ function feedbackText(feedback: ControlFeedback): string {
   return `${actionText[feedback.action]} outcome unknown · Slot ${feedback.slot} · ${state}.${reason} No automatic retry was made.`;
 }
 
-function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
+function FamilyActions({ hostId, hostLabel, entry, group, theme, stale }: {
   hostId: string; hostLabel: string; entry: DeploymentCatalog['entries'][number];
   group: InventoryGroup; theme: PluginHostProps['theme'];
+  // Retained evidence: the slot facts may already be untrue, so this view offers
+  // no new action until a current read succeeds again.
+  stale: boolean;
 }) {
   const text = { color: theme.colors.foreground };
   const secondary = { ...text, fontSize: 12 };
@@ -240,12 +243,16 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
   const slots = controls === null ? [] : controlSlots(group, controls.slots);
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState<{ action: ControlAction; slot: number } | null>(null);
-  const [sending, setSending] = useState(false);
+  const [sending, setSending] = useState<{ action: ControlAction; slot: number } | null>(null);
   const [feedback, setFeedback] = useState<ControlFeedback | null>(null);
   // A host switch unmounts this row (it is keyed by host and family). This guard
   // only stops a late answer from publishing into a row that is already gone.
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
+  // Stale evidence closes the disclosure and drops an unsubmitted confirmation;
+  // neither is restored when current evidence returns. A submit already on its
+  // way keeps its own progress and result, so a real outcome is never lost.
+  useEffect(() => { if (stale) { setOpen(false); setConfirming(null); } }, [stale]);
   if (controls === null) return null;
   // A confirmation is transient. It is only active while it still names a slot
   // the current inventory observes and an action the current grant approves, so
@@ -255,8 +262,8 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
     ? confirming : null;
 
   const submit = async (action: ControlAction, slot: number) => {
-    if (sending) return;
-    setSending(true);
+    if (sending !== null) return;
+    setSending({ action, slot });
     try {
       const result = await call({ deploymentId: entry.id, slot, action });
       if (!mounted.current) return;
@@ -268,13 +275,15 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
       if (!mounted.current) return;
       setFeedback({ action, slot, outcome: 'unknown', reason: null, observed: null, transport: true });
       setConfirming(null);
-    } finally { if (mounted.current) setSending(false); }
+    } finally { if (mounted.current) setSending(null); }
   };
 
   return <View testID={`orbi-actions-${group.label}`} style={{ gap: 8 }}>
-    <ActionButton label={open ? 'Hide actions' : 'Actions'} accessibilityName={`Actions for ${group.label}`}
-      expanded={open} theme={theme} onPress={() => { if (open) setConfirming(null); setOpen(!open); }} />
-    {open && <View style={{ gap: 8 }}>
+    {stale
+      ? <Text style={text}>Actions are hidden until services are read again.</Text>
+      : <ActionButton label={open ? 'Hide actions' : 'Actions'} accessibilityName={`Actions for ${group.label}`}
+        expanded={open} theme={theme} onPress={() => { if (open) setConfirming(null); setOpen(!open); }} />}
+    {!stale && open && <View style={{ gap: 8 }}>
       {slots.length === 0 && <Text style={text}>No observed slot is inside this repository's approved targets.</Text>}
       {slots.map(slot => {
         const service = group.units.find(unit => unit.kind === 'service' && unit.id === `${group.label}@${slot}.service`);
@@ -285,8 +294,8 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
             {controls.actions.map(action => <ActionButton key={action} label={actionText[action]}
               accessibilityName={`${actionText[action]} slot ${slot}`}
               variant={action === 'start' ? 'primary' : action === 'stop' ? 'danger' : 'secondary'}
-              disabled={sending || active !== null}
-              busy={sending && pending && active?.action === action} theme={theme}
+              disabled={sending !== null || active !== null}
+              busy={sending !== null && pending && active?.action === action} theme={theme}
               onPress={() => { setFeedback(null); setConfirming({ action, slot }); }} />)}
           </View>
           {pending && active !== null && <View testID={`orbi-confirm-${group.label}-${slot}`} style={{ gap: 4 }}>
@@ -297,16 +306,20 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
             <Text style={text}>{`Effect: ${effectText[active.action]}`}</Text>
             <Text style={secondary}>Confirmation is not authorization. The daemon rechecks the operator grant before it runs anything.</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              <ActionButton label={sending ? 'Submitting…' : `Confirm ${actionText[active.action].toLowerCase()}`}
+              <ActionButton label={sending !== null ? 'Submitting…' : `Confirm ${actionText[active.action].toLowerCase()}`}
                 accessibilityName={`Confirm ${actionText[active.action].toLowerCase()} slot ${slot}`}
-                variant={active.action === 'stop' ? 'danger' : 'primary'} disabled={sending} busy={sending} theme={theme}
+                variant={active.action === 'stop' ? 'danger' : 'primary'} disabled={sending !== null} busy={sending !== null} theme={theme}
                 onPress={() => void submit(active.action, slot)} />
               <ActionButton label="Cancel" accessibilityName={`Cancel ${actionText[active.action].toLowerCase()} slot ${slot}`}
-                disabled={sending} theme={theme} onPress={() => setConfirming(null)} />
+                disabled={sending !== null} theme={theme} onPress={() => setConfirming(null)} />
             </View>
           </View>}
         </View>;
       })}
+      {feedback !== null && <Text accessibilityRole="alert" testID={`orbi-control-result-${group.label}`} style={text}>{feedbackText(feedback)}</Text>}
+    </View>}
+    {stale && <View style={{ gap: 8 }}>
+      {sending !== null && <Text style={text}>{`Submitting ${actionText[sending.action].toLowerCase()} · Slot ${sending.slot}…`}</Text>}
       {feedback !== null && <Text accessibilityRole="alert" testID={`orbi-control-result-${group.label}`} style={text}>{feedbackText(feedback)}</Text>}
     </View>}
   </View>;
@@ -396,7 +409,7 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
         {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
         <Text testID="orbi-service-association" style={text}>{association!.note}</Text>
         <Text style={text}>Unit activity does not establish issue delivery.</Text>
-        {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} />}
+        {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} stale={lastSeen !== null} />}
         <ActionButton label="View diagnostics" accessibilityName="View diagnostics" expanded={diagnostics}
           theme={theme} onPress={() => setDiagnostics(value => !value)} />
         {diagnostics && <View accessibilityLabel="Service diagnostics" testID="orbi-service-diagnostics" style={{ gap: 8 }}>
