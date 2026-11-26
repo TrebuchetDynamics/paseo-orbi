@@ -180,7 +180,7 @@ const actionText: Record<ControlAction, string> = { start: 'Start', stop: 'Stop'
 const effectText: Record<ControlAction, string> = {
   start: 'start this runner slot so its scheduler can pick up work',
   stop: 'stop this runner slot through its operator-bound Orbi lifecycle command',
-  restart: 'restart this runner slot; it is only offered while idle or failed, never during a possible delivery',
+  restart: 'restart this runner slot through its operator-bound Orbi lifecycle command; the plugin refuses it unless the slot was observed idle or failed, but only that command can refuse or drain a slot that is active when it runs',
 };
 const reasonText: Record<ControlReason, string> = {
   deployment_unavailable: 'Not approved: this repository is not in the current authorized configuration.',

@@ -1026,6 +1026,23 @@ describe('operator-authorized service controls on the diagnostic view', () => {
     expect(text(renderer)).toContain('Start succeeded · Slot 1 · Running');
   });
 
+  it('names the operator\'s restart command, not the plugin, as the guard for an active slot', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(hostA);
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Restart slot 1');
+    const lines = renderer.root.findByProps({ testID: 'orbi-confirm-orbi-demo-1' }).findAllByType('Text' as any).map(node => node.children.join(''));
+    const effect = lines.find(line => line.startsWith('Effect: restart this runner slot')) ?? '';
+    // The plugin's state check is an early refusal only: the bound command owns
+    // the guard, because the check is not atomic with that command.
+    expect(effect).toContain('the plugin refuses it unless the slot was observed idle or failed');
+    expect(effect).toContain('only that command can refuse or drain a slot that is active when it runs');
+    expect(effect).not.toContain('never during a possible delivery');
+    await press('Cancel restart slot 1');
+    expect(host.readControl).not.toHaveBeenCalled();
+  });
+
   it('sends one action for repeated clicks and reports only the re-observed state', async () => {
     host.readCatalog.mockResolvedValue(catalog([controlled]));
     host.readInventory.mockResolvedValue(hostA);
