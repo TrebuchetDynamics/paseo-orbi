@@ -6,7 +6,7 @@ import type { ControlAction, DeploymentCatalog, Observation } from '../shared/co
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
 import type { ControlObservation, ControlOutcome, ControlReason } from '../shared/service-control';
 import { servicesControl } from '../shared/service-control';
-import { claimOf, readingEvidence, useObservationQuery } from './observation';
+import { claimOf, readingEvidence, statusWord, useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
 import { associationOf, authorizedEntry, displayNames, type CatalogEvidence } from './repository-catalog';
 import { formatLocalTime } from './time';
@@ -500,7 +500,7 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
   const panel = { gap: compact ? 8 : 12 };
   return <View testID="orbi-host-services" style={panel}>
     <Text accessibilityRole="header" testID="orbi-services-heading" style={text}>{`Services · ${hostLabel}`}</Text>
-    <Text style={text}>{off ? 'Service check off · activity unknown' : stale ? 'Stale · current activity unknown' : `Services: ${state === 'complete' ? 'Current' : state}`}</Text>
+    <Text style={text}>{off ? 'Service check off · activity unknown' : stale ? 'Stale · current activity unknown' : `Services: ${statusWord(state, connected)}`}</Text>
     {current && families.length > 0 && <Text testID="orbi-attention-count" style={text}>{`${attention} of ${families.length} ${claim.payload === 'partial' ? 'observed ' : ''}groups ${attention === 1 ? 'needs' : 'need'} attention`}</Text>}
     {!connected && <Text style={text}>Offline · current activity unknown</Text>}
     {connected && !foreground && <Text style={text}>The app is in the background. Host service reads are paused.</Text>}

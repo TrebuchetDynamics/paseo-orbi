@@ -4,7 +4,7 @@ import { useHosts, useRpc } from '@getpaseo/plugin/client';
 import { SidebarRow } from '@getpaseo/plugin/client/ui';
 import { ScrollView, Text, View } from 'react-native';
 import { deploymentsList, type DeploymentCatalog, type Observation } from '../shared/common';
-import { claimOf, useForeground, useObservationQuery } from './observation';
+import { claimOf, statusWord, useForeground, useObservationQuery } from './observation';
 import type { CatalogEvidence } from './repository-catalog';
 import { ActionButton } from './action-button';
 import { Fleet } from './fleet';
@@ -112,10 +112,10 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
   const catalogEvidence: CatalogEvidence = catalogConfirmed
     ? 'confirmed'
     : !catalog && !catalogReadFailed ? 'pending' : 'unavailable';
-  // The catalog envelope's word, with this screen's own mapping of the settled
-  // 'available' word to 'current'; the claim decides it once.
+  // The catalog envelope's word; the claim decides it once and the shared word set
+  // names it for the operator.
   const catalogClaim = claimOf(query.observation, { connected, foreground });
-  const transport = catalogClaim.state === 'available' ? 'current' : catalogClaim.state;
+  const catalogWord = statusWord(catalogClaim.state, connected);
   const deploymentParams: Record<string, string> = selectedDeployment ? { deploymentId: selectedDeployment.id } : {};
   const catalogProblems = query.observation?.problems ?? [];
   const target = (next: string) => next === 'fleet'
@@ -138,11 +138,11 @@ export function Shell({ route, openScreen, ...props }: PluginScreenProps & {
     {route !== 'fleet' && route !== 'services' && route !== 'runs' && <Text style={text}>Selected host: {props.host.label}</Text>}
     {!connected && <Text style={text}>Selected host is offline. No other host will be used.</Text>}
     {!foreground && <Text style={text}>App is in the background. Catalog reads are paused.</Text>}
-    {transport !== 'current' && <Text accessibilityLabel={`Catalog transport: ${transport}`} style={text}>{`Catalog: ${!connected ? 'offline' : transport}`}</Text>}
+    {catalogWord !== 'Current' && <Text accessibilityLabel={`Catalog transport: ${catalogWord}`} style={text}>{`Catalog: ${catalogWord}`}</Text>}
     {!!catalogProblems.length && <Text accessibilityRole="alert" style={text}>{catalogProblems.map(p => `${p.source}: ${p.code}`).join('; ')}</Text>}
     {!serviceDetail && (!catalog || unconfiguredCatalog || catalog.state === 'invalid' || catalogReadFailed) && <View accessibilityLabel="Orbi setup" testID="orbi-setup" style={{ gap: 8 }}>
       <Text style={text}>{!catalog
-        ? (transport === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.')
+        ? (catalogClaim.state === 'loading' ? 'Loading the selected host catalog.' : 'Catalog unavailable. Reconnect the selected host or ask the operator to check the plugin, then Refresh.')
         : catalogReadFailed && !unconfiguredCatalog
           ? 'Catalog read failed. Reconnect the selected host or ask the operator to check the plugin, then Refresh.'
           : unconfiguredCatalog

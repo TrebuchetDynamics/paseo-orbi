@@ -142,7 +142,7 @@ it('four_views_read_only_journey', async () => {
   // The persistent navigation already names the surface: no duplicate inner title.
   expect(text()).not.toContain('Work · Host A');
   expect(text()).toContain('Repository: Demo (Example/project)');
-  expect(text()).toContain('Issues: current');
+  expect(text()).toContain('Issues: Current');
   expect(text()).toContain('#42 Issue 42');
   // The readable health line and its separate View services action precede the
   // issue rows; the configured-repository detail stays below them.
@@ -157,7 +157,7 @@ it('four_views_read_only_journey', async () => {
   expect(text().indexOf('Fleet — read-only')).toBeGreaterThan(text().indexOf('#42 Issue 42'));
   partial = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
-  expect(text()).toContain('partial'); expect(text()).toContain('systemd: process_failed');
+  expect(text()).toContain('Partial'); expect(text()).toContain('systemd: process_failed');
   expect(text()).toContain('Occupancy: unknown'); partial = false;
   await press('Active work for Demo'); expect(openScreen).toHaveBeenCalledWith({ screenId: 'issues', params: { deploymentId: 'demo' } });
   await act(async () => renderer.update(tree('issues'))); await settle();
@@ -250,7 +250,7 @@ it('four_views_read_only_journey', async () => {
   expect(text()).toContain('invalid');
   failed = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
-  expect(text()).toContain('stale'); expect(text()).toContain('process_failed');
+  expect(text()).toContain('Stale'); expect(text()).toContain('process_failed');
   const calls = processPort.mock.calls.length;
   await act(async () => renderer.update(tree('blockers', { ...second, host: { id: 'host-b', label: 'Host B' } } as PluginScreenProps))); await settle();
   expect(text()).toContain('Selected host is offline'); expect(text()).not.toContain('test.log: present'); expect(processPort).toHaveBeenCalledTimes(calls);
@@ -540,7 +540,7 @@ it('keeps a deferred catalog read pending instead of a failed or unauthorized re
   const flush = async () => { for (let n = 0; n < 50; n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); }); };
   const waitFor = async (condition: () => boolean) => { for (let n = 0; n < 200 && !condition(); n++) await act(async () => { await pause(5); await vi.advanceTimersByTimeAsync(5); }); };
   await waitFor(() => text().includes('orbi-demo') && text().includes('orbi-unclaimed'));
-  expect(text()).toContain('Catalog: loading');
+  expect(text()).toContain('Catalog: Loading');
   const press = async (label: string) => {
     await act(async () => renderer.root.findByProps({ accessibilityLabel: label }).props.onPress());
     await flush();

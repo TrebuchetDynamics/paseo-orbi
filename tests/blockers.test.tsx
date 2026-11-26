@@ -325,7 +325,7 @@ it('partial_stale_and_layout', async () => {
   f.advance(); f.deny(true);
   await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
   let visible = JSON.stringify(renderer.toJSON());
-  expect(visible).toContain('stale'); expect(visible).toContain('auth_denied'); expect(visible).toContain(formatLocalTime(stamp));
+  expect(visible).toContain('Stale'); expect(visible).toContain('auth_denied'); expect(visible).toContain(formatLocalTime(stamp));
   // #134: retained evidence shows local times, not raw ISO stamps.
   expect(visible).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   expect(visible).toContain('Synthetic blocker'); expect(visible).not.toContain('No blockers in');
@@ -335,12 +335,12 @@ it('partial_stale_and_layout', async () => {
   expect(JSON.stringify(renderer.toJSON())).not.toContain('github: auth_denied');
   host.readBlockers.mockResolvedValue({ ...available({ repo, page: 1, hasNextPage: false, complete: true, records: [{ ...safeBlocker(), reports: { ...safeBlocker().reports, complete: false } }] }), state: 'partial', lastSuccessfulAt: null, problems: [{ source: 'github', code: 'incomplete' }] });
   await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
-  expect(JSON.stringify(renderer.toJSON())).toContain('partial');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Partial');
   expect(JSON.stringify(renderer.toJSON())).toContain('current run not established');
   // A complete empty scope is distinguishable from an initial failure on another selection.
   host.readBlockers.mockResolvedValue({ state: 'unavailable', data: null, observedAt: stamp, lastSuccessfulAt: null, problems: [{ source: 'github', code: 'auth_denied' }] });
   await screen.update({ ...props, params: { deploymentId: 'other' } });
-  visible = JSON.stringify(renderer.toJSON()); expect(visible).toContain('unavailable'); expect(visible).not.toContain('No blockers in');
+  visible = JSON.stringify(renderer.toJSON()); expect(visible).toContain('Unavailable'); expect(visible).not.toContain('No blockers in');
   host.readBlockers.mockResolvedValue(available({ repo: 'Example/other', page: 1, hasNextPage: false, complete: true, records: [] }));
   await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
   expect(JSON.stringify(renderer.toJSON())).toContain('No blockers in the complete observed scope');
@@ -517,7 +517,7 @@ it('repository_change_separates_pending_blocker_rows_details_and_sources', async
   expect(text()).toContain('Artifact metadata only'); expect(text()).toContain('Reported run: bbbbbbbb'); expect(text()).not.toContain('A_BLOCKER_TITLE');
   host.readBlockers.mockRejectedValue(new Error('transport unavailable')); host.readBlocker.mockRejectedValue(new Error('transport unavailable'));
   await act(async () => { for (const refresh of renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })) await refresh.props.onPress(); }); await settle();
-  expect(text()).toContain('stale'); expect(text()).toContain('refresh_failed'); expect(text()).toContain('B_BLOCKER_TITLE');
+  expect(text()).toContain('Stale'); expect(text()).toContain('refresh_failed'); expect(text()).toContain('B_BLOCKER_TITLE');
   expect(text()).toContain('Artifact metadata only'); expect(text()).not.toContain('A_BLOCKER_TITLE'); expect(text()).not.toContain(`https://github.com/${repo}/issues/4`);
 });
 

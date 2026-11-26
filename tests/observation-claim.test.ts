@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createElement } from 'react';
 import { act, create } from 'react-test-renderer';
 import type { PluginClientContext, PluginHostProps } from '@getpaseo/plugin/client';
-import { claimOf, type Claim, type Reach } from '../client/observation';
+import { claimOf, statusWord, type Claim, type ClaimState, type Reach } from '../client/observation';
 import { HostServices } from '../client/host-overview';
 import type { Observation } from '../shared/common';
 import type { ServiceInventory } from '../shared/services';
@@ -64,6 +64,22 @@ describe('one reading claim for every screen', () => {
         envelope: observation?.state ?? null, ...expected,
       });
     }
+  });
+
+  // One readable word set on every screen: the claim decides the state, the word
+  // set names it, and only connectivity decides Offline.
+  it('names every decided state with the one operator word set', () => {
+    const words: Array<[ClaimState, string]> = [
+      ['available', 'Current'], ['complete', 'Current'], ['partial', 'Partial'],
+      ['stale', 'Stale'], ['unavailable', 'Unavailable'], ['loading', 'Loading'], ['off', 'Off'],
+    ];
+    for (const [state, word] of words) expect(statusWord(state), state).toBe(word);
+    expect(statusWord('available', true)).toBe('Current');
+  });
+
+  it('names a disconnected host Offline whatever evidence it retained', () => {
+    const states: ClaimState[] = ['available', 'complete', 'partial', 'stale', 'unavailable', 'loading', 'off'];
+    for (const state of states) expect(statusWord(state, false), state).toBe('Offline');
   });
 
   it('reads the payload word only from the closed reading vocabulary', () => {

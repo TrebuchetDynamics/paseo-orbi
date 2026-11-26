@@ -54,7 +54,7 @@ export async function assertServicesState(page: Page, state: 'complete' | 'parti
     await expect(page.getByText('Services: Current', { exact: true })).toBeVisible();
     await expect(page.getByText('1 of 3 groups needs attention', { exact: true })).toBeVisible();
   } else if (state === 'partial') {
-    await expect(page.getByText('Services: partial', { exact: true })).toBeVisible();
+    await expect(page.getByText('Services: Partial', { exact: true })).toBeVisible();
     await expect(page.getByText('Partial · units may be missing.', { exact: true })).toBeVisible();
     await expect(page.getByText('installed: process_failed', { exact: true })).toBeVisible();
   } else {

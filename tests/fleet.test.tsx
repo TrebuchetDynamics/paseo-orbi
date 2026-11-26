@@ -158,7 +158,7 @@ it('stale_compact_and_theme', async () => {
   ports.process.mockRejectedValue(new ReadError('process_failed'));
   ports.read.mockRejectedValue(new ReadError('read_failed'));
   await act(async () => { await renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); }); await settle();
-  expect(text()).toContain('stale');
+  expect(text()).toContain('Stale');
   expect(text()).toContain('Reported outcome: failed');
   expect(text()).toContain('Active: inactive');
   expect(text()).toContain('systemd: process_failed');
@@ -167,11 +167,11 @@ it('stale_compact_and_theme', async () => {
   host.readFleet.mockRejectedValue(new Error('SECRET raw error'));
   const refreshes = renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' });
   await act(async () => { await refreshes[0].props.onPress(); }); await settle();
-  expect(text()).toContain('stale'); expect(text()).toContain('refresh_failed');
+  expect(text()).toContain('Stale'); expect(text()).toContain('refresh_failed');
   expect(text()).toContain(`Last success: ${formatLocalTime(firstReadAt)}`);
   expect(text()).not.toContain('SECRET');
   await act(async () => { for (const listener of host.listeners) listener('background'); await vi.advanceTimersByTimeAsync(60001); }); await settle();
-  expect(text()).toContain('stale'); expect(text()).toContain(`Observed: ${formatLocalTime(firstReadAt)}`);
+  expect(text()).toContain('Stale'); expect(text()).toContain(`Observed: ${formatLocalTime(firstReadAt)}`);
   // #134: no displayed time keeps the raw ISO stamp.
   expect(text()).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   const light = { ...props, layout: { compact: false, platform: 'web' }, theme: { colors: { foreground: '#222', foregroundMuted: '#555', surface0: '#fff' } } } as PluginScreenProps;
@@ -282,7 +282,7 @@ it('keeps failed, inactive, unknown and not-found slot facts apart with the repo
   host.readFleet.mockRejectedValue(new Error('transport unavailable'));
   await act(async () => { await renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); });
   await settle();
-  expect(text()).toContain('stale');
+  expect(text()).toContain('Stale');
   expect(text()).toContain(`Last success: ${formatLocalTime('2026-11-14T23:00:00.000Z')}`);
   expect(summaries()).toHaveLength(5);
   expect(host.readFleet).toHaveBeenCalledTimes(2);
@@ -344,6 +344,10 @@ it('repository_change_scopes_fresh_capacity_health_and_failed_refresh', async ()
   expect(host.readFleet).not.toHaveBeenCalled();
   await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Configured repositories' }).props.onPress()); await settle(); await settle();
   expect(text()).toContain('Configured capacity: 2'); expect(text()).toContain('A_HEALTH');
+  // #138: the configured-repository panel names its freshness with the one word set.
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Observation status: Current' })).toHaveLength(1);
+  expect(text().split('\n')).toContain('Current');
+  expect(text().split('\n')).not.toContain('available');
   let reject!: (error: Error) => void;
   host.readFleet.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
   await setCatalog('Reassigned/project');
@@ -351,12 +355,12 @@ it('repository_change_scopes_fresh_capacity_health_and_failed_refresh', async ()
   expect(host.readFleet).toHaveBeenLastCalledWith(fleetRead.input.parse({ deploymentId: 'demo' }));
   expect(text()).toContain('Loading'); expect(text()).not.toContain('Configured capacity: 2'); expect(text()).not.toContain('A_HEALTH');
   await act(async () => reject(new Error('transport unavailable'))); await settle();
-  expect(text()).toContain('unavailable'); expect(text()).toContain('filesystem: refresh_failed'); expect(text()).not.toContain('A_HEALTH');
+  expect(text()).toContain('Unavailable'); expect(text()).toContain('filesystem: refresh_failed'); expect(text()).not.toContain('A_HEALTH');
   const refresh = async () => { await act(async () => { await renderer.root.findByProps({ testID: 'orbi-fleet' }).findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle(); };
   host.readFleet.mockResolvedValue(b); await refresh();
   expect(text()).toContain('Configured capacity: 5'); expect(text()).toContain('B_HEALTH');
   host.readFleet.mockRejectedValue(new Error('transport unavailable')); await refresh();
-  expect(text()).toContain('stale'); expect(text()).toContain('B_HEALTH'); expect(text()).not.toContain('A_HEALTH');
+  expect(text()).toContain('Stale'); expect(text()).toContain('B_HEALTH'); expect(text()).not.toContain('A_HEALTH');
   // Returning to the same fresh identity must still reuse its cache, not clear it.
   const calls = host.readFleet.mock.calls.length;
   await setCatalog('Example/project');

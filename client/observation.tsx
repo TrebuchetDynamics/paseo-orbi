@@ -58,6 +58,17 @@ const readingWord = (data: unknown): PayloadReading | null => {
 // only it may publish a count, and only a complete one may publish absence.
 export const readingEvidence = (state: unknown) => state === 'complete' || state === 'partial';
 
+// The one readable word set for evidence freshness on every screen. The claim
+// decides the state; this only names it for an operator. `reach` is whether the
+// host is connected at all: a disconnected host is Offline whatever evidence it
+// retained. The shared observation panel has no connectivity input, so it keeps
+// naming its envelope's own word.
+const statusWords: Record<ClaimState, string> = {
+  available: 'Current', complete: 'Current', partial: 'Partial', stale: 'Stale',
+  unavailable: 'Unavailable', loading: 'Loading', off: 'Off',
+};
+export const statusWord = (state: ClaimState, reach = true) => reach ? statusWords[state] : 'Offline';
+
 export function claimOf(observation: Observation<unknown> | undefined, reach: Reach): Claim {
   const envelope = observation?.state ?? null;
   const payload = readingWord(observation?.data);
@@ -156,7 +167,7 @@ export function ObservationView<T>({ observation, refreshing, canRefresh, refres
   repair?: boolean; children: (data: T) => React.ReactNode;
 }) {
   const text = { color: theme.colors.foreground };
-  const status = observation?.state ?? 'Loading';
+  const status = statusWord(observation?.state ?? 'loading');
   const problems = observation?.problems.map(p => `${p.source}: ${p.code}`).join('; ') ?? '';
   const repairs = repair ? [...new Set((observation?.problems ?? []).flatMap(({ code }) => repairGuidance[code] ?? []))] : [];
   return <View>
