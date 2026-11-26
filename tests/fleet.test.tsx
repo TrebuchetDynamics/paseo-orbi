@@ -105,7 +105,7 @@ import type { PluginScreenProps } from '@getpaseo/plugin/client';
 import { Shell } from '../client/shell';
 import contribute from '../index.server';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { deploymentsList } from '../shared/common';
+import { deploymentsList, type DeploymentCatalog } from '../shared/common';
 import type { Observation } from '../shared/common';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const props = { theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id: 'host-a', label: 'Host A' }, layout: { compact: true, platform: 'ios' }, params: {} } as PluginScreenProps;
@@ -188,11 +188,11 @@ const fleetSnapshot = (units: FleetSnapshot['units'], configuredCapacity = Math.
   state: 'available', observedAt: '2026-11-14T23:00:00.000Z', lastSuccessfulAt: '2026-11-14T23:00:00.000Z', problems: [],
   data: { deploymentId: 'demo', repo: 'Example/project', profile: 'orbi-0.7.41-release', configuredCapacity, occupancy: null, units, health: null },
 });
-const renderFleet = async (snapshot: FleetObservation) => {
+const renderFleet = async (snapshot: FleetObservation, controls: DeploymentCatalog['entries'][number]['controls'] = null) => {
   const selectedProps = { ...props, params: { deploymentId: 'demo' } };
   vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
   host.readCatalog.mockReset().mockResolvedValue({ state: 'configured', problems: [], entries: [
-    { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi', status: 'available', problems: [] },
+    { id: 'demo', label: 'Demo', repo: 'Example/project', adapter: 'orbi', status: 'available', problems: [], controls },
   ] });
   host.readFleet.mockReset().mockResolvedValue(snapshot);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -285,6 +285,27 @@ it('keeps failed, inactive, unknown and not-found slot facts apart with the repo
   expect(host.readFleet).toHaveBeenCalledTimes(2);
 });
 
+// #128: the Fleet detail must not claim that no controls change services. The
+// catalog entry the row already has says whether the operator granted any, so
+// the sentence points at the grant or states plainly that there is none.
+it('points a granted deployment at Services → Details for its service actions', async () => {
+  const { text } = await renderFleet(fleetSnapshot([unitSnapshot('orbi-demo@1.service', { activeState: 'inactive', subState: 'dead' })]),
+    { actions: ['start', 'stop', 'restart'], slots: 2 });
+  expect(text()).toContain('This view only reads. Granted Start, Stop and Restart are on Services → Details.');
+  expect(text()).toContain('Unit reads unavailable? Ask the operator to check user-unit access, then Refresh.');
+  expect(text()).not.toContain('No controls change services');
+  // The grant comes from the catalog the row already has: no extra read.
+  expect(host.readFleet).toHaveBeenCalledTimes(1);
+});
+
+it('says no service actions are granted for a read-only deployment', async () => {
+  const { text } = await renderFleet(fleetSnapshot([]), null);
+  expect(text()).toContain('This view only reads. No service actions are granted for this repository.');
+  expect(text()).not.toContain('Granted Start, Stop and Restart');
+  expect(text()).not.toContain('No controls change services');
+  expect(host.readFleet).toHaveBeenCalledTimes(1);
+});
+
 it('registers fleet.read at the actual server entry with startup authorization', async () => {
   const f = await fixture(); cleanups.push(f.cleanup); vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
   const handlers = new Map<unknown, (input: unknown) => Promise<unknown>>();
@@ -296,7 +317,7 @@ it('registers fleet.read at the actual server entry with startup authorization',
 it('repository_change_scopes_fresh_capacity_health_and_failed_refresh', async () => {
   vi.useFakeTimers(); vi.setSystemTime('2026-11-14T23:00:00Z');
   const catalog = (repo: string) => ({ state: 'configured', problems: [], entries: [
-    { id: 'demo', label: 'Demo', repo, status: 'available', problems: [] },
+    { id: 'demo', label: 'Demo', repo, status: 'available', problems: [], controls: null },
   ] });
   const observation = (repo: string, capacity: number, outcome: string) => fleetRead.output.parse({
     state: 'available', observedAt: new Date().toISOString(), lastSuccessfulAt: new Date().toISOString(), problems: [],
