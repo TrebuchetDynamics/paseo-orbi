@@ -31,6 +31,8 @@ export const reasonText = {
   release_failed: 'The release failed. Inspect the release failure externally.',
   no_commit_delivered: 'The task delivered no commit. Review the ticket and expected delivery externally.',
   no_file_change: 'The task delivered commits but no file change. Review the expected changes externally.',
+  provider_balance: 'Reported reason provider_balance: the model provider account has no balance.',
+  attachment_unavailable: 'Reported reason attachment_unavailable: an Issue attachment could not be read.',
   unclassified: 'Unclassified failure. An operator must investigate externally; no diagnostic prose is interpreted.',
 } as const;
 export const actionText = {
@@ -39,6 +41,7 @@ export const actionText = {
   decide: 'Reported action decide: a human decides the next step externally.',
   check_credentials: 'Reported action check_credentials: operator checks/repairs credentials externally.',
   wait_quota: 'Reported action wait_quota: wait for the provider quota window externally.',
+  top_up_balance: 'Reported action top_up_balance: operator tops up the provider account externally.',
 } as const;
 export function failureGuidance(failure: Reports['failure']): string {
   if (failure.status !== 'available') return `Failure metadata ${failure.status}. Reason, action and retry safety are unknown; ask the operator for formal evidence. No prose fallback.`;
@@ -67,7 +70,7 @@ export type BlockerPage = z.infer<typeof BlockerPage>;
 export const artifactNames = ['worktree', '.orbi/run-state.json', '.orbi/test.log', '.orbi/plan.md', '.orbi/verify.md'] as const;
 export const ArtifactMetadata = z.object({ name: z.enum(artifactNames), status: z.enum(['present', 'missing', 'unreadable', 'invalid', 'unattributed']), size: z.number().int().nonnegative().nullable(), modifiedAt: z.iso.datetime().nullable() }).strict();
 export type ArtifactMetadata = z.infer<typeof ArtifactMetadata>;
-export const Retention = z.object({ profile: z.enum(['orbi-0.7.41-release', 'orbi-0.7.41-1a8b2f96', 'orbi-0.7.48-release']), worktreeRetainHours: z.number().positive(), keepFailedWorktrees: z.boolean().nullable() }).strict();
+export const Retention = z.object({ profile: z.enum(['orbi-0.7.41-release', 'orbi-0.7.41-1a8b2f96', 'orbi-0.7.48-release', 'orbi-0.7.65-release']), worktreeRetainHours: z.number().positive(), keepFailedWorktrees: z.boolean().nullable() }).strict();
 export const BlockerDetails = Blocker.extend({ artifacts: z.array(ArtifactMetadata), retention: Retention }).strict();
 export type BlockerDetails = z.infer<typeof BlockerDetails>;
 const selector = z.object({ deploymentId: DeploymentId, issue: z.number().int().positive() }).strict();

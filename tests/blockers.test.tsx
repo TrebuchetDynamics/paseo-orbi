@@ -70,7 +70,7 @@ async function setup(profile: FixtureProfile = 'release') {
 }
 
 it('retention_and_artifact_metadata', async () => {
-  for (const profile of ['release', 'installed', 'v0748'] as const) {
+  for (const profile of ['release', 'installed', 'v0748', 'v0765'] as const) {
     const f = await setup(profile);
     const scene = join(f.repoDir, '.worktrees', `orbi-Example-project-issue-4-${run}`);
     const directory = join(scene, '.orbi');
@@ -120,7 +120,7 @@ it('retention_and_artifact_metadata', async () => {
 });
 
 it('validates_only_profile_supported_retention_values', async () => {
-  for (const profile of ['release', 'installed', 'v0748'] as const) {
+  for (const profile of ['release', 'installed', 'v0748', 'v0765'] as const) {
     const f = await fixture(profile); cleanups.push(f.cleanup);
     for (const value of ['true', '0', '-1', '"72"', 'nan', 'inf']) {
       await fs.writeFile(f.configPath, f.toml + `worktree_retain_hours = ${value}\n`);
@@ -135,7 +135,7 @@ it('validates_only_profile_supported_retention_values', async () => {
     await fs.writeFile(f.configPath, f.toml + 'worktree_retain_hours = 12.5\nkeep_failed_worktrees = false\n');
     expect((await ConfigRepository.load(f.authorization)).resolve('demo')).toMatchObject({ worktreeRetainHours: 12.5, keepFailedWorktrees: profile === 'release' ? null : false });
   }
-});
+}, 60000);
 
 it('distinguishes_waits_and_base_states_and_rejects_unknown_formal_metadata', () => {
   for (const [labels, classification, text] of [

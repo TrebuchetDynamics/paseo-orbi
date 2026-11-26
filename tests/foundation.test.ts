@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { writeFile, mkdir, symlink, chmod } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, symlink, chmod } from 'node:fs/promises';
 import * as filesystem from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -55,13 +55,23 @@ describe('config_and_compatibility', () => {
     await expect(ports.read('demo', 'health')).rejects.toThrow('deployment_unavailable');
     expect(JSON.stringify(await rpc(f.authorization))).not.toMatch(/SECRET_CANARY|publisher-canary|configPath|engineSourcePath|repoDir|deployHome/);
   });
-  it.each(['release', 'installed', 'v0748'] as const)('tracked %s pinned bytes reproduce approved fingerprint', async profile => {
+  it.each(['release', 'installed', 'v0748', 'v0765'] as const)('tracked %s pinned bytes reproduce approved fingerprint', async profile => {
     const f = await setup(profile);
     expect(await fingerprint(f.source, f.entry.adapter as keyof typeof profiles)).toBe(profiles[f.entry.adapter as keyof typeof profiles].fingerprint);
     expect((await rpc(f.authorization)).entries[0].status).toBe('available');
     const deployment = (await ConfigRepository.load(f.authorization)).resolve('demo');
     expect(deployment).toMatchObject({ capacity: 2, unitName: 'demo', sourceProfile: f.entry.adapter, repoDir: f.repoDir });
   });
+  it('rejects any single changed v0.7.65 pinned file, including labels.toml', async () => {
+    const f = await setup('v0765');
+    for (const path of profiles['orbi-0.7.65-release'].paths) {
+      const file = join(f.source, path), original = await readFile(file);
+      await writeFile(file, '# changed pinned source\n');
+      expect((await rpc(f.authorization)).entries[0], path).toMatchObject({ status: 'unsupported_source_profile', problems: [{ source: 'compatibility', code: 'unsupported_source_profile' }] });
+      await writeFile(file, original);
+    }
+    expect((await rpc(f.authorization)).entries[0].status).toBe('available');
+  }, 60000);
   it('deployments.list reports missing and global-invalid configuration without private fields', async () => {
     expect(await rpc()).toEqual({ state: 'unconfigured', entries: [], problems: [] });
     const f = await setup();

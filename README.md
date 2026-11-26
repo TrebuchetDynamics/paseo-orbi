@@ -50,6 +50,17 @@ declares admission `>0.15.0`, which only decides whether Paseo installs or
 loads the plugin; installed 0.15.1, 0.15.4, 0.16.0-beta.2 and 0.16.0 rows remain
 NOT_RUN (#23).
 
+### Supported Orbi engine releases
+
+The deployment's `adapter` selects one of four engine releases whose inspected
+source subset matches a pinned fingerprint: `orbi-0.7.41-release`,
+`orbi-0.7.41-1a8b2f96`, `orbi-0.7.48-release` and `orbi-0.7.65-release` (current).
+Any other engine release is rejected as `unsupported_source_profile` — that
+includes v0.7.49 through v0.7.64, so upgrade the checkout to v0.7.65 or use a
+pinned v0.7.48. Commit ids, subset digests and the retention each profile
+supports are in the
+[operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#setup).
+
 **Already installed and configured?** Open the **Orbi** entry on the intended host.
 A host without linked repositories lands on **Services** and shows one notice —
 "Repositories aren’t linked. Link repositories to see GitHub issues." — with a

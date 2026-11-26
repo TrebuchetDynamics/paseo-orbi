@@ -12,6 +12,8 @@
     "release_failed": "Inspect the release failure externally",
     "no_commit_delivered": "The task delivered no commit",
     "no_file_change": "The task delivered commits but no file change",
+    "provider_balance": "Reported reason provider_balance: the model provider account has no balance.",
+    "attachment_unavailable": "Reported reason attachment_unavailable: an Issue attachment could not be read.",
     "unclassified": "Unclassified failure"
   },
   "actions": {
@@ -19,7 +21,8 @@
     "fix_ticket": "operator assesses and repairs code/ticket externally",
     "decide": "human decides the next step externally",
     "check_credentials": "operator checks/repairs credentials externally",
-    "wait_quota": "wait for the provider quota window externally"
+    "wait_quota": "wait for the provider quota window externally",
+    "top_up_balance": "Reported action top_up_balance: operator tops up the provider account externally."
   },
   "failure": {"schema":1,"outcome":"blocked","reason_code":"base_ci_red","action_code":"fix_ticket","retry_safe":false},
   "scene": {"schema":1,"run_id":"12345678","base_branch":"main","base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pr_url":"https://github.com/Example/project/pull/42","external":"","review_round":0},

@@ -16,6 +16,7 @@ import serverEntry from '../index.server';
 import clientEntry from '../index.client';
 import { issuesList, issuesGet } from '../shared/issues';
 import { servicesInventory } from '../shared/services';
+import { blockersList } from '../shared/blockers';
 import { ReadError, ReadPorts } from '../server/read-ports';
 import { fixture } from './helpers/fixtures';
 import records from './fixtures/runs/records.json';
@@ -640,7 +641,8 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   const profile = pin.adapter as SourceProfile;
   expect(profiles[profile].commit).toBe(pin.commit);
   expect(await fingerprint(f.source, profile)).toBe(pin.fingerprint);
-  await writeFile(join(f.source, pin.fixture === 'v0748' ? 'src/orbi/question.py' : 'src/orbi/config.py'), '# changed unsupported source\n');
+  const mutated = { v0748: 'src/orbi/question.py', v0765: 'src/orbi/labels.toml' }[pin.fixture] ?? 'src/orbi/config.py';
+  await writeFile(join(f.source, mutated), '# changed unsupported source\n');
   vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
   const processPort = vi.spyOn(ReadPorts.prototype, 'process');
   const reads = vi.spyOn(ReadPorts.prototype, 'read');
@@ -654,6 +656,40 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   ] as const) await expect(handlers.get(name)!({ deploymentId: 'demo', ...input })).rejects.toThrow('deployment_unavailable');
   expect(processPort).not.toHaveBeenCalled(); expect(reads).not.toHaveBeenCalled();
 });
+
+it.each(['v0748', 'v0765'] as const)('%s deployment answers every Work, Services, Issues, Runs and Blockers read', async profile => {
+  vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+  const f = await fixture(profile); cleanups.push(f.cleanup);
+  await mkdir(join(f.repoDir, '.orbi'));
+  await writeFile(join(f.repoDir, '.orbi/health.json'), JSON.stringify({ runs: [], last_pickup_ts: 1794697100, alerted: [] }));
+  vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+  // Only the two external read ports are injected; configuration, hash gate and
+  // RPC contracts are real, so an unsupported engine checkout could never reach
+  // here. The host inventory is synthetic: a real systemctl call would make the
+  // Services assertion depend on the machine running the test.
+  vi.spyOn(ReadPorts.prototype, 'process').mockImplementation(async (_id, operation) => {
+    if (operation.kind === 'systemctl-show') return 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=static\nResult=success\nExecMainStatus=0\n';
+    if (operation.kind === 'journalctl') return '';
+    if (operation.kind === 'gh-api-get' && operation.resource === 'issues') return response([]);
+    throw new Error(`unexpected operation ${operation.kind}`);
+  });
+  vi.spyOn(ReadPorts.prototype, 'hostInventory').mockImplementation(async operation => operation === 'runtime'
+    ? 'orbi-demo@1.service loaded active running Orbi Runner\norbi-demo@1.timer loaded active waiting Orbi Timer\n'
+    : 'orbi-demo@1.service enabled\norbi-demo@1.timer enabled\n');
+  const handlers = new Map<string, (input: any) => Promise<any>>();
+  cleanups.push(serverEntry({ handle: (c: any, h: any) => handlers.set(c.name, h) } as unknown as PluginServerContext));
+  const adapter = profile === 'v0748' ? 'orbi-0.7.48-release' : 'orbi-0.7.65-release';
+  expect((await handlers.get('deployments.list')!({})).entries[0]).toMatchObject({ id: 'demo', repo: 'Example/project', adapter, status: 'available' });
+  // Work: the configured-repository detail and its issue rows.
+  expect(await handlers.get('fleet.read')!({ deploymentId: 'demo' })).toMatchObject({ state: 'available', data: { repo: 'Example/project', profile: adapter } });
+  expect(issuesList.output.parse(await handlers.get('issues.list')!({ deploymentId: 'demo', page: 1 }))).toMatchObject({ state: 'available', data: { repo: 'Example/project', records: [] } });
+  // Services, Runs and Blockers answer for the same deployment.
+  const inventory = servicesInventory.output.parse(await handlers.get('services.inventory')!({}));
+  expect(inventory).toMatchObject({ state: 'complete' });
+  expect(inventory.groups).toContainEqual(expect.objectContaining({ association: 'matched', deploymentId: 'demo' }));
+  expect(await handlers.get('runs.list')!({ deploymentId: 'demo' })).toMatchObject({ state: 'available', data: [] });
+  expect(blockersList.output.parse(await handlers.get('blockers.list')!({ deploymentId: 'demo', page: 1 }))).toMatchObject({ state: 'available', data: { repo: 'Example/project', records: [] } });
+}, 60000);
 
 it('artifact_contract', async () => {
   // Read the candidate tracked file set, NOT a directory copy containing ignored

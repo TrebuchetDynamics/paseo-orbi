@@ -16,5 +16,11 @@
     "adapter": "orbi-0.7.48-release",
     "commit": "f405e1dc4ff938ab99ec0742cfd3459d45e26948",
     "fingerprint": "f7d966479d4121b3cebecc116dd723eb0d0c7e2198d535b460230d06e118678e"
+  },
+  {
+    "fixture": "v0765",
+    "adapter": "orbi-0.7.65-release",
+    "commit": "a37c005cd2ff1657715ea11426ea1d8bbf9d09b2",
+    "fingerprint": "d1410b7b18ef41b838f9a1ec4aba4d807c6c0a8a8f348f37a358e8bea887040d"
   }
 ]
