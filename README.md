@@ -52,13 +52,20 @@ NOT_RUN (#23).
 
 ### Supported Orbi engine releases
 
-The deployment's `adapter` selects one of four engine releases whose inspected
-source subset matches a pinned fingerprint: `orbi-0.7.41-release`,
-`orbi-0.7.41-1a8b2f96`, `orbi-0.7.48-release` and `orbi-0.7.65-release` (current).
-Any other engine release is rejected as `unsupported_source_profile` — that
-includes v0.7.49 through v0.7.64, so upgrade the checkout to v0.7.65 or use a
-pinned v0.7.48. Commit ids, subset digests and the retention each profile
-supports are in the
+The deployment's `adapter` selects one of four engine profiles. The subset
+profiles `orbi-0.7.41-release`, `orbi-0.7.41-1a8b2f96` and
+`orbi-0.7.48-release` pin a finite inspected source subset. The contract
+profile `orbi-0.7.65-release` (current) pins the contract-facts manifest plus
+`src/orbi/runner_health.py` and `src/orbi/run_state.py` whole: it accepts the
+verified v0.7.64 and v0.7.65 releases and later releases whose facts and both
+writer files match. Any other engine release is rejected as
+`unsupported_source_profile`; there are no profiles for v0.7.49 through
+v0.7.63. A contract profile is compatibility evidence for the listed facts and
+two writers, not for the rest of the engine and not authentication: behavior
+changes with unchanged facts are not detected, and structural changes to those
+facts or writers show as invalid records and are rejected. Commit ids, subset,
+contract-facts and writer digests, and the retention each profile supports are
+in the
 [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#setup).
 
 **Already installed and configured?** Open the **Orbi** entry on the intended host.
