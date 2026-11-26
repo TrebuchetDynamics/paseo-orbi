@@ -100,10 +100,9 @@ test(titles[1], async ({ page, lease }) => {
   // The authorized association is the only drill-down route.
   await pressEnter(page, 'button', 'View repository Demo');
   await expect(page.getByTestId('plugin-surface-title')).toHaveText('Issues');
-  await expect(page.getByText('Issues — select a repository to browse', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Select Demo', exact: true }).click();
-  // The selection is named by the heading instead of asking again; the one
-  // available repository leaves nothing to switch to.
+  // The drill-down already selects Demo: the heading names the repository that is
+  // shown instead of asking again, and the one available repository leaves
+  // nothing to switch to.
   await expect(page.getByText('Issues · Demo (Example/project)', { exact: true })).toBeVisible();
   await expect(page.getByText(/select a repository to browse/)).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Select Demo', exact: true })).toHaveCount(0);
