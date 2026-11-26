@@ -106,7 +106,7 @@ export async function assertState(page: Page, view: string, scenario: string) {
   if (view === 'catalog') {
     await expect(page.getByText(scenario === 'unconfigured' ? /Unconfigured: ask the operator/ : /unsupported_source_profile/).first()).toBeVisible(); return;
   }
-  const status = scenario === 'stale' ? 'stale' : scenario === 'unavailable' ? 'unavailable' : scenario === 'partial' ? 'partial' : 'available';
+  const status = scenario === 'stale' ? 'Stale' : scenario === 'unavailable' ? 'Unavailable' : scenario === 'partial' ? 'Partial' : 'Current';
   // Scope to the actual feature, never a catalog-relative observation index.
   // Partial Issues selects its detail; Runs list remains independent of journal detail.
   const feature = page.getByTestId(`orbi-${view}`);

@@ -781,7 +781,7 @@ describe('host states and authority', () => {
   it.each(['partial', 'unavailable'] as const)('shows %s and problems without zero counts or absence claims', async state => {
     host.readInventory.mockResolvedValue(inventory({ state, sources: [], problems: [{ source: 'runtime', code: 'process_failed' }] }));
     const { renderer } = await render();
-    expect(text(renderer)).toContain(`Services: ${state}`);
+    expect(text(renderer)).toContain(`Services: ${state === 'partial' ? 'Partial' : 'Unavailable'}`);
     expect(text(renderer)).toContain('runtime: process_failed');
     expect(text(renderer)).toContain('Read failed · check systemd/DBus access.');
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
@@ -799,11 +799,11 @@ describe('host states and authority', () => {
     const { renderer, switchTo } = await render();
     const page = text(renderer);
     // The read already failed, so the screen reports the failure, not progress.
-    expect(page).toContain('Services: unavailable');
+    expect(page).toContain('Services: Unavailable');
     expect(page).toContain('Unavailable · current activity unknown.');
     expect(page).toContain('filesystem: refresh_failed');
     expect(page).not.toContain('Reading services…');
-    expect(page).not.toContain('Services: loading');
+    expect(page).not.toContain('Services: Loading');
     expect(page).not.toContain('SECRET');
     // A real read failure keeps its retry.
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh services' }).props).toMatchObject({ disabled: false });
@@ -820,7 +820,7 @@ describe('host states and authority', () => {
     host.hosts[0].status = 'offline';
     const { renderer, press } = await render();
     expect(text(renderer)).toContain('Offline · current activity unknown');
-    expect(text(renderer)).toContain('Catalog: offline');
+    expect(text(renderer)).toContain('Catalog: Offline');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh services' }).props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
     await press('Refresh services');
     expect(host.readInventory).not.toHaveBeenCalled();
@@ -895,12 +895,12 @@ describe('host states and authority', () => {
     host.readCatalog.mockImplementationOnce(() => new Promise(resolve => { finishCatalog = resolve; }));
     host.readInventory.mockResolvedValue(hostA);
     const { renderer, switchTo } = await render();
-    expect(text(renderer)).toContain('Catalog: loading');
+    expect(text(renderer)).toContain('Catalog: Loading');
     expect(text(renderer)).not.toContain(explanation);
     expect(text(renderer)).toContain('Loading the selected host catalog.');
     await act(async () => finishCatalog({ state: 'invalid', entries: [], problems: [] })); await settle();
     expect(text(renderer)).toContain('the configured repository catalog is invalid');
-    expect(text(renderer)).not.toContain('Catalog: loading');
+    expect(text(renderer)).not.toContain('Catalog: Loading');
     expect(text(renderer)).not.toContain(explanation);
     host.hosts[0].status = 'offline';
     await switchTo('host-a');
@@ -912,7 +912,7 @@ describe('host states and authority', () => {
     const { renderer } = await render();
     host.readCatalog.mockRejectedValue(new Error('SECRET'));
     await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle();
-    expect(text(renderer)).toContain('Catalog: stale');
+    expect(text(renderer)).toContain('Catalog: Stale');
     expect(text(renderer)).toContain('filesystem: refresh_failed');
     expect(text(renderer)).toContain('Catalog read failed');
     expect(text(renderer)).not.toContain('Repositories aren’t linked.');
@@ -922,7 +922,7 @@ describe('host states and authority', () => {
     host.readCatalog.mockResolvedValue(catalog([demo]));
     await act(async () => refresh.props.onPress()); await settle();
     expect(text(renderer)).not.toContain('Catalog read failed');
-    expect(text(renderer)).not.toContain('Catalog: stale');
+    expect(text(renderer)).not.toContain('Catalog: Stale');
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Orbi setup' })).toHaveLength(0);
   });
 
@@ -930,7 +930,7 @@ describe('host states and authority', () => {
     host.readCatalog.mockRejectedValue(new Error('SECRET'));
     host.readInventory.mockResolvedValue(hostA);
     const { renderer } = await render();
-    expect(text(renderer)).toContain('Catalog: unavailable');
+    expect(text(renderer)).toContain('Catalog: Unavailable');
     expect(text(renderer)).not.toContain('SECRET');
     expect(text(renderer)).not.toContain('Repositories aren’t linked.');
     expect(renderer.root.findByProps({ testID: 'orbi-catalog' }).findAllByProps({ accessibilityLabel: 'Refresh' })).toHaveLength(1);

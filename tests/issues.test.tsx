@@ -593,7 +593,7 @@ describe('Issues user journey', () => {
     await setPage(`https://github.com/${repo}/issues/1`);
     await act(async () => { client.setQueryData(listKey(), { ...client.getQueryData<object>(listKey()), state: 'stale' }); }); await settle();
     expect(link('issue', 1)).toBeDefined(); // retained evidence still belongs to selected repo
-    expect(JSON.stringify(renderer.toJSON())).toContain('stale');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Stale');
     expect(host.openExternalUrl).toHaveBeenCalledTimes(2);
     await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Inspect issue 1' }).props.onPress()); await settle(); await settle();
     const currentDetailKey = ['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:1`];
@@ -1019,13 +1019,13 @@ it('repository_change_separates_pending_lists_details_and_late_reads', async () 
   expect(text()).not.toContain('deadbeef'); expect(text()).not.toContain('A_ISSUE_TITLE');
   expect(client.getQueryData(['paseo-orbi', 'host-a', 'demo', `issues.get:${repo}:4`])).toEqual(aDetail);
   await act(async () => rejectDetail(new Error('transport unavailable'))); await settle();
-  expect(text()).toContain('unavailable'); expect(text()).toContain('refresh_failed'); expect(text()).not.toContain('aaaaaaaa');
+  expect(text()).toContain('Unavailable'); expect(text()).toContain('refresh_failed'); expect(text()).not.toContain('aaaaaaaa');
   const refreshDetail = async () => { await act(async () => { await renderer.root.findByProps({ testID: 'orbi-issues' }).findByProps({ accessibilityLabel: 'Refresh selected issue' }).props.onPress(); }); await settle(); };
   host.readIssue.mockResolvedValue(bDetail); await refreshDetail();
   expect(text()).toContain('Reported run: bbbbbbbb');
   expect(text()).not.toContain(`https://github.com/${repo}/`);
   host.readIssue.mockRejectedValue(new Error('transport unavailable')); await refreshDetail();
-  expect(text()).toContain('stale'); expect(text()).toContain('Reported run: bbbbbbbb'); expect(text()).not.toContain('aaaaaaaa');
+  expect(text()).toContain('Stale'); expect(text()).toContain('Reported run: bbbbbbbb'); expect(text()).not.toContain('aaaaaaaa');
   expect(renderer.root.findByProps({ accessibilityLabel: 'Open Reassigned/project issue 4 on GitHub' })).toBeDefined();
 });
 

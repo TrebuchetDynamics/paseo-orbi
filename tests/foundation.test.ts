@@ -497,7 +497,7 @@ describe('package_and_registration', () => {
         await act(async () => { finish(catalog); await pending; }); await settle();
         await act(async () => { for (const listener of host.listeners) listener('background'); });
         await act(async () => { await vi.advanceTimersByTimeAsync(60001); }); await settle();
-        expect(json()).toContain('Catalog transport: stale');
+        expect(json()).toContain('Catalog transport: Stale');
         expect(button().props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: false } });
         expect(host.readCatalog).toHaveBeenCalledTimes(2);
       }
@@ -533,20 +533,23 @@ describe('package_and_registration', () => {
     const client = queryClient();
     const Screen = screens[1].Component;
     const renderer = await render(client, React.createElement(Screen, props));
-    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: loading');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: Loading');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog: Loading');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.accessibilityState).toEqual({ disabled: true, busy: true });
     expect(renderer.root.findAllByProps({ testID: 'orbi-navigation' })).toHaveLength(1);
     for (const read of features) expect(read).not.toHaveBeenCalled();
     await act(async () => { fail(new Error('SECRET_CANARY')); }); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('refresh_failed');
-    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: unavailable');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: Unavailable');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog: Unavailable');
     expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
     host.readCatalog.mockResolvedValue(invalid);
     await act(async () => { await renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle();
     host.readCatalog.mockRejectedValue(new Error('SECRET_CANARY'));
     await act(async () => { await renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress(); }); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('Orbi setup');
-    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: stale');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog transport: Stale');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog: Stale');
     const calls = host.readCatalog.mock.calls.length;
     await act(async () => renderer.update(tree(client, React.createElement(Screen, { ...props, host: { id: 'host-b', label: 'Host B' } })))); await settle();
     expect(JSON.stringify(renderer.toJSON())).toContain('Selected host is offline');
@@ -599,13 +602,13 @@ describe('bounded_reads_and_lifecycle client', () => {
     await activate(); expect(read).toHaveBeenCalledTimes(1);
     await act(async () => { complete(success('retained data')); }); await settle();
     gate(false, false);
-    expect(status('available').children).toEqual(['available']);
+    expect(status('Current').children).toEqual(['Current']);
     expect(renderer.root.findAllByType('View' as any).every(node => !node.props.accessible)).toBe(true);
 
     // A selected-host disconnect and backgrounding disable the real control;
     // direct callers also retain the hook's defensive no-read guard.
     await update(false, true); gate(true, false);
-    expect(status('stale').children).toEqual(['stale']);
+    expect(status('Stale').children).toEqual(['Stale']);
     expect(alert().children).toEqual([]); // Offline is not a backend failure.
     await activate(); await act(async () => { await current.refresh(); });
     await update(true, false); gate(true, false);
@@ -627,7 +630,7 @@ describe('bounded_reads_and_lifecycle client', () => {
     expect(read).toHaveBeenCalledTimes(2);
     await act(async () => { reject(new Error('SECRET_CANARY raw exception')); await Promise.all([first, second]); }); await settle();
     gate(false, false);
-    expect(status('stale').children).toEqual(['stale']);
+    expect(status('Stale').children).toEqual(['Stale']);
     const problemRegion = alert();
     expect(problemRegion.children).toEqual(['filesystem: refresh_failed']);
     expect(JSON.stringify(renderer.toJSON())).toContain('retained data');
@@ -652,14 +655,14 @@ describe('bounded_reads_and_lifecycle client', () => {
     read.mockImplementation(async () => success('repaired data'));
     await activate(); gate(false, false);
     expect(read).toHaveBeenCalledTimes(4);
-    expect(status('available').children).toEqual(['available']);
+    expect(status('Current').children).toEqual(['Current']);
     expect(alert()).toBe(problemRegion); expect(alert().children).toEqual([]);
     expect(JSON.stringify(renderer.toJSON())).toContain('repaired data');
     await update(true, false); gate(true, false);
     await act(async () => { await vi.advanceTimersByTimeAsync(60001); });
     await activate();
     expect(read).toHaveBeenCalledTimes(4);
-    expect(status('stale').children).toEqual(['stale']);
+    expect(status('Stale').children).toEqual(['Stale']);
     expect(alert().children).toEqual([]);
   });
   it('polls every 30 seconds, coalesces manual refresh and retains failed data as visibly stale', async () => {
@@ -672,7 +675,7 @@ describe('bounded_reads_and_lifecycle client', () => {
     read.mockRejectedValue(new Error('SECRET_CANARY raw error'));
     await act(async () => { await current.refresh(); }); await settle();
     expect(current.observation).toMatchObject({ state: 'stale', data: { value: 'last good' } });
-    expect(JSON.stringify(renderer.toJSON())).toContain('stale'); expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Stale'); expect(JSON.stringify(renderer.toJSON())).not.toContain('SECRET_CANARY');
     let complete!: (value: Observation<Value>) => void;
     read.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
     let first!: Promise<unknown>, second!: Promise<unknown>;

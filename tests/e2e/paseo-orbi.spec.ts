@@ -70,7 +70,7 @@ test('refresh coalesces, polls at 30 seconds and selection-only detail ages at 6
   expect(detailStamp).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   await page.waitForTimeout(60100);
   expect(Date.now() - agingStart).toBeGreaterThanOrEqual(60000);
-  await expect(page.getByTestId('orbi-runs').getByLabel('Observation status: stale', { exact: true }).last()).toBeVisible();
+  await expect(page.getByTestId('orbi-runs').getByLabel('Observation status: Stale', { exact: true }).last()).toBeVisible();
   expect(await page.getByTestId('orbi-runs').getByText(/Observed: .*Last success:/).last().innerText()).toBe(detailStamp);
 });
 test('two hosts with identical labels/IDs: selected detail/page, late result, no fallback and disconnect/reconnect', async ({ page, lease, network }) => {
