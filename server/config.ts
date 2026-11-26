@@ -174,7 +174,7 @@ export class ConfigRepository {
           continue;
         }
         const worktreeRetainHours = toml.worktree_retain_hours ?? 72;
-        const keepFailedWorktrees = (entry.adapter === 'orbi-0.7.41-1a8b2f96' || entry.adapter === 'orbi-0.7.48-release') ? toml.keep_failed_worktrees ?? true : null;
+        const keepFailedWorktrees = (entry.adapter === 'orbi-0.7.41-1a8b2f96' || entry.adapter === 'orbi-0.7.48-release' || entry.adapter === 'orbi-0.7.65-release') ? toml.keep_failed_worktrees ?? true : null;
         if (typeof worktreeRetainHours !== 'number' || !Number.isFinite(worktreeRetainHours) || worktreeRetainHours <= 0
           || (keepFailedWorktrees !== null && typeof keepFailedWorktrees !== 'boolean')) throw new Error('config_mismatch');
         safe.status = 'available';

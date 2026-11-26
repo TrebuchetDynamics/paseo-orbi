@@ -56,8 +56,9 @@ Only these source checkout subsets are supported:
 | `orbi-0.7.41-release` | `fbafd09fe49a20299e96565f100633bca61ae2af` | `ff662193032fc0caf59e2742a3892c31af90a6d66726f38b2ac2256cb663140e` |
 | `orbi-0.7.41-1a8b2f96` | `1a8b2f9603f6258cb105293f238a8d3f775f3393` | `ae5bd552aef7e1689b7352d99794f6dc0a04e257cf3668cad08be9473b9d859d` |
 | `orbi-0.7.48-release` | `f405e1dc4ff938ab99ec0742cfd3459d45e26948` | `f7d966479d4121b3cebecc116dd723eb0d0c7e2198d535b460230d06e118678e` |
+| `orbi-0.7.65-release` | `a37c005cd2ff1657715ea11426ea1d8bbf9d09b2` | `d1410b7b18ef41b838f9a1ec4aba4d807c6c0a8a8f348f37a358e8bea887040d` |
 
-`server/compatibility.ts` enumerates the finite inspected files and manifest hashing algorithm. The v0.7.48 digest was computed from immutable Git blobs at the tagged commit; the earlier digests were reproduced from the pinned upstream commits; compressed raw-file fixtures in `tests/helpers/` exercise the real reader. This is compatibility evidence for that subset, **not authentication of the engine**, and neither version strings nor Git metadata grant trust. The plugin never imports or executes engine source.
+Every other engine release is rejected with `unsupported_source_profile`, including v0.7.49 through v0.7.64: each of those releases changed parts of the inspected subset and does not match a pinned manifest. Upgrade the engine checkout to v0.7.65 (or use v0.7.48) to be accepted. `server/compatibility.ts` enumerates the finite inspected files and manifest hashing algorithm. The v0.7.48 and v0.7.65 digests were computed from immutable Git blobs at the tagged commits; the earlier digests were reproduced from the pinned upstream commits; compressed raw-file fixtures in `tests/helpers/` exercise the real reader. This is compatibility evidence for that subset, **not authentication of the engine**, and neither version strings nor Git metadata grant trust. The plugin never imports or executes engine source.
 
 ### Failure and repair
 
@@ -152,7 +153,7 @@ Retention settings are inert startup observations, not promises:
 | Profile | Supported settings/defaults | Limit |
 | --- | --- | --- |
 | `orbi-0.7.41-release` | `worktree_retain_hours = 72` (finite positive number); `keep_failed_worktrees` unsupported and ignored | Official v0.7.41 may delete terminally failed worktrees |
-| `orbi-0.7.41-1a8b2f96`, `orbi-0.7.48-release` | `worktree_retain_hours = 72`; `keep_failed_worktrees = true` (strict boolean) | Failed-worktree retention is a policy, not a presence guarantee |
+| `orbi-0.7.41-1a8b2f96`, `orbi-0.7.48-release`, `orbi-0.7.65-release` | `worktree_retain_hours = 72`; `keep_failed_worktrees = true` (strict boolean) | Failed-worktree retention is a policy, not a presence guarantee |
 
 Invalid supported values reject that deployment as `invalid_config`; repair configuration externally and authorize a reload. **72 hours does not imply automatic reclamation of an open blocked scene.** Only observed presence is reported. Source: [release cleanup](https://github.com/orbi-build/orbi/blob/fbafd09fe49a20299e96565f100633bca61ae2af/src/orbi/runner.py#L1121) and [installed retention profile](https://github.com/orbi-build/orbi/tree/1a8b2f9603f6258cb105293f238a8d3f775f3393).
 
