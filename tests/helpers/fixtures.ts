@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
-const adapters = { release: 'orbi-0.7.41-release', installed: 'orbi-0.7.41-1a8b2f96', v0748: 'orbi-0.7.48-release' } as const;
+const adapters = { release: 'orbi-0.7.41-release', installed: 'orbi-0.7.41-1a8b2f96', v0748: 'orbi-0.7.48-release', v0765: 'orbi-0.7.65-release' } as const;
 export type FixtureProfile = keyof typeof adapters;
 export async function fixture(profile: FixtureProfile = 'release', parent = tmpdir()) {
   const root = await mkdtemp(join(parent, 'paseo-orbi-'));

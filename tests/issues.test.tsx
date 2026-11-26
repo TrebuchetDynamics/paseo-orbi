@@ -213,7 +213,7 @@ describe('trusted_report_selection', () => {
     const fakeScene = block('scene', { ...reports.scene, run_id: next });
     expect(select([comment(2, `${marker(next)}\n${kind('requeued')}\n${fakeScene}`)]).prIdentity.status).toBe('missing');
   });
-  it.each(['release_failed', 'no_commit_delivered', 'no_file_change'])('accepts formal failure reason %s', reason_code => {
+  it.each(['release_failed', 'no_commit_delivered', 'no_file_change', 'provider_balance', 'attachment_unavailable'])('accepts formal failure reason %s', reason_code => {
     const data = { ...reports.failure, reason_code, action_code: 'fix_ticket', retry_safe: false };
     expect(select([comment(1, `${marker()}\n${kind('failure')}\n${block('failure', data)}`)]).failure).toMatchObject({ status: 'available', data });
   });

@@ -638,7 +638,8 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   const profile = pin.adapter as SourceProfile;
   expect(profiles[profile].commit).toBe(pin.commit);
   expect(await fingerprint(f.source, profile)).toBe(pin.fingerprint);
-  await writeFile(join(f.source, pin.fixture === 'v0748' ? 'src/orbi/question.py' : 'src/orbi/config.py'), '# changed unsupported source\n');
+  const mutated = { v0748: 'src/orbi/question.py', v0765: 'src/orbi/labels.toml' }[pin.fixture] ?? 'src/orbi/config.py';
+  await writeFile(join(f.source, mutated), '# changed unsupported source\n');
   vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
   const processPort = vi.spyOn(ReadPorts.prototype, 'process');
   const reads = vi.spyOn(ReadPorts.prototype, 'read');

@@ -91,7 +91,7 @@ async function snapshot(root: string): Promise<unknown[]> {
   }
   return result;
 }
-it.each(['release', 'installed', 'v0748'] as const)('projects retained events only for supported retention profiles: %s', async profile => {
+it.each(['release', 'installed', 'v0748', 'v0765'] as const)('projects retained events only for supported retention profiles: %s', async profile => {
   const f = await membershipFixture(profile, { ...records.journal, MESSAGE: 'INFO [22222222] worktree_retained run_id=22222222 issue=42' });
   const detail = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
   expect(detail.data?.events.map(row => row.event)).toEqual(profile === 'release' ? [] : ['worktree_retained']);
