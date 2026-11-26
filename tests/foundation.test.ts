@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { writeFile, readFile, mkdir, symlink, chmod } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, symlink, chmod, unlink } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import * as filesystem from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -55,23 +56,59 @@ describe('config_and_compatibility', () => {
     await expect(ports.read('demo', 'health')).rejects.toThrow('deployment_unavailable');
     expect(JSON.stringify(await rpc(f.authorization))).not.toMatch(/SECRET_CANARY|publisher-canary|configPath|engineSourcePath|repoDir|deployHome/);
   });
-  it.each(['release', 'installed', 'v0748', 'v0765'] as const)('tracked %s pinned bytes reproduce approved fingerprint', async profile => {
+  it.each(['release', 'installed', 'v0748', 'v0765'] as const)('tracked %s pinned bytes reproduce the approved profile', async profile => {
     const f = await setup(profile);
-    expect(await fingerprint(f.source, f.entry.adapter as keyof typeof profiles)).toBe(profiles[f.entry.adapter as keyof typeof profiles].fingerprint);
+    const entry = profiles[f.entry.adapter as keyof typeof profiles];
+    expect(await fingerprint(f.source, f.entry.adapter as keyof typeof profiles)).toBe(entry.kind === 'subset' ? entry.fingerprint : entry.facts);
+    if (entry.kind === 'contract') for (const [path, digest] of Object.entries(entry.writers)) {
+      expect(createHash('sha256').update(await readFile(join(f.source, path))).digest('hex'), path).toBe(digest);
+    }
     expect((await rpc(f.authorization)).entries[0].status).toBe('available');
     const deployment = (await ConfigRepository.load(f.authorization)).resolve('demo');
     expect(deployment).toMatchObject({ capacity: 2, unitName: 'demo', sourceProfile: f.entry.adapter, repoDir: f.repoDir });
   });
-  it('rejects any single changed v0.7.65 pinned file, including labels.toml', async () => {
-    const f = await setup('v0765');
-    for (const path of profiles['orbi-0.7.65-release'].paths) {
+  describe('contract profile admission', () => {
+    it.each(['v0764', 'v0765'] as const)('%s fixture is accepted as orbi-0.7.65-release', async fixtureProfile => {
+      const f = await setup(fixtureProfile);
+      expect((await rpc(f.authorization)).entries[0]).toMatchObject({ adapter: 'orbi-0.7.65-release', status: 'available' });
+    });
+    it('accepts v0.7.65 edits outside the contract facts and writers', async () => {
+      const f = await setup('v0765');
+      const progress = join(f.source, 'src/orbi/progress.py');
+      const original = await readFile(progress, 'utf8');
+      const edited = original.replace('Automatic GitHub progress publishing.', 'Rewritten non-fact docstring.');
+      expect(edited).not.toBe(original);
+      await writeFile(progress, edited);
+      await writeFile(join(f.source, 'docs/public-contracts.mdx'), '# rewritten non-fact document\n');
+      expect((await rpc(f.authorization)).entries[0].status).toBe('available');
+    });
+    it('rejects v0.7.65 with one changed contract fact', async () => {
+      const f = await setup('v0765');
+      const labels = join(f.source, 'src/orbi/labels.toml');
+      const original = await readFile(labels, 'utf8');
+      const edited = original.replace('name = "ai-ready"', 'name = "ai-queued"');
+      expect(edited).not.toBe(original);
+      await writeFile(labels, edited);
+      expect((await rpc(f.authorization)).entries[0]).toMatchObject({ status: 'unsupported_source_profile', problems: [{ source: 'compatibility', code: 'unsupported_source_profile' }] });
+    });
+    it.each(['src/orbi/runner_health.py', 'src/orbi/run_state.py'])('rejects v0.7.65 with one changed writer byte in %s', async path => {
+      const f = await setup('v0765');
       const file = join(f.source, path), original = await readFile(file);
-      await writeFile(file, '# changed pinned source\n');
-      expect((await rpc(f.authorization)).entries[0], path).toMatchObject({ status: 'unsupported_source_profile', problems: [{ source: 'compatibility', code: 'unsupported_source_profile' }] });
-      await writeFile(file, original);
-    }
-    expect((await rpc(f.authorization)).entries[0].status).toBe('available');
-  }, 60000);
+      const changed = Buffer.from(original); changed[changed.length - 1] ^= 1;
+      await writeFile(file, changed);
+      expect((await rpc(f.authorization)).entries[0]).toMatchObject({ status: 'unsupported_source_profile', problems: [{ source: 'compatibility', code: 'unsupported_source_profile' }] });
+    });
+    it('rejects v0.7.65 with a missing fact file', async () => {
+      const f = await setup('v0765');
+      await unlink(join(f.source, 'src/orbi/labels.toml'));
+      expect((await rpc(f.authorization)).entries[0]).toMatchObject({ status: 'unsupported_source_profile', problems: [{ source: 'compatibility', code: 'unsupported_source_profile' }] });
+    });
+    it('rejects a v0.7.48 checkout named as the v0.7.65 contract profile', async () => {
+      const f = await setup('v0748');
+      await f.save([{ ...f.entry, adapter: 'orbi-0.7.65-release' }]);
+      expect((await rpc(f.authorization)).entries[0]).toMatchObject({ status: 'unsupported_source_profile' });
+    });
+  });
   it('deployments.list reports missing and global-invalid configuration without private fields', async () => {
     expect(await rpc()).toEqual({ state: 'unconfigured', entries: [], problems: [] });
     const f = await setup();

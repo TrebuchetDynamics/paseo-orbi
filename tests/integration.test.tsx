@@ -641,6 +641,11 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   const profile = pin.adapter as SourceProfile;
   expect(profiles[profile].commit).toBe(pin.commit);
   expect(await fingerprint(f.source, profile)).toBe(pin.fingerprint);
+  if ('facts' in pin) expect(pin.facts).toBe(pin.fingerprint);
+  const writers = (pin as { writers?: Record<string, string> }).writers;
+  if (writers) for (const [path, digest] of Object.entries(writers)) {
+    expect(createHash('sha256').update(await readFile(join(f.source, path))).digest('hex'), path).toBe(digest);
+  }
   const mutated = { v0748: 'src/orbi/question.py', v0765: 'src/orbi/labels.toml' }[pin.fixture] ?? 'src/orbi/config.py';
   await writeFile(join(f.source, mutated), '# changed unsupported source\n');
   vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
@@ -657,7 +662,7 @@ it.each(pins)('source_profile $fixture fails closed before telemetry', async pin
   expect(processPort).not.toHaveBeenCalled(); expect(reads).not.toHaveBeenCalled();
 });
 
-it.each(['v0748', 'v0765'] as const)('%s deployment answers every Work, Services, Issues, Runs and Blockers read', async profile => {
+it.each(['v0748', 'v0764', 'v0765'] as const)('%s deployment answers every Work, Services, Issues, Runs and Blockers read', async profile => {
   vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
   const f = await fixture(profile); cleanups.push(f.cleanup);
   await mkdir(join(f.repoDir, '.orbi'));

@@ -21,6 +21,11 @@
     "fixture": "v0765",
     "adapter": "orbi-0.7.65-release",
     "commit": "a37c005cd2ff1657715ea11426ea1d8bbf9d09b2",
-    "fingerprint": "d1410b7b18ef41b838f9a1ec4aba4d807c6c0a8a8f348f37a358e8bea887040d"
+    "facts": "1831c77a488fd75c93fbd24442b8d62c95410dc93a5553e404680caab38e7343",
+    "writers": {
+      "src/orbi/runner_health.py": "01f882378aee9a59ed50ac8e98b50a9fe81dc1d02b53a86dd0746257fb645f79",
+      "src/orbi/run_state.py": "00d8a40a8de85a3d19186928a82bb4c56a58d356c301a024dcb9a1432f8d1653"
+    },
+    "fingerprint": "1831c77a488fd75c93fbd24442b8d62c95410dc93a5553e404680caab38e7343"
   }
 ]
