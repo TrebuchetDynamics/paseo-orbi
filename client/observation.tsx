@@ -2,8 +2,21 @@ import { useEffect, useState } from 'react';
 import { AppState, Text, View } from 'react-native';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { PluginHostProps } from '@getpaseo/plugin/client';
-import type { Observation } from '../shared/common';
+import type { Observation, Problem } from '../shared/common';
 import { ActionButton } from './action-button';
+
+// One repair sentence per reported problem code. The bare "source: code" evidence
+// stays the observation's own claim; only a reported code earns the operator action
+// printed next to it, so a read that succeeded never suggests a failure.
+const unavailableAccess = 'Repair access externally, then Refresh. Missing evidence never means none exist.';
+export const repairGuidance: Partial<Record<Problem['code'], string>> = {
+  auth_denied: "Ask the operator to repair the daemon user's existing gh authentication or permissions, then Refresh.",
+  rate_limited: "Wait for GitHub's retry/reset time, then Refresh.",
+  incomplete: unavailableAccess,
+  network_failed: unavailableAccess,
+};
+// Runs prints this next to its own unavailable-activity evidence, never on a clean read.
+export const sessionWriterGuidance = 'Check the session writer externally and Refresh; do not infer idle.';
 
 // Cancelled RPC transports may still be running. Serialize replacement generations
 // as well as QueryClient's ordinary same-key coalescing; never reuse a cancelled result.
@@ -135,17 +148,21 @@ export function useObservationQuery<T>(options: {
     refresh: () => enabled ? query.refetch({ cancelRefetch: false }) : Promise.resolve(undefined) };
 }
 
-export function ObservationView<T>({ observation, refreshing, canRefresh, refresh, theme, refreshLabel = 'Refresh', children }: {
+export function ObservationView<T>({ observation, refreshing, canRefresh, refresh, theme, refreshLabel = 'Refresh', repair = false, children }: {
   observation?: Observation<T>; refreshing: boolean; canRefresh: boolean; refresh: () => unknown;
-  theme: PluginHostProps['theme']; refreshLabel?: string; children: (data: T) => React.ReactNode;
+  theme: PluginHostProps['theme']; refreshLabel?: string;
+  // Opt in only where a reported problem has an operator repair step to show.
+  repair?: boolean; children: (data: T) => React.ReactNode;
 }) {
   const text = { color: theme.colors.foreground };
   const status = observation?.state ?? 'Loading';
   const problems = observation?.problems.map(p => `${p.source}: ${p.code}`).join('; ') ?? '';
+  const repairs = repair ? [...new Set((observation?.problems ?? []).flatMap(({ code }) => repairGuidance[code] ?? []))] : [];
   return <View>
     <Text accessibilityLabel={`Observation status: ${status}`} style={text}>{status}</Text>
     {observation && <Text style={text}>Observed: {observation.observedAt}; Last success: {observation.lastSuccessfulAt ?? 'never'}</Text>}
     <Text accessibilityRole="alert" style={text}>{problems}</Text>
+    {repairs.map((sentence, index) => <Text key={index} style={text}>{sentence}</Text>)}
     {observation?.data != null && children(observation.data)}
     <ActionButton label={refreshing ? 'Refreshing' : 'Refresh'} accessibilityName={refreshLabel}
       disabled={!canRefresh} busy={refreshing} theme={theme} onPress={() => { void refresh(); }} />

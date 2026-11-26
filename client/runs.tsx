@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useRpc, type PluginHostProps, type PluginScreenParams } from '@getpaseo/plugin/client';
 import { runsList, runsRead, type RunSummary, type RunDetails } from '../shared/runs';
-import { ObservationView, useObservationQuery } from './observation';
+import { ObservationView, sessionWriterGuidance, useObservationQuery } from './observation';
 
 type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginHostProps['theme']; params?: PluginScreenParams };
 // Params travel in the screen URL as strings. Only an exact issue/run identity pair
@@ -20,7 +20,7 @@ function Summary({ row, theme }: { row: RunSummary; theme: PluginHostProps['them
     <Text style={text}>Branch: {row.branch ?? 'unavailable'}; created_at (recorded, not guaranteed start): {row.createdAt ?? 'unavailable'}</Text>
     <Text style={text}>Pushed SHA: {row.pushedHead ?? 'unknown'}; Reviewed SHA: {row.reviewedHead ?? 'unknown'}</Text>
     {row.failure && <Text style={text}>Reported failure: {row.failure.reason_code}; repair: {row.failure.action_code}</Text>}
-    {!row.sessions.length && <Text style={text}>Activity unavailable — no attributed session evidence, not idle.</Text>}
+    {!row.sessions.length && <Text style={text}>Activity unavailable — no attributed session evidence. {sessionWriterGuidance}</Text>}
     {row.sessions.map((session, index) => <Text key={index} style={text}>Session {session.sessionId ?? 'identity unavailable'}: {session.state}; activity {session.at ?? 'unknown'} {session.kind ?? 'unknown'}</Text>)}
     {row.problems.map((p, index) => <Text key={index} style={text}>{p.source}: {p.code}</Text>)}
   </View>;
@@ -30,7 +30,7 @@ function Detail({ input, ...props }: Props & { input: { issue: number; runId: st
   const query = useObservationQuery<RunDetails>({ ...props, poll: false, selector: `runs.read:${props.repo}:${input.issue}:${input.runId}`,
     read: () => read({ deploymentId: props.deploymentId, ...input }) });
   const text = { color: props.theme.colors.foreground };
-  return <ObservationView {...query} theme={props.theme}>{data => <View>
+  return <ObservationView {...query} theme={props.theme} repair>{data => <View>
     <Text style={text}>Detail evidence — loaded only on selection or manual Refresh. Bounded journal window; gaps/rotation may omit events.</Text>
     <Summary row={data.summary} theme={props.theme} />
     <Text style={text}>PR identity: {data.prIdentity.status}</Text>
@@ -64,15 +64,14 @@ export function Runs(props: Props) {
   const text = { color: props.theme.colors.foreground };
   const valid = /^[1-9][0-9]*$/.test(issueText) && Number.isSafeInteger(Number(issueText));
   return <View style={{ gap: 12 }}>
-    <Text style={text}>Read-only observations, not proof a process is alive. Stage checks is not test success. External Pi sessions are not Paseo agents: no interactive attachment or steering.</Text>
+    <Text style={text}>Read-only observations, not proof a process is alive. Stage checks are not test results. External Pi sessions are not Paseo agents: no attachment or steering.</Text>
     <Text style={text}>Summary refresh: 30 seconds while foreground/connected. Active scope requires complete GitHub membership; selected issue history is separate.</Text>
-    <Text style={text}>auth_denied: ask the operator to repair the daemon user's existing gh authentication, then Refresh. rate_limited: wait for the retry/reset gate. Unavailable activity: check the session writer externally and Refresh; do not infer idle.</Text>
     <TextInput accessibilityLabel="Issue number for history" value={issueText} onChangeText={setIssueText} keyboardType="number-pad" style={{ ...text, borderColor: props.theme.colors.foreground, borderWidth: 1 }} />
     <Pressable accessibilityRole="button" accessibilityLabel="Inspect issue history" disabled={!valid} onPress={() => { select(null); setUnobserved(null); setIssue(Number(issueText)); }}><Text style={text}>Inspect issue history</Text></Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="Show active scope" onPress={() => { select(null); setUnobserved(null); setIssue(undefined); }}><Text style={text}>Show active scope</Text></Pressable>
     <Text style={text}>{issue ? `Issue #${issue} history — not active membership` : 'Observed active issue scope — no current/live run inferred'}</Text>
     {unobserved && <Text style={text}>{`Requested run ${unobserved.runId} is not in the observed history of issue #${unobserved.issue}; nothing is selected. Refresh after the writer records it; no lookup is guessed.`}</Text>}
-    <ObservationView {...query} theme={props.theme}>{rows => <View>
+    <ObservationView {...query} theme={props.theme} repair>{rows => <View>
       {!rows.length && <Text style={text}>No attributed runs in this observed scope.</Text>}
       {rows.map(row => <Pressable key={JSON.stringify([row.deploymentId, row.repo, row.issue, row.runId])} accessibilityRole="button" accessibilityLabel={`Inspect run ${row.issue} ${row.runId}`} onPress={() => { select({ issue: row.issue, runId: row.runId }); setUnobserved(null); }}><Summary row={row} theme={props.theme} /></Pressable>)}
     </View>}</ObservationView>
