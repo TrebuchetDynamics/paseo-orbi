@@ -249,6 +249,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Shell } from '../client/shell';
+import { formatLocalTime } from '../client/time';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const screenProps = { theme: { colors: { foreground: '#eee', foregroundMuted: '#aaa', surface0: '#111' } }, host: { id: 'host-a', label: 'Host A' }, layout: { compact: true, platform: 'web' }, params: { deploymentId: 'demo' }, route: 'runs', openScreen: vi.fn() } as unknown as React.ComponentProps<typeof Shell>;
 const row: RunSummary = { deploymentId: 'demo', repo, issue: 42, runId: '22222222', membership: 'scope', lifecycle: 'Implementing', stage: 'checks', failure: null, branch: 'orbi/Example-project-issue-42', createdAt: '2026-10-15T06:00:00Z', pushedHead: 'a'.repeat(40), reviewedHead: 'b'.repeat(40), sessions: [{ sessionId: 'session-42', at: '2026-10-15T06:01:00Z', kind: 'command', state: 'available', problems: [] }], problems: [] };
@@ -272,6 +273,9 @@ it('checks_and_selection_lifecycle', async () => {
   expect(host.readRun).not.toHaveBeenCalled();
   await press('Inspect run 42 22222222');
   expect(visible()).toContain('stale_head'); expect(visible()).toContain('head.sha');
+  // #134: run times, session activity and the merge time are local, never raw ISO.
+  expect(visible()).toContain(formatLocalTime(row.createdAt!));
+  expect(visible()).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   await act(async () => { await vi.advanceTimersByTimeAsync(30001); });
   expect(host.readRuns.mock.calls.length).toBeGreaterThan(1); expect(host.readRun).toHaveBeenCalledTimes(1);
   // Detail does not silently refresh when the app/host resumes after 30s.

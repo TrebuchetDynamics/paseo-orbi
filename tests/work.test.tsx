@@ -6,6 +6,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PluginScreenProps } from '@getpaseo/plugin/client';
 import { Shell } from '../client/shell';
+import { formatLocalTime } from '../client/time';
 import type { DeploymentCatalog } from '../shared/common';
 import { classifyIssue, issuesGet, issuesList, labelForeground, labelLuminance, neutralLabelColor, type IssueSummary } from '../shared/issues';
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
@@ -283,7 +284,9 @@ describe('Work first screen', () => {
     await press('Refresh issues');
     const visible = text(renderer);
     expect(visible).toContain('Issues: stale');
-    expect(visible).toContain(`Last seen ${stamp}`);
+    // #134: the stale marker and the observation times are local, not raw ISO.
+    expect(visible).toContain(`Last seen ${formatLocalTime(stamp)}`);
+    expect(visible).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
     expect(visible).toContain('#42 Issue 42');
     expect(visible).toContain('filesystem: refresh_failed');
     expect(visible).not.toContain('No open issues found.');

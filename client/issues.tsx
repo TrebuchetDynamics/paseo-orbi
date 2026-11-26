@@ -6,6 +6,7 @@ import { waitGuidance } from '../shared/blockers';
 import { ObservationView, useObservationQuery } from './observation';
 import { GitHubEvidenceLink } from './github-evidence-link';
 import { LabelChips } from './label-chip';
+import { formatLocalTime } from './time';
 
 type Props = { deploymentId: string; hostId: string; repo: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme']; openScreen: PluginClientContext['openScreen'];
   // Work's Inspect action opens this screen with one exact issue already selected.
@@ -25,7 +26,7 @@ function Detail({ data, ...props }: Props & { data: IssueDetail }) {
         <Text style={text}>{`Reported run: ${reportedRun}; reports complete — open in Runs`}</Text>
       </Pressable>
       : <Text style={text}>Reported run: {data.reports.selectedRunId ?? 'unknown'}; reports {data.reports.complete ? 'complete' : 'incomplete — current run not established; retained evidence may be stale'}</Text>}
-    {data.reports.attribution && <Text style={text}>Run attribution: {data.reports.attribution.repo}#{data.reports.attribution.issue}, comment {data.reports.attribution.commentId}, updated {data.reports.attribution.updatedAt}</Text>}
+    {data.reports.attribution && <Text style={text}>Run attribution: {data.reports.attribution.repo}#{data.reports.attribution.issue}, comment {data.reports.attribution.commentId}, updated {formatLocalTime(data.reports.attribution.updatedAt)}</Text>}
     <Text style={text}>Progress: {data.reports.progress.status}{data.reports.progress.status === 'available' ? `; reported stage: ${data.reports.progress.data.step ?? 'unknown'} (not live execution; GitHub facts take precedence)` : ''}</Text>
     <Text style={text}>Failure: {data.reports.failure.status}{data.reports.failure.status === 'available' ? `; ${data.reports.failure.data.reason_code}; action: ${data.reports.failure.data.action_code}` : ''}</Text>
     <Text style={text}>Scene: {data.reports.scene.status}; Base CI: {data.reports.baseCi.status}; Receipt: {data.reports.mergedReceipt.status}</Text>
@@ -39,7 +40,7 @@ function Detail({ data, ...props }: Props & { data: IssueDetail }) {
       repo={props.repo} kind="pull" number={data.reports.prIdentity.number} url={data.reports.prIdentity.url} theme={props.theme} />}
     {(['progress', 'failure', 'scene', 'baseCi', 'mergedReceipt'] as const).map(key => {
       const attr = data.reports[key].attribution;
-      return attr ? <Text key={key} style={text}>{key}: {attr.repo}#{attr.issue}, comment {attr.commentId}, updated {attr.updatedAt}</Text> : null;
+      return attr ? <Text key={key} style={text}>{key}: {attr.repo}#{attr.issue}, comment {attr.commentId}, updated {formatLocalTime(attr.updatedAt)}</Text> : null;
     })}
   </View>;
 }
@@ -111,7 +112,7 @@ export function Issues(props: Props) {
           const isSelected = issue.number === selected;
           return <View key={issue.number}><Pressable accessibilityRole="button" accessibilityLabel={`Inspect issue ${issue.number}`} accessibilityState={{ selected: isSelected }} onPress={() => select(issue.number)}>
           <Text style={text}>#{issue.number} {issue.title} — {issue.badge ?? 'no lifecycle label'} ({issue.provenance})</Text>
-          <Text style={text}>{issue.url}; updated {issue.updatedAt}; dependencies unknown</Text>
+          <Text style={text}>{issue.url}; updated {formatLocalTime(issue.updatedAt)}; dependencies unknown</Text>
           {issue.warning && <Text style={text}>Evidence warning: conflicting lifecycle labels.</Text>}
           {isSelected && <Text style={text}>Selected; detail below this row.</Text>}
         </Pressable>

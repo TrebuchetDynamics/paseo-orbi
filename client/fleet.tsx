@@ -7,6 +7,7 @@ import { fleetRead, type FleetSnapshot } from '../shared/fleet';
 import { ActionButton } from './action-button';
 import { ObservationView, useObservationQuery } from './observation';
 import { WorkspaceShortcut } from './workspace-shortcut';
+import { formatLocalTime } from './time';
 
 type Props = PluginScreenProps & { openScreen: PluginClientContext['openScreen'] };
 type Entry = DeploymentCatalog['entries'][number];
@@ -105,9 +106,9 @@ function DeploymentDetail({ entry, connected, foreground, ...props }: Props & {
         {grouped.unpaired.map(unit => <UnitDetail key={unit.id} unit={unit} style={text} />)}
         <Text style={text}>Recorded health (not current service health)</Text>
         {data.health === null ? <Text style={text}>Health unavailable. Ask the operator to check the health writer/file, then Refresh.</Text> : <View>
-          <Text style={text}>Last pickup: {data.health.lastPickupAt ?? 'unavailable'}</Text>
+          <Text style={text}>Last pickup: {data.health.lastPickupAt === null ? 'unavailable' : formatLocalTime(data.health.lastPickupAt)}</Text>
           {data.health.recentRuns.length === 0 && <Text style={text}>No recorded runs in the validated health history.</Text>}
-          {data.health.recentRuns.map((run, i) => <Text key={i} style={text}>{run.repo} #{run.issue} · {run.runId} · Reported outcome: {run.outcome} · {run.at}</Text>)}
+          {data.health.recentRuns.map((run, i) => <Text key={i} style={text}>{run.repo} #{run.issue} · {run.runId} · Reported outcome: {run.outcome} · {formatLocalTime(run.at)}</Text>)}
         </View>}
       </View>;
     }}</ObservationView>

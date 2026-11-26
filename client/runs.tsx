@@ -3,6 +3,7 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { useRpc, type PluginHostProps, type PluginScreenParams } from '@getpaseo/plugin/client';
 import { runsList, runsRead, type RunSummary, type RunDetails } from '../shared/runs';
 import { ObservationView, sessionWriterGuidance, useObservationQuery } from './observation';
+import { formatLocalTime } from './time';
 
 type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginHostProps['theme']; params?: PluginScreenParams };
 // Params travel in the screen URL as strings. Only an exact issue/run identity pair
@@ -17,11 +18,11 @@ function Summary({ row, theme }: { row: RunSummary; theme: PluginHostProps['them
   return <View>
     <Text style={text}>{row.deploymentId} · {row.repo}#{row.issue} · run {row.runId} ({row.membership})</Text>
     <Text style={text}>Lifecycle: {row.lifecycle ?? 'history, not active membership'}; Reported stage: {row.stage ?? 'unavailable'}</Text>
-    <Text style={text}>Branch: {row.branch ?? 'unavailable'}; created_at (recorded, not guaranteed start): {row.createdAt ?? 'unavailable'}</Text>
+    <Text style={text}>Branch: {row.branch ?? 'unavailable'}; created_at (recorded, not guaranteed start): {row.createdAt === null ? 'unavailable' : formatLocalTime(row.createdAt)}</Text>
     <Text style={text}>Pushed SHA: {row.pushedHead ?? 'unknown'}; Reviewed SHA: {row.reviewedHead ?? 'unknown'}</Text>
     {row.failure && <Text style={text}>Reported failure: {row.failure.reason_code}; repair: {row.failure.action_code}</Text>}
     {!row.sessions.length && <Text style={text}>Activity unavailable — no attributed session evidence. {sessionWriterGuidance}</Text>}
-    {row.sessions.map((session, index) => <Text key={index} style={text}>Session {session.sessionId ?? 'identity unavailable'}: {session.state}; activity {session.at ?? 'unknown'} {session.kind ?? 'unknown'}</Text>)}
+    {row.sessions.map((session, index) => <Text key={index} style={text}>Session {session.sessionId ?? 'identity unavailable'}: {session.state}; activity {session.at === null ? 'unknown' : formatLocalTime(session.at)} {session.kind ?? 'unknown'}</Text>)}
     {row.problems.map((p, index) => <Text key={index} style={text}>{p.source}: {p.code}</Text>)}
   </View>;
 }
@@ -35,12 +36,12 @@ function Detail({ input, ...props }: Props & { input: { issue: number; runId: st
     <Summary row={data.summary} theme={props.theme} />
     <Text style={text}>PR identity: {data.prIdentity.status}</Text>
     {data.pr ? <View>
-      <Text style={text}>PR #{data.pr.number} {data.pr.url}; {data.pr.state}; merged_at: {data.pr.merged_at ?? 'not merged'}; head.sha: {data.pr.head.sha}</Text>
+      <Text style={text}>PR #{data.pr.number} {data.pr.url}; {data.pr.state}; merged_at: {data.pr.merged_at === null ? 'not merged' : formatLocalTime(data.pr.merged_at)}; head.sha: {data.pr.head.sha}</Text>
       <Text style={text}>Head checks: {data.pr.checksState}</Text>
       {data.pr.checks.map((check, index) => <Text key={index} style={text}>{check.name}: {check.status} / {check.conclusion ?? 'unknown'} {check.url ?? ''}</Text>)}
     </View> : <Text style={text}>PR/check evidence unavailable. No guessed PR lookup; no passed checks inferred.</Text>}
     {!data.events.length && <Text style={text}>No matching events in this bounded observation (not proof no events occurred).</Text>}
-    {data.events.map((event, index) => <Text key={index} style={text}>{event.at} {event.event} run {event.runId} issue {event.issue}</Text>)}
+    {data.events.map((event, index) => <Text key={index} style={text}>{formatLocalTime(event.at)} {event.event} run {event.runId} issue {event.issue}</Text>)}
   </View>}</ObservationView>;
 }
 export function Runs(props: Props) {
