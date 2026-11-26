@@ -55,8 +55,10 @@ export class RunsReader {
         activity.problems = [{ source: 'filesystem', code: 'incomplete' }];
         from = chunk.bytes.indexOf(10) + 1; // a tail can start inside a private record
       }
-      if (end !== chunk.bytes.length) activity.problems.push({ source: 'filesystem', code: 'incomplete' });
       if (!from && start > requested) end = 0;
+      // An unfinished last line is re-read completely by the next observation, so its
+      // problem describes only this read: it never enters the session memory.
+      const unfinished = end !== chunk.bytes.length;
       let malformed = false;
       for (const line of chunk.bytes.subarray(from, end).toString('utf8').split('\n')) {
         if (!line) continue;
@@ -91,7 +93,9 @@ export class RunsReader {
       activity.state = activity.at && activity.kind ? 'available' : 'unavailable';
       activity.problems = [...new Map(activity.problems.map(p => [p.code, p])).values()];
       this.boundedRemember(this.sessions, key, { identity: chunk.identity, size: chunk.size, mtime: chunk.mtimeMs, offset: end ? start + end : start, activity, header: headerText }, 3200);
-      return activity;
+      return unfinished && !activity.problems.some(p => p.code === 'incomplete')
+        ? { ...activity, problems: [...activity.problems, { source: 'filesystem', code: 'incomplete' }] }
+        : activity;
     } catch (error) { this.sessions.delete(key); return { ...emptyActivity(), problems: [problem(error)] }; }
   }
   private async summary(id: string, issue: number, runId: string, membership: RunSummary['membership'], reports: ReportSelection, lifecycle: string | null): Promise<RunSummary> {
