@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdir, writeFile, readFile, readdir, lstat, chmod, rename, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, appendFile, readFile, readdir, lstat, chmod, rename, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fixture, type FixtureProfile } from './helpers/fixtures';
@@ -166,6 +166,58 @@ it('bounded_private_event_projection', async () => {
   await f.ports.dispose(); await rejection;
   expect((f.ports as unknown as { children: Map<unknown, unknown> }).children.size).toBe(0);
   await expect(f.ports.process('demo', { kind: 'journalctl', slot: 1 })).rejects.toThrow('disposed');
+});
+
+it('reports an unfinished session line as incomplete only until the writer completes it', async () => {
+  const f = await membershipFixture('installed');
+  const path = join(f.tree(), '.pi-session/one.jsonl');
+  const header = JSON.stringify(records.session) + '\n';
+  const line = JSON.stringify(records.message);
+  const split = Math.floor(line.length / 2);
+  await writeFile(path, header + line.slice(0, split));
+  const midWrite = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(midWrite.data?.summary.sessions[0]).toMatchObject({ state: 'unavailable', problems: [{ source: 'filesystem', code: 'incomplete' }] });
+  expect(midWrite.data?.summary.problems).toEqual([{ source: 'filesystem', code: 'incomplete' }]);
+  // Re-reading the same unfinished file still reports it: the problem is current evidence.
+  const reread = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(reread.data?.summary.sessions[0]?.problems).toEqual([{ source: 'filesystem', code: 'incomplete' }]);
+  await appendFile(path, line.slice(split) + '\n');
+  const finished = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(finished.data?.summary.sessions[0]).toMatchObject({ state: 'available', kind: 'command', at: records.message.timestamp, problems: [] });
+  expect(finished.data?.summary.problems).toEqual([]);
+  // The bounded journal window is always partial evidence, so the session's own
+  // filesystem evidence must be the thing that is gone.
+  expect(finished.problems.filter(p => p.source === 'filesystem')).toEqual([]);
+  const list = await f.reader.list({ deploymentId: 'demo' });
+  expect(list.state).toBe('available');
+  expect(list.lastSuccessfulAt).not.toBeNull();
+});
+
+it('keeps an unread file beginning incomplete after append-only reads', async () => {
+  const f = await membershipFixture('installed');
+  const path = join(f.tree(), '.pi-session/one.jsonl');
+  const header = JSON.stringify(records.session) + '\n';
+  const line = JSON.stringify(records.message) + '\n';
+  expect(Buffer.byteLength(header + line.repeat(1200))).toBeGreaterThan(262144);
+  await writeFile(path, header + line.repeat(1200));
+  const tail = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(tail.data?.summary.sessions[0]).toMatchObject({ state: 'available', problems: [{ source: 'filesystem', code: 'incomplete' }] });
+  await appendFile(path, line);
+  const later = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(later.data?.summary.sessions[0]).toMatchObject({ state: 'available', problems: [{ source: 'filesystem', code: 'incomplete' }] });
+});
+
+it('keeps a malformed session record reported after append-only reads', async () => {
+  const f = await membershipFixture('installed');
+  const path = join(f.tree(), '.pi-session/one.jsonl');
+  const header = JSON.stringify(records.session) + '\n';
+  const line = JSON.stringify(records.message) + '\n';
+  await writeFile(path, header + '{bad}\n' + line);
+  const malformed = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(malformed.data?.summary.sessions[0]).toMatchObject({ state: 'unavailable', at: null, kind: null, problems: [{ source: 'filesystem', code: 'invalid_response' }] });
+  await appendFile(path, line);
+  const later = await f.reader.read({ deploymentId: 'demo', issue: 42, runId: '22222222' });
+  expect(later.data?.summary.sessions[0]?.problems).toEqual([{ source: 'filesystem', code: 'invalid_response' }]);
 });
 
 it('bounds exact discovery without choosing a filename/mtime winner and rejects symlinks', async () => {
