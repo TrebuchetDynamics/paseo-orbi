@@ -14,6 +14,7 @@ import contribute from '../index.server';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import { fixture } from './helpers/fixtures';
 import { WorkspaceShortcut } from '../client/workspace-shortcut';
+import { formatLocalTime } from '../client/time';
 
 // Pass-through host filesystem spies record the real calls the adapter makes.
 vi.mock('node:fs/promises', { spy: true });
@@ -350,6 +351,9 @@ it('reports exactly the five presence/type labels and inspects only on an explic
     expect(host.readShortcut).toHaveBeenCalledTimes(1);
     expect(host.readShortcut).toHaveBeenCalledWith({ deploymentId: 'demo' });
     expect(text(renderer)).toContain(`Workspace shortcut: ${label}`);
+    // #134: the inspection time is shown in the viewer's local time, not as ISO.
+    expect(text(renderer)).toContain(`Shortcut observed: ${formatLocalTime(stamp)}`);
+    expect(text(renderer)).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
     await press(renderer, 'Refresh shortcut');
     expect(host.readShortcut).toHaveBeenCalledTimes(2);
   }

@@ -4,6 +4,7 @@ import type { PluginHostProps } from '@getpaseo/plugin/client';
 import { Text, View } from 'react-native';
 import { workspaceShortcutStatus, type ShortcutState, type WorkspaceShortcutStatus } from '../shared/workspace-shortcut';
 import { ActionButton } from './action-button';
+import { formatLocalTime } from './time';
 
 // Plain-language labels only. Nothing here names, resolves or shows the target, and a
 // present shortcut never claims that a checkout exists or opens.
@@ -46,7 +47,7 @@ export function WorkspaceShortcut({ hostId, deploymentId, repo, connected, foreg
   const action = current ? 'Refresh shortcut' : 'Inspect shortcut';
   return <View testID={`orbi-shortcut-${deploymentId}`} accessibilityLabel="Workspace shortcut" style={{ gap: 4 }}>
     <Text style={text}>Workspace shortcut: {current ? labels[current.state] : 'Not inspected'}</Text>
-    {current && <Text style={text}>Shortcut observed: {current.observedAt}{current.problem ? ` · ${current.problem.source}: ${current.problem.code}` : ''}</Text>}
+    {current && <Text style={text}>Shortcut observed: {formatLocalTime(current.observedAt)}{current.problem ? ` · ${current.problem.source}: ${current.problem.code}` : ''}</Text>}
     <Text style={text}>Explicit inspection only. This reports whether the designated name is present and whether it is a symbolic link. It does not read, follow, compare or display the target, and it does not prove that a checkout exists or opens. A shortcut is a possible convenience for terminal, editor and file-manager users, not a Paseo workspace registration.</Text>
     {!connected && <Text style={text}>Host offline: no shortcut inspection.</Text>}
     {connected && !foreground && <Text style={text}>App is in the background: no shortcut inspection.</Text>}

@@ -8,6 +8,7 @@ vi.mock('node:fs/promises', { spy: true });
 import { readFleet } from '../server/fleet';
 import { fleetRead, type FleetSnapshot } from '../shared/fleet';
 import { fixture } from './helpers/fixtures';
+import { formatLocalTime } from '../client/time';
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -162,15 +163,17 @@ it('stale_compact_and_theme', async () => {
   expect(text()).toContain('Active: inactive');
   expect(text()).toContain('systemd: process_failed');
   expect(text()).toContain('filesystem: read_failed');
-  expect(text()).toContain(`Last success: ${firstReadAt}`);
+  expect(text()).toContain(`Last success: ${formatLocalTime(firstReadAt)}`);
   host.readFleet.mockRejectedValue(new Error('SECRET raw error'));
   const refreshes = renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' });
   await act(async () => { await refreshes[0].props.onPress(); }); await settle();
   expect(text()).toContain('stale'); expect(text()).toContain('refresh_failed');
-  expect(text()).toContain(`Last success: ${firstReadAt}`);
+  expect(text()).toContain(`Last success: ${formatLocalTime(firstReadAt)}`);
   expect(text()).not.toContain('SECRET');
   await act(async () => { for (const listener of host.listeners) listener('background'); await vi.advanceTimersByTimeAsync(60001); }); await settle();
-  expect(text()).toContain('stale'); expect(text()).toContain('Observed: 2026-11-14');
+  expect(text()).toContain('stale'); expect(text()).toContain(`Observed: ${formatLocalTime(firstReadAt)}`);
+  // #134: no displayed time keeps the raw ISO stamp.
+  expect(text()).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   const light = { ...props, layout: { compact: false, platform: 'web' }, theme: { colors: { foreground: '#222', foregroundMuted: '#555', surface0: '#fff' } } } as PluginScreenProps;
   await act(async () => renderer.update(tree(light)));
   expect(renderer.root.findByType('ScrollView' as any).props.contentContainerStyle.padding).toBe(24);
@@ -280,7 +283,7 @@ it('keeps failed, inactive, unknown and not-found slot facts apart with the repo
   await act(async () => { await renderer.root.findByProps({ testID: 'orbi-fleet' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress(); });
   await settle();
   expect(text()).toContain('stale');
-  expect(text()).toContain('Last success: 2026-11-14T23:00:00.000Z');
+  expect(text()).toContain(`Last success: ${formatLocalTime('2026-11-14T23:00:00.000Z')}`);
   expect(summaries()).toHaveLength(5);
   expect(host.readFleet).toHaveBeenCalledTimes(2);
 });

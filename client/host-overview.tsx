@@ -9,6 +9,7 @@ import { servicesControl } from '../shared/service-control';
 import { claimOf, readingEvidence, useObservationQuery } from './observation';
 import { ActionButton } from './action-button';
 import { associationOf, authorizedEntry, displayNames, type CatalogEvidence } from './repository-catalog';
+import { formatLocalTime } from './time';
 
 // Host-first Overview. It reads one host-scoped services.inventory({}) snapshot
 // and never resolves a repository: an association carries a deployment id only
@@ -346,7 +347,7 @@ function ServiceRow({ group, name, theme, entries, openScreen, showUnlinked, las
   return <View testID={`orbi-family-${group.label}`} style={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: theme.colors.surface1 }}>
     <Text style={{ ...text, fontSize: 16, fontWeight: '600' }}>{name}</Text>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {lastSeen !== null && <Text testID={`orbi-last-seen-${group.label}`} style={secondary}>{`Last seen ${lastSeen}`}</Text>}
+      {lastSeen !== null && <Text testID={`orbi-last-seen-${group.label}`} style={secondary}>{`Last seen ${formatLocalTime(lastSeen)}`}</Text>}
       {failure !== null && <Text style={secondary}>{failure}</Text>}
       {status.map(fact => <Text key={fact} style={secondary}>{familyFactText[fact]}</Text>)}
       {showUnlinked && !entry && <Text style={secondary}>Unlinked</Text>}
@@ -406,7 +407,7 @@ export function ServiceDetails({ hostId, hostLabel, group, name, theme, entries,
           {status.failure !== null && <Text style={text}>{status.failure}</Text>}
           {status.status.map(fact => <Text key={fact} style={text}>{familyFactText[fact]}</Text>)}
         </View>}
-        {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${lastSeen}. Current activity unknown.`}</Text>}
+        {lastSeen !== null && <Text testID="orbi-service-details-last-seen" style={text}>{`Last seen ${formatLocalTime(lastSeen)}. Current activity unknown.`}</Text>}
         <Text testID="orbi-service-association" style={text}>{association!.note}</Text>
         <Text style={text}>Unit activity does not establish issue delivery.</Text>
         {entry !== null && <FamilyActions hostId={hostId} hostLabel={hostLabel} entry={entry} group={group} theme={theme} stale={lastSeen !== null} />}
@@ -492,7 +493,7 @@ export function HostServices({ hostId, hostLabel, theme, compact, connected, for
     current && claim.payload === 'partial' && families.length > 0 ? 'Partial · units may be missing.' : '',
     unavailable ? 'Unavailable · current activity unknown.' : '',
     claim.reading ? 'Reading services…' : '',
-    stale ? `Last success: ${observation!.lastSuccessfulAt}` : '',
+    stale ? `Last success: ${formatLocalTime(observation!.lastSuccessfulAt!)}` : '',
     failed ? 'Read failed · check systemd/DBus access.' : '',
     limited ? 'Read limited · units may be missing.' : '',
   ].filter(Boolean);

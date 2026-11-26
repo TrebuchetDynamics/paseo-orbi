@@ -3,6 +3,7 @@ import { failureGuidance, waitGuidance, attention, attentionText, BlockerDetails
 import guidance from './fixtures/blockers/guidance.json';
 import { Failure } from '../shared/issues';
 import { selectReports } from '../server/reports';
+import { formatLocalTime } from '../client/time';
 
 describe('Blockers', () => {
   it('failure_guidance_without_actions', () => {
@@ -252,7 +253,7 @@ it('renders_each_formal_guidance_with_provenance_and_no_recovery_controls', asyn
     await act(async () => renderer.update(evidence(data)));
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain(guidance.reasons[reason_code]); expect(text).toContain(guidance.actions[action_code]);
-    expect(text).toContain('never permission'); expect(text).toContain('issuecomment-1'); expect(text).toContain(stamp);
+    expect(text).toContain('never permission'); expect(text).toContain('issuecomment-1'); expect(text).toContain(formatLocalTime(stamp));
     // The only control is the reported-run navigation; nothing recovers or retries.
     expect(renderer.root.findAll(node => node.props.accessibilityRole === 'button').map(node => node.props.accessibilityLabel)).toEqual([`Inspect run ${run} in Runs`]);
   }
@@ -324,7 +325,9 @@ it('partial_stale_and_layout', async () => {
   f.advance(); f.deny(true);
   await act(async () => renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress()); await settle(); await settle();
   let visible = JSON.stringify(renderer.toJSON());
-  expect(visible).toContain('stale'); expect(visible).toContain('auth_denied'); expect(visible).toContain(stamp);
+  expect(visible).toContain('stale'); expect(visible).toContain('auth_denied'); expect(visible).toContain(formatLocalTime(stamp));
+  // #134: retained evidence shows local times, not raw ISO stamps.
+  expect(visible).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   expect(visible).toContain('Synthetic blocker'); expect(visible).not.toContain('No blockers in');
   expect(visible).toContain("daemon user's existing gh authentication");
   f.advance(); f.deny(false);

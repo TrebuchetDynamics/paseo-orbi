@@ -12,6 +12,7 @@ import { z } from 'zod';
 import contribute from '../index.server';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import { fixture, type FixtureProfile } from './helpers/fixtures';
+import { formatLocalTime } from '../client/time';
 
 // Pass-through host filesystem spies record real opens/stats without replacing safety code.
 vi.mock('node:fs/promises', { spy: true });
@@ -643,7 +644,8 @@ describe('bounded_reads_and_lifecycle client', () => {
     expect(current.observation!.observedAt).not.toBe(previousTime);
     expect(alert()).toBe(problemRegion);
     expect(alert().children).toEqual(['filesystem: refresh_failed']);
-    expect(renderer.root.findAllByType('Text' as any).some(node => node !== alert() && JSON.stringify(node.children).includes(current.observation!.observedAt))).toBe(true);
+    // #134: the visible timestamp is the local rendering of the observed instant.
+    expect(renderer.root.findAllByType('Text' as any).some(node => node !== alert() && JSON.stringify(node.children).includes(formatLocalTime(current.observation!.observedAt)))).toBe(true);
 
     // Repair and Refresh removes the problem, but keeps children and status
     // independently accessible. Age-only staleness must not invent an error.

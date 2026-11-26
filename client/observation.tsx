@@ -4,6 +4,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import type { PluginHostProps } from '@getpaseo/plugin/client';
 import type { Observation, Problem } from '../shared/common';
 import { ActionButton } from './action-button';
+import { formatLocalTime } from './time';
 
 // One repair sentence per reported problem code. The bare "source: code" evidence
 // stays the observation's own claim; only a reported code earns the operator action
@@ -160,7 +161,7 @@ export function ObservationView<T>({ observation, refreshing, canRefresh, refres
   const repairs = repair ? [...new Set((observation?.problems ?? []).flatMap(({ code }) => repairGuidance[code] ?? []))] : [];
   return <View>
     <Text accessibilityLabel={`Observation status: ${status}`} style={text}>{status}</Text>
-    {observation && <Text style={text}>Observed: {observation.observedAt}; Last success: {observation.lastSuccessfulAt ?? 'never'}</Text>}
+    {observation && <Text style={text}>Observed: {formatLocalTime(observation.observedAt)}; Last success: {observation.lastSuccessfulAt !== null ? formatLocalTime(observation.lastSuccessfulAt) : 'never'}</Text>}
     <Text accessibilityRole="alert" style={text}>{problems}</Text>
     {repairs.map((sentence, index) => <Text key={index} style={text}>{sentence}</Text>)}
     {observation?.data != null && children(observation.data)}

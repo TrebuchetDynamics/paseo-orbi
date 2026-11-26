@@ -6,11 +6,15 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PluginScreenProps } from '@getpaseo/plugin/client';
 import { Shell } from '../client/shell';
+import { formatLocalTime } from '../client/time';
 import type { DeploymentCatalog } from '../shared/common';
 import { servicesInventory, type InventoryGroup, type InventoryUnit, type ServiceInventory } from '../shared/services';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const stamp = '2026-11-19T18:00:00.000Z';
+// Expected text is built through the formatter, so these screens are asserted in
+// whatever time zone the test machine runs in.
+const localStamp = formatLocalTime(stamp);
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -266,13 +270,13 @@ describe('Services screen without accordions', () => {
     await press('Back to services');
     host.readInventory.mockRejectedValue(new Error('failed'));
     await press('Refresh services');
-    expect(text(renderer)).toContain(`Last success: ${stamp}`);
+    expect(text(renderer)).toContain(`Last success: ${localStamp}`);
     expect(text(renderer)).toContain('Stale · current activity unknown');
-    expect(rowPage(renderer, 'orbi')).toContain('Last seen ' + stamp);
+    expect(rowPage(renderer, 'orbi')).toContain('Last seen ' + localStamp);
     await press('Details for orbi');
     expect(text(renderer)).toContain('Slot 2 · Worker not observed · Timer waiting');
     // The diagnostic view labels retained raw data with its last successful time.
-    expect(text(renderer)).toContain(`Last seen ${stamp}. Current activity unknown.`);
+    expect(text(renderer)).toContain(`Last seen ${localStamp}. Current activity unknown.`);
   });
 
   it.each(['not-found', 'error', 'unknown'])('never labels %s load as Idle at row or slot level', async loadState => {
@@ -578,7 +582,7 @@ describe('service details without numbered slots', () => {
     await press('Details for orbi-exporter');
     const page = text(renderer);
     expect(page).toContain('Worker failed');
-    expect(page).toContain(`Last seen ${stamp}. Current activity unknown.`);
+    expect(page).toContain(`Last seen ${localStamp}. Current activity unknown.`);
   });
 
   it('shows no fallback status when the group has numbered slot lines', async () => {
@@ -697,7 +701,7 @@ describe('host states and authority', () => {
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     await act(async () => { await vi.advanceTimersByTimeAsync(61000); }); await settle();
     expect(text(renderer)).toContain('Stale · current activity unknown');
-    expect(text(renderer)).toContain(`Last success: ${stamp}`);
+    expect(text(renderer)).toContain(`Last success: ${localStamp}`);
     expect(text(renderer)).not.toContain('No Orbi units found.');
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     host.readInventory.mockRejectedValue(new Error('SECRET raw transport error'));
@@ -712,19 +716,21 @@ describe('host states and authority', () => {
     host.readInventory.mockRejectedValue(new Error('SECRET'));
     await press('Refresh services');
     expect(text(renderer)).toContain('Stale · current activity unknown');
-    expect(text(renderer)).toContain(`Last success: ${stamp}`);
+    expect(text(renderer)).toContain(`Last success: ${localStamp}`);
     expect(rowPage(renderer, 'orbi')).toContain('Slot 1 · Worker failed');
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     // Every retained row is marked inside the row itself, so the marker survives
     // the header scrolling offscreen; the retained facts read as last seen, not current.
     for (const group of hostA.groups) {
-      expect(rowPage(renderer, group.label)).toContain(`Last seen ${stamp}`);
+      expect(rowPage(renderer, group.label)).toContain(`Last seen ${localStamp}`);
       expect(row(renderer, group.label).findByProps({ testID: `orbi-last-seen-${group.label}` })).toBeDefined();
     }
+    // #134: the displayed time is local, so no screen text keeps a raw ISO stamp.
+    expect(text(renderer)).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
     host.readInventory.mockResolvedValue(hostA);
     await press('Refresh services');
     for (const group of hostA.groups) expect(rowPage(renderer, group.label)).not.toContain('Last seen');
-    expect(text(renderer)).not.toContain(`Last success: ${stamp}`);
+    expect(text(renderer)).not.toContain(`Last success: ${localStamp}`);
     expect(text(renderer)).toContain('1 of 5 groups needs attention');
   });
 
@@ -738,7 +744,7 @@ describe('host states and authority', () => {
     expect(text(renderer)).toContain('Offline · current activity unknown');
     expect(renderer.root.findAllByProps({ testID: 'orbi-attention-count' })).toHaveLength(0);
     expect(text(renderer)).not.toMatch(/\d+ of \d+ (?:observed )?groups? needs? attention/);
-    for (const group of hostA.groups) expect(rowPage(renderer, group.label)).toContain(`Last seen ${stamp}`);
+    for (const group of hostA.groups) expect(rowPage(renderer, group.label)).toContain(`Last seen ${localStamp}`);
     expect(row(renderer, 'orbi-demo').findByProps({ testID: 'orbi-last-seen-orbi-demo' })).toBeDefined();
     host.readInventory.mockResolvedValue(hostB);
     await switchTo('host-b');
@@ -1260,7 +1266,7 @@ describe('operator-authorized service controls on the diagnostic view', () => {
     await press('Refresh services');
     expect(text(renderer)).toContain('Stale · current activity unknown');
     await press('Details for Example/project');
-    expect(text(renderer)).toContain(`Last seen ${stamp}. Current activity unknown.`);
+    expect(text(renderer)).toContain(`Last seen ${localStamp}. Current activity unknown.`);
     expect(text(renderer)).toContain('Slot 1 · Worker idle · Timer waiting');
     expect(text(renderer)).toContain(hiddenLine);
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
@@ -1277,7 +1283,7 @@ describe('operator-authorized service controls on the diagnostic view', () => {
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Stop slot 1' })).toHaveLength(1);
     host.hosts[0].status = 'offline';
     await switchTo('host-a');
-    expect(text(renderer)).toContain(`Last seen ${stamp}. Current activity unknown.`);
+    expect(text(renderer)).toContain(`Last seen ${localStamp}. Current activity unknown.`);
     expect(text(renderer)).toContain(hiddenLine);
     expect(renderer.root.findAllByProps({ accessibilityLabel: 'Actions for orbi-demo' })).toHaveLength(0);
     expect(actionControls(renderer)).toHaveLength(0);

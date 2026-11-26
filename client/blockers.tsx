@@ -3,6 +3,7 @@ import { Linking, Pressable, Text, TextInput, View } from 'react-native';
 import { useRpc, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
 import { attentionText, blockersList, blockersRead, failureGuidance, waitGuidance, type Blocker, type BlockerPage, type BlockerDetails } from '../shared/blockers';
 import { ObservationView, useObservationQuery } from './observation';
+import { formatLocalTime } from './time';
 
 type Props = { deploymentId: string; repo: string; hostId: string; connected: boolean; foreground: boolean; theme: PluginScreenProps['theme']; openScreen: PluginClientContext['openScreen'] };
 type AttentionClass = Exclude<Blocker['attention'], 'not_candidate'>;
@@ -34,7 +35,7 @@ export function BlockerEvidence({ data, theme, deploymentId, openScreen }: { dat
   const reportedRun = reports.complete ? reports.selectedRunId : null;
   const link = (url: string, label: string) => <Text style={text} accessibilityRole="link" onPress={() => { void Linking.openURL(url).catch(() => undefined); }}>{label}: {url}</Text>;
   return <View style={{ gap: 8 }}>
-    <Text style={text}>#{data.issue.number} {data.issue.title} — GitHub {data.issue.githubState}; updated {data.issue.updatedAt}</Text>
+    <Text style={text}>#{data.issue.number} {data.issue.title} — GitHub {data.issue.githubState}; updated {formatLocalTime(data.issue.updatedAt)}</Text>
     <Text style={text}>Classification: {data.issue.state}; provenance: {data.issue.provenance}{data.issue.badge ? ` (${data.issue.badge})` : ''}</Text>
     <Text style={text}>Labels: {data.issue.labels.join(', ') || 'none'}{data.issue.warning ? ' — conflicting lifecycle labels' : ''}</Text>
     {link(data.issue.url, 'GitHub source')}
@@ -50,11 +51,11 @@ export function BlockerEvidence({ data, theme, deploymentId, openScreen }: { dat
     {reports.baseCi.status === 'available' && <Text style={text}>{waitGuidance(reports.baseCi.data.state)}</Text>}
     {(['attribution', 'failure', 'scene', 'baseCi'] as const).map(key => {
       const attr = key === 'attribution' ? reports.attribution : reports[key].attribution;
-      return attr ? <View key={key}><Text style={text}>{key}: {attr.repo}#{attr.issue}; comment {attr.commentId}; updated {attr.updatedAt}</Text>{link(`https://github.com/${attr.repo}/issues/${attr.issue}#issuecomment-${attr.commentId}`, 'Report source')}</View> : null;
+      return attr ? <View key={key}><Text style={text}>{key}: {attr.repo}#{attr.issue}; comment {attr.commentId}; updated {formatLocalTime(attr.updatedAt)}</Text>{link(`https://github.com/${attr.repo}/issues/${attr.issue}#issuecomment-${attr.commentId}`, 'Report source')}</View> : null;
     })}
     {'artifacts' in data && <View style={{ gap: 8 }}>
       <Text style={text}>Artifact metadata only (no contents). Exact attributed scene candidates; missing evidence does not clear a GitHub blocker.</Text>
-      {data.artifacts.map(artifact => <Text key={artifact.name} style={text}>{artifact.name}: {artifact.status}; bytes {artifact.size ?? 'unknown'}; modified {artifact.modifiedAt ?? 'unknown'}</Text>)}
+      {data.artifacts.map(artifact => <Text key={artifact.name} style={text}>{artifact.name}: {artifact.status}; bytes {artifact.size ?? 'unknown'}; modified {artifact.modifiedAt === null ? 'unknown' : formatLocalTime(artifact.modifiedAt)}</Text>)}
       <Text style={text}>Profile: {data.retention.profile}; worktree_retain_hours: {data.retention.worktreeRetainHours}; keep_failed_worktrees: {data.retention.keepFailedWorktrees === null ? 'unsupported on release profile' : String(data.retention.keepFailedWorktrees)}</Text>
       <Text style={text}>Observed presence is not a retention guarantee. Official v0.7.41 may delete terminally failed worktrees; the pinned installed build supports retention. 72 hours does not imply automatic reclamation of an open blocked scene. No cleanup or recreation is performed.</Text>
     </View>}
