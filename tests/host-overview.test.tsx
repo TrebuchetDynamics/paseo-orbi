@@ -1100,6 +1100,77 @@ describe('operator-authorized service controls on the diagnostic view', () => {
     expect(text(renderer)).not.toContain('Start succeeded');
   });
 
+  // systemd may unload an inactive template instance, so a poll can stop listing
+  // the slot the operator is confirming. The confirmation is transient: it must
+  // never be the state that leaves every granted action unusable.
+  const twoSlots = inventory({ state: 'complete', groups: [family('orbi-demo', 'matched', 'demo', [
+    unit('orbi-demo@1.service', 'service', 'inactive', 'dead'), unit('orbi-demo@2.service', 'service', 'active', 'running'),
+  ])] });
+  const slotOneOnly = inventory({ state: 'complete', groups: [family('orbi-demo', 'matched', 'demo', [
+    unit('orbi-demo@1.service', 'service', 'inactive', 'dead'),
+  ])] });
+  const refreshInventory = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(31000); }); await settle(); };
+
+  it('keeps the granted actions usable when the inventory drops the confirmed slot', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(twoSlots);
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Stop slot 2');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-2' })).toHaveLength(1);
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Start slot 1' }).props.disabled).toBe(true);
+    // The next poll no longer lists the confirmed instance.
+    host.readInventory.mockResolvedValue(slotOneOnly);
+    await refreshInventory();
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-2' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Cancel stop slot 2' })).toHaveLength(0);
+    for (const action of ['Start', 'Stop', 'Restart']) {
+      expect(renderer.root.findByProps({ accessibilityLabel: `${action} slot 1` }).props)
+        .toMatchObject({ disabled: false, accessibilityState: { disabled: false } });
+    }
+    expect(host.readControl).not.toHaveBeenCalled();
+    // The slot that is still observed still confirms and sends normally.
+    host.readControl.mockResolvedValue(answer());
+    await press('Start slot 1');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Cancel start slot 1' })).toHaveLength(1);
+    await press('Confirm start slot 1');
+    expect(host.readControl.mock.calls[0][0]).toEqual({ deploymentId: 'demo', slot: 1, action: 'start' });
+  });
+
+  it('drops a confirmation that the current grant no longer approves', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(twoSlots);
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Stop slot 2');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-2' })).toHaveLength(1);
+    // The operator narrows the grant while the confirmation is open.
+    host.readCatalog.mockResolvedValue(catalog([{ ...demo, controls: { actions: ['start'], slots: 2 } }]));
+    await refreshInventory();
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-2' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Stop slot 2' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Start slot 2' }).props.disabled).toBe(false);
+    expect(host.readControl).not.toHaveBeenCalled();
+  });
+
+  it('clears a confirmation when Actions is collapsed so it cannot block again', async () => {
+    host.readCatalog.mockResolvedValue(catalog([controlled]));
+    host.readInventory.mockResolvedValue(twoSlots);
+    const { renderer, press } = await render();
+    await openActions(press);
+    await press('Stop slot 2');
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-2' })).toHaveLength(1);
+    await press('Actions for orbi-demo');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props.accessibilityState).toMatchObject({ expanded: false });
+    await press('Actions for orbi-demo');
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Actions for orbi-demo' }).props.accessibilityState).toMatchObject({ expanded: true });
+    expect(renderer.root.findAllByProps({ testID: 'orbi-confirm-orbi-demo-2' })).toHaveLength(0);
+    for (const action of ['Start', 'Stop', 'Restart']) {
+      expect(renderer.root.findByProps({ accessibilityLabel: `${action} slot 2` }).props.disabled).toBe(false);
+    }
+    expect(host.readControl).not.toHaveBeenCalled();
+  });
+
   it('keeps a repository read-only when the operator granted no actions', async () => {
     host.readCatalog.mockResolvedValue(catalog([demo]));
     host.readInventory.mockResolvedValue(hostA);

@@ -247,6 +247,12 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
   if (controls === null) return null;
+  // A confirmation is transient. It is only active while it still names a slot
+  // the current inventory observes and an action the current grant approves, so
+  // a poll that drops the instance (systemd unloads idle template instances) or a
+  // narrowed grant can never leave every action disabled with no Cancel shown.
+  const active = confirming !== null && slots.includes(confirming.slot) && controls.actions.includes(confirming.action)
+    ? confirming : null;
 
   const submit = async (action: ControlAction, slot: number) => {
     if (sending) return;
@@ -267,35 +273,35 @@ function FamilyActions({ hostId, hostLabel, entry, group, theme }: {
 
   return <View testID={`orbi-actions-${group.label}`} style={{ gap: 8 }}>
     <ActionButton label={open ? 'Hide actions' : 'Actions'} accessibilityName={`Actions for ${group.label}`}
-      expanded={open} theme={theme} onPress={() => setOpen(value => !value)} />
+      expanded={open} theme={theme} onPress={() => { if (open) setConfirming(null); setOpen(!open); }} />
     {open && <View style={{ gap: 8 }}>
       {slots.length === 0 && <Text style={text}>No observed slot is inside this repository's approved targets.</Text>}
       {slots.map(slot => {
         const service = group.units.find(unit => unit.kind === 'service' && unit.id === `${group.label}@${slot}.service`);
-        const pending = confirming !== null && confirming.slot === slot;
+        const pending = active !== null && active.slot === slot;
         return <View key={`${hostId}:${group.label}:${slot}`} style={{ gap: 4 }}>
           <Text style={text}>{`Slot ${slot} · ${slotState(service)}`}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {controls.actions.map(action => <ActionButton key={action} label={actionText[action]}
               accessibilityName={`${actionText[action]} slot ${slot}`}
               variant={action === 'start' ? 'primary' : action === 'stop' ? 'danger' : 'secondary'}
-              disabled={sending || confirming !== null}
-              busy={sending && pending && confirming?.action === action} theme={theme}
+              disabled={sending || active !== null}
+              busy={sending && pending && active?.action === action} theme={theme}
               onPress={() => { setFeedback(null); setConfirming({ action, slot }); }} />)}
           </View>
-          {pending && confirming !== null && <View testID={`orbi-confirm-${group.label}-${slot}`} style={{ gap: 4 }}>
-            <Text style={text}>{`Confirm ${actionText[confirming.action].toLowerCase()} · Slot ${slot}`}</Text>
+          {pending && active !== null && <View testID={`orbi-confirm-${group.label}-${slot}`} style={{ gap: 4 }}>
+            <Text style={text}>{`Confirm ${actionText[active.action].toLowerCase()} · Slot ${slot}`}</Text>
             <Text style={text}>{`Host: ${hostLabel}`}</Text>
             <Text style={text}>{`Repository: ${entry.repo}`}</Text>
             <Text style={text}>{`Target: ${group.label}@${slot}.service`}</Text>
-            <Text style={text}>{`Effect: ${effectText[confirming.action]}`}</Text>
+            <Text style={text}>{`Effect: ${effectText[active.action]}`}</Text>
             <Text style={secondary}>Confirmation is not authorization. The daemon rechecks the operator grant before it runs anything.</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              <ActionButton label={sending ? 'Submitting…' : `Confirm ${actionText[confirming.action].toLowerCase()}`}
-                accessibilityName={`Confirm ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
-                variant={confirming.action === 'stop' ? 'danger' : 'primary'} disabled={sending} busy={sending} theme={theme}
-                onPress={() => void submit(confirming.action, slot)} />
-              <ActionButton label="Cancel" accessibilityName={`Cancel ${actionText[confirming.action].toLowerCase()} slot ${slot}`}
+              <ActionButton label={sending ? 'Submitting…' : `Confirm ${actionText[active.action].toLowerCase()}`}
+                accessibilityName={`Confirm ${actionText[active.action].toLowerCase()} slot ${slot}`}
+                variant={active.action === 'stop' ? 'danger' : 'primary'} disabled={sending} busy={sending} theme={theme}
+                onPress={() => void submit(active.action, slot)} />
+              <ActionButton label="Cancel" accessibilityName={`Cancel ${actionText[active.action].toLowerCase()} slot ${slot}`}
                 disabled={sending} theme={theme} onPress={() => setConfirming(null)} />
             </View>
           </View>}
