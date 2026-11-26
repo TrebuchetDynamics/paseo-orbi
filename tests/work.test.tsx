@@ -108,6 +108,9 @@ describe('Work first screen', () => {
     // inner Work · host title is rendered.
     expect(page).not.toContain('Work · Host A');
     expect(page).toContain('Repository: Demo (Example/project)');
+    // #138: a current issue read names its freshness with the shared word set.
+    expect(page).toContain('Issues: Current');
+    expect(page).not.toContain('Issues: available');
     expect(page.indexOf('Open issues')).toBeLessThan(page.indexOf('#42'));
     expect(page).not.toContain('Host A · Fleet');
     expect(page).not.toContain('Services (technical details)');
@@ -243,7 +246,7 @@ describe('Work first screen', () => {
     host.readIssues.mockResolvedValue(unavailable('auth_denied'));
     const denied = await render();
     const deniedText = text(denied.renderer);
-    expect(deniedText).toContain('Issues: unavailable');
+    expect(deniedText).toContain('Issues: Unavailable');
     expect(deniedText).toContain('github: auth_denied');
     expect(deniedText).toContain("daemon user's existing gh authentication");
     expect(deniedText).not.toContain('No open issues found.');
@@ -265,8 +268,8 @@ describe('Work first screen', () => {
     host.hosts[0].status = 'offline';
     await switchTo('host-a');
     const offline = text(renderer);
-    expect(offline).toContain('Issues: unavailable');
-    expect(offline).not.toContain('Issues: loading');
+    expect(offline).toContain('Issues: Offline');
+    expect(offline).not.toContain('Issues: Loading');
     expect(offline).toContain('Selected host is offline.');
     expect(renderer.root.findByProps({ accessibilityLabel: 'Refresh issues' }).props.disabled).toBe(true);
     const blocked = host.readIssues.mock.calls.length;
@@ -283,7 +286,7 @@ describe('Work first screen', () => {
     host.readIssues.mockRejectedValue(new Error('SECRET'));
     await press('Refresh issues');
     const visible = text(renderer);
-    expect(visible).toContain('Issues: stale');
+    expect(visible).toContain('Issues: Stale');
     // #134: the stale marker and the observation times are local, not raw ISO.
     expect(visible).toContain(`Last seen ${formatLocalTime(stamp)}`);
     expect(visible).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
@@ -383,7 +386,7 @@ describe('Work first screen', () => {
     // A retained, offline or undecided inventory publishes no attention count.
     host.hosts[0].status = 'offline';
     const offline = await render({}, undefined, 'services');
-    expect(text(offline.renderer)).toContain('Services: unavailable');
+    expect(text(offline.renderer)).toContain('Services: Offline');
     expect(text(offline.renderer)).toContain('Offline · current activity unknown');
     expect(text(offline.renderer)).not.toMatch(/\d+ of \d+ (?:observed )?groups? needs? attention/);
     const offlineWork = await render({ surface: 'work' });
