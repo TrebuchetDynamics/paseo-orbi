@@ -270,6 +270,33 @@ it('renders_each_formal_guidance_with_provenance_and_no_recovery_controls', asyn
   expect(openScreen).not.toHaveBeenCalled();
 });
 
+it('shows_github_repair_steps_only_for_a_reported_problem', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
+  host.readBlockers.mockResolvedValue(available({ repo, page: 1, hasNextPage: false, complete: true, records: [safeBlocker()] }));
+  const screen = await renderScreen();
+  const text = () => JSON.stringify(screen.renderer.toJSON());
+  const repair = {
+    auth_denied: "Ask the operator to repair the daemon user's existing gh authentication or permissions, then Refresh.",
+    rate_limited: "Wait for GitHub's retry/reset time, then Refresh.",
+    network_failed: 'Repair access externally, then Refresh. Missing evidence never means none exist.',
+    incomplete: 'Repair access externally, then Refresh. Missing evidence never means none exist.',
+  } as const;
+  // A complete read keeps the recovery-ownership line and the pinned schema link, without repair copy.
+  expect(text()).toContain('Recovery stays Orbi/operator-owned.');
+  expect(text()).toContain('Failure schema source (pinned v1)');
+  for (const sentence of Object.values(repair)) expect(text()).not.toContain(sentence);
+  for (const code of ['auth_denied', 'rate_limited', 'network_failed', 'incomplete'] as const) {
+    host.readBlockers.mockResolvedValue({ ...available({ repo, page: 1, hasNextPage: false, complete: true, records: [safeBlocker()] }), state: 'partial', problems: [{ source: 'github', code }] });
+    await act(async () => screen.renderer.root.findByProps({ testID: 'orbi-blockers' }).findAllByProps({ accessibilityLabel: 'Refresh' })[0].props.onPress());
+    await screen.settle(); await screen.settle();
+    const expected = repair[code];
+    expect(text(), code).toContain(`github: ${code}`);
+    expect(text().split(expected), code).toHaveLength(2);
+    for (const [other, sentence] of Object.entries(repair)) if (sentence !== expected) expect(text(), `${code} / ${other}`).not.toContain(sentence);
+    expect(text(), code).toContain('Recovery stays Orbi/operator-owned.');
+  }
+});
+
 it('partial_stale_and_layout', async () => {
   const f = await setup();
   vi.useFakeTimers(); vi.setSystemTime(stamp); catalog();
