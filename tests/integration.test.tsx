@@ -70,10 +70,12 @@ it('four_views_read_only_journey', async () => {
     // becoming active runs: only the two attributed worktrees are in progress.
     const issue = (n: number) => ({ number: n, title: `Issue ${n}`, state: n === 99 ? 'closed' : 'open', updated_at: stamp, labels: [{ name: n === 4 ? 'ai-blocked' : n >= 1000 ? 'backlog' : 'ai-in-progress' }], body: 'BODY_SECRET_CANARY' });
     // Open browse pages stay full so pagination is exercised on the default state;
-    // only the wider states expose the closed issue 99.
+    // only the wider states expose the closed issue 99. A later page carries a
+    // number no earlier page returned: a live page-number scan that repeats an
+    // issue number is reported as incomplete, not as complete membership.
     if (op.resource === 'issues') {
       const head = op.page === 1 ? [42, 420, 4, ...(op.state === 'open' ? [] : [99])] : [];
-      const fillers = op.page === 1 ? Array.from({ length: op.state === 'open' ? 97 : 96 }, (_, i) => 1000 + i) : [1007];
+      const fillers = op.page === 1 ? Array.from({ length: op.state === 'open' ? 97 : 96 }, (_, i) => 1000 + i) : [1097];
       return response([...head, ...fillers].map(issue));
     }
     if (op.resource === 'issue') return response(issue(op.issue));
