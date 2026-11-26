@@ -13,6 +13,7 @@ import { ActionButton } from './action-button';
 import { GitHubEvidenceLink } from './github-evidence-link';
 import { LabelChips } from './label-chip';
 import { serviceAttention, useHostServicesQuery } from './host-overview';
+import { formatLocalTime } from './time';
 
 // Work is the default view for a configured repository. It renders page-one
 // issue rows for one available deployment, one readable host service health
@@ -156,7 +157,7 @@ export function Work(props: PluginScreenProps & {
       </View>
       <View testID="orbi-work-issues" style={{ gap: 4 }}>
         <Text testID="orbi-work-issues-status" style={text}>{`Issues: ${state === 'available' ? 'current' : state}`}</Text>
-        {state === 'stale' && <Text testID="orbi-work-issues-stale" style={text}>{`Last seen ${observation?.lastSuccessfulAt ?? 'never'}. Current activity unknown; retained rows may be out of date.`}</Text>}
+        {state === 'stale' && <Text testID="orbi-work-issues-stale" style={text}>{`Last seen ${observation?.lastSuccessfulAt != null ? formatLocalTime(observation.lastSuccessfulAt) : 'never'}. Current activity unknown; retained rows may be out of date.`}</Text>}
         {!props.connected && <Text testID="orbi-work-issues-offline" style={text}>Selected host is offline. Issue reads are paused and no other host is used. Reconnect the selected host, then Refresh issues.</Text>}
         {!!codes.length && <Text accessibilityRole="alert" style={text}>{(observation?.problems ?? []).map(problem => `${problem.source}: ${problem.code}`).join('; ')}</Text>}
         {!!repair && <Text style={text}>{repair}</Text>}
