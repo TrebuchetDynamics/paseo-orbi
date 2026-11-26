@@ -105,6 +105,10 @@ export function createServiceControl(options: {
   // authorization is rechecked before execution.
   signal?: AbortSignal;
   actor?: string | null;
+  // Called only after a mutation finished with outcome 'succeeded'. The host
+  // inventory uses it to discard a snapshot read before the action; the control
+  // adapter still cannot read inventory data itself.
+  onSucceeded?: () => void;
 }): ServiceControl {
   let sequence = 0;
   // One in-flight operation per deployment: a second click can never duplicate
@@ -150,6 +154,7 @@ export function createServiceControl(options: {
       // A submitted command whose state cannot be re-read is not reported as an
       // observed success.
       if (!observed) return result('unknown', 'observe_failed', null, finishedAt);
+      options.onSucceeded?.();
       return result('succeeded', null, observed, finishedAt);
     } finally { inFlight.delete(input.deploymentId); }
   };

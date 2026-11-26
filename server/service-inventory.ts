@@ -14,7 +14,14 @@ export type InventoryPort = {
   clock(): Date;
   hostInventory(operation: HostInventoryOperation, timeoutMs?: number): Promise<string>;
 };
-export type ServiceInventoryReader = (input: Record<string, never>) => Promise<ServiceInventory>;
+export type ServiceInventoryReader = {
+  (input: Record<string, never>): Promise<ServiceInventory>;
+  // Discards the cached host snapshot after a successful service action. A read
+  // already in flight may still answer its waiting callers, but its pre-action
+  // result is not cached; the next call starts a new host read. Never starts a
+  // read itself.
+  invalidate(): void;
+};
 
 const idPattern = /^orbi[A-Za-z0-9_.:@-]*\.(?:service|timer)$/;
 const tokenPattern = /^[a-z][a-z0-9-]{0,31}$/;
@@ -129,6 +136,9 @@ export function createServiceInventory(options: {
   let cached: ServiceInventory | null = null;
   let cachedAt = 0;
   let inFlight: Promise<ServiceInventory> | null = null;
+  // Bumped by invalidate(): a refresh that started earlier must not cache its
+  // pre-action result when it finishes after the invalidation.
+  let generation = 0;
   const revoked = () => options.signal?.aborted === true;
   // Withdrawal discards the snapshot, not merely hides it from later readers.
   options.signal?.addEventListener('abort', () => { cached = null; }, { once: true });
@@ -179,17 +189,25 @@ export function createServiceInventory(options: {
     };
   };
 
-  return async () => {
+  const read: ServiceInventoryReader = async () => {
     if (!options.enabled || revoked()) return offAndDiscard();
     const now = options.port.clock().getTime();
     if (cached && now - cachedAt < SNAPSHOT_TTL_MS) return cached;
     if (!inFlight) {
+      const startedAtGeneration = generation;
       inFlight = refresh().then(value => {
         // A snapshot that outlived the grant is never cached or returned.
         if (revoked()) return offAndDiscard();
-        cached = value; cachedAt = options.port.clock().getTime(); return value;
+        // A read that started before an invalidation carries pre-action data:
+        // waiting callers may still receive it, but it must not be cached.
+        if (generation === startedAtGeneration) {
+          cached = value; cachedAt = options.port.clock().getTime();
+        }
+        return value;
       }).finally(() => { inFlight = null; });
     }
     return inFlight;
   };
+  read.invalidate = () => { cached = null; cachedAt = 0; generation++; };
+  return read;
 }
