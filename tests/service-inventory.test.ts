@@ -6,6 +6,7 @@ import { ConfigRepository } from '../server/config';
 import { ReadError, ReadPorts } from '../server/read-ports';
 import { createServiceInventory, OVERALL_DEADLINE_MS, ROW_LIMIT, SNAPSHOT_TTL_MS } from '../server/service-inventory';
 import { servicesInventory } from '../shared/services';
+import { servicesControl } from '../shared/service-control';
 import contribute from '../index.server';
 import { fixture } from './helpers/fixtures';
 
@@ -404,6 +405,35 @@ describe('host_inventory_registration', () => {
     const after = parse(await read({}));
     expect(after).toEqual(OFF);
     expect(hostInventory).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards the registered snapshot after a successful action through the real RPCs', async () => {
+    const f = await fixture(); cleanups.push(f.cleanup);
+    await f.save([{ ...f.entry, controls: {
+      admittedClientsOperate: true, actions: ['start'], commands: { start: [process.execPath, '-e', 'process.exit(0)', '{unit}'] },
+    } }]);
+    vi.stubEnv('PASEO_ORBI_CONFIG', f.authorization);
+    vi.stubEnv('PASEO_ORBI_HOST_INVENTORY', '1');
+    let facts = 'active running';
+    const hostInventory = vi.spyOn(ReadPorts.prototype, 'hostInventory').mockImplementation(async operation =>
+      operation === 'runtime' ? `orbi-demo@1.service loaded ${facts} Orbi Runner\n` : 'orbi-demo@.service disabled\n');
+    const show = vi.spyOn(ReadPorts.prototype, 'process').mockResolvedValue('LoadState=loaded\nActiveState=inactive\nSubState=dead\n');
+    const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
+    cleanups.push(contribute({ handle: (contract: { name: string }, handler: (input: unknown) => Promise<unknown>) => { handlers.set(contract.name, handler); } } as unknown as PluginServerContext));
+    const read = handlers.get('services.inventory')!;
+    const activeState = async () => parse(await read({})).groups.flatMap(group => group.units)
+      .find(unit => unit.id === 'orbi-demo@1.service')?.runtime?.activeState;
+    expect(await activeState()).toBe('active');
+    expect(hostInventory).toHaveBeenCalledTimes(2);
+
+    // The operator's Start reports success: the shared snapshot is discarded, so the
+    // next services read (Refresh services or the 30 s check) reads the host again.
+    const result = servicesControl.output.parse(await handlers.get('services.control')!({ deploymentId: 'demo', slot: 1, action: 'start' }));
+    expect(result.outcome).toBe('succeeded');
+    expect(show).toHaveBeenCalledTimes(1);
+    facts = 'inactive dead';
+    expect(await activeState()).toBe('inactive');
+    expect(hostInventory).toHaveBeenCalledTimes(4);
   });
 
   it('registers services.inventory and snapshots the startup opt-in', async () => {
