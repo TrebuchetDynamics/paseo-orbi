@@ -17,7 +17,8 @@ export type ControlOutcome = (typeof controlOutcomes)[number];
 export const controlReasons = [
   // Authorization (checked before any execution).
   'deployment_unavailable', 'action_not_approved', 'target_out_of_range',
-  // Lifecycle ownership: a restart never kills a possible active delivery.
+  // Lifecycle ownership: restart was refused because the slot was observed active or
+  // transitional. That check is not atomic with the operator's bound command.
   'active_delivery',
   // Grant withdrawn, or another operation already runs for this deployment.
   'disposed', 'busy',

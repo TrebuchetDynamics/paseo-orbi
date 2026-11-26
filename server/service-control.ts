@@ -89,9 +89,12 @@ function observationOf(output: string): ControlObservation {
     subState: known(subStates, fields.get('SubState')),
   };
 }
-// A restart may only run from a slot that cannot be delivering work. Anything
-// else (active, activating, stopping, maintenance, unknown) is refused before
-// execution, so a restart never becomes an undocumented kill.
+// A restart may only run from a slot that was not delivering work when it was
+// observed. Anything else (active, activating, stopping, maintenance, unknown)
+// is refused before execution. This check is an early refusal, not an atomic
+// guard: the slot's timer or another owner of systemd can start work after the
+// observation and before or while the operator's bound command runs, so that
+// command must refuse or drain an active slot itself.
 function restartable(observed: ControlObservation): boolean {
   return observed.activeState === 'failed'
     || (observed.activeState === 'inactive' && observed.subState === 'dead' && observed.loadState !== 'not-found');
